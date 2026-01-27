@@ -29,6 +29,8 @@ list(APPEND serial_SRCS src/impl/list_ports/list_ports_linux.cc)
 ## Add serial library
 add_library(${PROJECT_NAME} ${serial_SRCS})
 
+target_compile_options(serial PRIVATE -Wno-sign-compare -Wno-unused-but-set-variable)
+
 
 target_link_libraries(${PROJECT_NAME} rt pthread)
 

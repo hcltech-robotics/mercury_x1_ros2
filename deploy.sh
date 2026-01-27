@@ -7,7 +7,7 @@ set -e  # Exit on error
 # === CONFIGURATION ===
 REMOTE_USER="elephant"          # Replace with your robot's username
 REMOTE_HOST="192.168.10.175"   # Replace with your robot's IP or hostname
-REMOTE_PATH="/home/elephant/ros2_ws/src/mercury_x1_ros2"  # Destination path on robot
+REMOTE_PATH="/home/elephant/mercury_x1_ros2"  # Destination path on robot
 
 # Optional: SSH port (default is 22)
 SSH_PORT=22
@@ -22,9 +22,9 @@ ssh -p $SSH_PORT "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p $(dirname "${REMOTE_P
 rsync -avz \
   --delete \
   --exclude='.git' \
-  --exclude='build/' \
-  --exclude='install/' \
-  --exclude='log/' \
+  --exclude='/build/' \
+  --exclude='/install/' \
+  --exclude='/log/' \
   --exclude='.vscode/' \
   --exclude='*.swp' \
   --exclude='*.swo' \
@@ -33,4 +33,4 @@ rsync -avz \
   "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}"
 
 echo "✅ Deployment completed!"
-echo "💡 Remember to rebuild on the target: cd ~/ros2_ws && colcon build"
+echo "💡 Remember to rebuild on the target: cd ~/mercury_x1_ros2 && colcon build"

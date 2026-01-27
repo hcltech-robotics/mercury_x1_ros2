@@ -9,7 +9,7 @@ Use of Mercury X1 mobile chassis ROS2
 - [x] Real-time joint state synchronization  
 - [x] Real-time IMU data synchronization  
 - [x] Laser scan integration (2D Lidar)
-- [ ] Real-time joystick control  
+- [x] Real-time joystick control  
 - [ ] RGB Camera stream integration 
 - [ ] RGBD (Deopth) Camera stream integration  
 - [ ] Foxglove WebSocket bridge  
