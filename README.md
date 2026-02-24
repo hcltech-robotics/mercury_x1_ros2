@@ -7,10 +7,12 @@ Use of Mercury X1 mobile chassis ROS2
 ## To-Do  
 - [x] URDF model  
 - [x] Real-time joint state synchronization  
-- [x] Real-time IMU data synchronization  
+- [ ] Real-time IMU data synchronization  
 - [x] Laser scan integration (2D Lidar)
 - [x] Real-time joystick control  
-- [ ] RGB Camera stream integration 
+- [ ] Ultrasonic sensors integration 
+- [ ] RGB Cameras stream integration 
+- [ ] RGB Cameras distortion calibration 
 - [ ] RGBD (Deopth) Camera stream integration  
 - [ ] Foxglove WebSocket bridge  
 - [ ] SLAM (using `slam_toolbox`)  
@@ -22,15 +24,15 @@ Use of Mercury X1 mobile chassis ROS2
 ```bash
 source /opt/ros/humble/setup.bash 
 
-git clone https://github.com/elephantrobotics/mercury_x1_ros2.git
+git clone --recurse-submodules https://github.com/elephantrobotics/mercury_x1_ros2.git
 cd ~/mercury_x1_ros2
 rosdep install --from-paths src --ignore-src -y --rosdistro humble
 colcon build    # Compile all function packages
 ource install/setup.bash
 
 # Compile the function package separately:
-If you only compile “turn_on_mercury_robot“, you need to execute the command:
-colcon build --packages-select turn_on_mercury_robot
+If you only compile “mercury_bringup“, you need to execute the command:
+colcon build --packages-select mercury_bringup
 ```
 # 一、Mercury Seven Axis
 
@@ -112,8 +114,8 @@ $ ros2 run mercury_x1_control mercury_keyboard
 
 ```bash
 # Build a single package:
-# Example: build only turn_on_mercury_robot
-colcon build --packages-select turn_on_mercury_robot
+# Example: build only mercury_bringup
+colcon build --packages-select mercury_bringup
 
 # Build all packages:
 colcon build
@@ -126,31 +128,24 @@ sudo mount -t nfs 192.168.0.100:/home/er/mercury_x1_ros2/ /mnt
 
 # 1. Launch robot base
 # Mercury Seven Axis
-ros2 launch turn_on_mercury_robot turn_on_mercury_robot.launch.py
+ros2 launch mercury_bringup mercury_bringup.launch.py
 # Mercury Six Axis
-ros2 launch turn_on_mercury_robot turn_on_mercury_robot_turing.launch.py
+ros2 launch mercury_bringup mercury_bringup_turing.launch.py
 
 
-# 2. Launch base controller
-# Mercury Seven Axis
-ros2 launch turn_on_mercury_robot turn_on_mercury_robot.launch.py
-# Mercury Six Axis
-ros2 launch turn_on_mercury_robot turn_on_mercury_robot_turing.launch.py
+# 2. Launch camera
+ros2 launch mercury_bringup mercury_camera.launch.py
 
 
-# 3. Launch camera
-ros2 launch turn_on_mercury_robot mercury_camera.launch.py
+# 3. Launch LiDAR
+ros2 launch mercury_bringup mercury_lidar.launch.py
 
 
-# 4. Launch LiDAR
-ros2 launch turn_on_mercury_robot mercury_lidar.launch.py
-
-
-# 5. Keyboard control for mobile base
+# 4. Keyboard control for mobile base
 ros2 run mercury_x1_control mercury_keyboard
 
 
-# 6. Simple following capabilities
+# 5. Simple following capabilities
 # ① LiDAR-based following
 ros2 launch simple_follower_ros2 laser_follower.launch.py
 
@@ -161,7 +156,7 @@ ros2 launch simple_follower_ros2 line_follower.launch.py
 ros2 launch simple_follower_ros2 visual_follower.launch.py
 
 
-# 7. 2D SLAM (Mapping)
+# 6. 2D SLAM (Mapping)
 # ① Mapping with gmapping
 # Mercury Seven Axis
 ros2 launch slam_gmapping slam_gmapping.launch.py
@@ -178,11 +173,11 @@ ros2 launch mercury_cartographer cartographer.launch.py
 ros2 launch mercury_nav2 save_map.launch.py
 
 
-# 8. 2D Navigation
+# 7. 2D Navigation
 ros2 launch mercury_nav2 mercury_nav2.launch.py
 
 
-# 9. RRT-based autonomous exploration & mapping  
+# 8. RRT-based autonomous exploration & mapping  
 # [Publish four waypoints clockwise/counterclockwise; the last point must be in the known map area]
 # Step 1:
 ros2 launch mercury_slam_toolbox online_sync.launch.py
@@ -190,23 +185,23 @@ ros2 launch mercury_slam_toolbox online_sync.launch.py
 ros2 launch mercury_robot_rrt mercury_rrt_slam.launch.py
 
 
-# 10. RTAB-Map SLAM
+# 9. RTAB-Map SLAM
 ros2 launch mercury_robot_rtab mercury_slam_rtab.launch.py
 
 
-# 11. RTAB-Map Navigation
+# 10. RTAB-Map Navigation
 ros2 launch mercury_robot_rtab mercury_nav2_rtab.launch.py
 
 
-# 12. USB Joystick Control
+# 11. USB Joystick Control
 ros2 launch mercury_joy mercury_joy.launch.py
 
 
-# 13. Launch RViz2
+# 12. Launch RViz2
 # Note: Use a virtual machine to run RViz2
 
 
-# 14. Full robot control (mobile base + upper-body manipulator)
+# 13. Full robot control (mobile base + upper-body manipulator)
 # ① Mapping with gmapping
 # Mercury Seven Axis
 ros2 launch slam_gmapping slam_gmapping.launch.py

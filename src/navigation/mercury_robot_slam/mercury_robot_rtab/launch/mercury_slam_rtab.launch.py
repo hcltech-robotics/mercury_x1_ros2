@@ -15,10 +15,10 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time', default='false')
     
     mercury_slam_dir = get_package_share_directory('mercury_slam_toolbox')
-    bringup_dir = get_package_share_directory('turn_on_mercury_robot')
+    bringup_dir = get_package_share_directory('mercury_bringup')
 
     mercury_robot = IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(os.path.join(bringup_dir, 'launch','turn_on_mercury_robot.launch.py')),
+            PythonLaunchDescriptionSource(os.path.join(bringup_dir, 'launch','mercury_bringup.launch.py')),
     )
     mercury_slam = IncludeLaunchDescription(
           PythonLaunchDescriptionSource(

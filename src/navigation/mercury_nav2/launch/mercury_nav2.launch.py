@@ -14,7 +14,7 @@ from launch_ros.actions import PushRosNamespace
 
 def generate_launch_description():
     # Get the launch directory
-    mercury_robot_dir = get_package_share_directory('turn_on_mercury_robot')
+    mercury_robot_dir = get_package_share_directory('mercury_bringup')
     mercury_launch_dir = os.path.join(mercury_robot_dir, 'launch')
     
     my_nav_dir = get_package_share_directory('mercury_nav2')
@@ -97,7 +97,7 @@ def generate_launch_description():
         description='Launch Rviz?')
         
     mercury_robot = IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(os.path.join(mercury_launch_dir, 'turn_on_mercury_robot.launch.py')),
+            PythonLaunchDescriptionSource(os.path.join(mercury_launch_dir, 'mercury_bringup.launch.py')),
     )
     mercury_lidar = IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(mercury_launch_dir, 'mercury_lidar.launch.py')),

@@ -11,12 +11,10 @@ class Slider_Subscriber(Node):
         super().__init__("control_slider")
         self.subscription = self.create_subscription(
             JointState,
-            "joint_states",
-            self.listener_callback,
+            "/joint_commands",
+            self.comamnd_callback,
             10
         )
-        self.subscription
-     
         self.declare_parameter('port1', '/dev/left_arm')
         self.declare_parameter('port2', '/dev/right_arm')
         self.declare_parameter('baud', 115200)
@@ -36,11 +34,13 @@ class Slider_Subscriber(Node):
         self.l.set_vr_mode(1)
         self.r.set_vr_mode(1)
         time.sleep(0.05)
-        self.l.set_filter_len(3, 20)
-        self.r.set_filter_len(3, 20)
+        self.l.set_filter_len(2, 20)
+        self.r.set_filter_len(2, 20)
+        # self.l.set_filter_len(3, 20)
+        # self.r.set_filter_len(3, 20)
         time.sleep(0.05)
         
-    def listener_callback(self, msg):
+    def comamnd_callback(self, msg):
 
         data_list = []
         for index, value in enumerate(msg.position):
@@ -52,7 +52,7 @@ class Slider_Subscriber(Node):
         left_arm = data_list[:7]
         right_arm = data_list[7:-3]
         middle_arm = data_list[-3:]
-        # 为左臂和右臂的 J6 关节角度加上偏移量 90°
+        # Add a 90° offset to the J6 joint angles of both the left and right arms
         left_arm[5] = left_arm[5] + 90
         right_arm[5] = right_arm[5] + 90
         
@@ -65,7 +65,6 @@ class Slider_Subscriber(Node):
         self.r.send_angle(11, middle_arm[0], 16, _async=True)
         self.r.send_angle(12, middle_arm[1], 16, _async=True)
         self.r.send_angle(13, middle_arm[2], 16, _async=True)
-
 
 def main(args=None):
     rclpy.init(args=args)

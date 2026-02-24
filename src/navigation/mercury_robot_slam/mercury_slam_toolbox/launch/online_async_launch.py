@@ -10,11 +10,11 @@ from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 def generate_launch_description():
-    bringup_dir = get_package_share_directory('turn_on_mercury_robot')
+    bringup_dir = get_package_share_directory('mercury_bringup')
     launch_dir = os.path.join(bringup_dir, 'launch')
 
     mercury_robot = IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(os.path.join(launch_dir, 'turn_on_mercury_robot.launch.py')),
+            PythonLaunchDescriptionSource(os.path.join(launch_dir, 'mercury_bringup.launch.py')),
     )
     mercury_lidar = IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(launch_dir, 'mercury_lidar.launch.py')),

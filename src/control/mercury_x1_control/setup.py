@@ -22,6 +22,8 @@ setup(
             'mercury_keyboard = mercury_x1_control.mercury_keyboard:main',
             'slider_control = mercury_x1_control.slider_control:main',
             'slider_control_turing = mercury_x1_control.slider_control_turing:main',
+            'joint_state = mercury_x1_control.joint_state_publisher:main',
+            'arm_control_server = mercury_x1_control.arm_control_server:main',
         ],
     },
 )

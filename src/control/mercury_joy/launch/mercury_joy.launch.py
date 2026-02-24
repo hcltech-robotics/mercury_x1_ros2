@@ -13,10 +13,10 @@ def generate_launch_description():
     vlinear = LaunchConfiguration('vlinear', default='0.3')
     vangular = LaunchConfiguration('vangular', default='0.5')  
     
-    bringup_dir = get_package_share_directory('turn_on_mercury_robot')
+    bringup_dir = get_package_share_directory('mercury_bringup')
     launch_dir = os.path.join(bringup_dir, 'launch')
     mercury_robot = IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(os.path.join(launch_dir, 'turn_on_mercury_robot.launch.py')),
+            PythonLaunchDescriptionSource(os.path.join(launch_dir, 'mercury_bringup.launch.py')),
     )
   
     return LaunchDescription([
