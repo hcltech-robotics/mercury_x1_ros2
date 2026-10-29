@@ -8,14 +8,19 @@ Fusion:
     odometry (guess_frame_id) -> TF odom -> odom_wheel.
   * graph: lidar ICP for registration and neighbour refinement, RGB visual words for
     loop closure and relocalization.
-  * 2D grid (/map): built from BOTH the lidar scan and the depth cloud (Grid/Sensor=2), so
-    obstacles above/below the lidar plane (tables, chair bases) end up in the map.
+  * 2D grid (/map): lidar only when nvblox runs (nvblox:=true, default) -- nvblox then handles
+    obstacles above/below the lidar plane on the GPU and feeds them to Nav2 directly. With
+    nvblox:=false the grid is built on the CPU from BOTH the lidar and the depth cloud (Grid/Sensor=2).
+  * nvblox (mercury_x1_perception): CUDA TSDF/ESDF from the Orbbec depth+colour, posed by the
+    odom TF published here; gives Nav2 its 3D-aware costmap slice and Rerun a mesh.
 Maps live in ~/maps/<map>.db.
 """
 import os
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from ament_index_python.packages import get_package_share_directory as share
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration as LC
 from launch_ros.actions import Node
 
@@ -25,6 +30,7 @@ def _nodes(context):
     name = LC("map").perform(context)
     fresh = LC("fresh").perform(context).lower() == "true"
     use_camera = LC("camera").perform(context).lower() == "true"
+    use_nvblox = use_camera and LC("nvblox").perform(context).lower() == "true"
     maps_dir = os.path.expanduser("~/maps")
     os.makedirs(maps_dir, exist_ok=True)
     db = os.path.join(maps_dir, f"{name}.db")
@@ -76,8 +82,8 @@ def _nodes(context):
         "Mem/NotLinkedNodesKept": "false", "Mem/STMSize": "30",
         "Kp/MaxFeatures": "400", "Vis/MinInliers": "15", "Vis/MaxDepth": "4.0",
         "Optimizer/Strategy": "2",        # g2o
-        # occupancy grid from lidar + depth
-        "Grid/Sensor": "2" if use_camera else "0",
+        # occupancy grid: lidar (+ depth on the CPU when nvblox is off)
+        "Grid/Sensor": "2" if (use_camera and not use_nvblox) else "0",
         "Grid/CellSize": "0.05", "Grid/RangeMax": "5.0", "Grid/RayTracing": "true",
         "Grid/3D": "false", "Grid/NormalsSegmentation": "false",
         "Grid/MaxGroundHeight": "0.06", "Grid/MaxObstacleHeight": "1.4",
@@ -97,6 +103,9 @@ def _nodes(context):
     nodes = [odom, slam]
     if use_camera:
         nodes.insert(1, sync)
+    if use_nvblox:
+        nodes.append(IncludeLaunchDescription(PythonLaunchDescriptionSource(
+            os.path.join(share("mercury_x1_perception"), "launch", "nvblox.launch.py"))))
     return nodes
 
 
@@ -106,5 +115,6 @@ def generate_launch_description():
         DeclareLaunchArgument("map", default_value="default", description="map name -> ~/maps/<map>.db"),
         DeclareLaunchArgument("fresh", default_value="false", description="mapping: delete the db first"),
         DeclareLaunchArgument("camera", default_value="true", description="fuse the RGB-D camera"),
+        DeclareLaunchArgument("nvblox", default_value="true", description="GPU 3D mapping (Isaac ROS nvblox)"),
         OpaqueFunction(function=_nodes),
     ])

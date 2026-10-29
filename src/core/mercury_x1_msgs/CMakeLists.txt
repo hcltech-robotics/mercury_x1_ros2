@@ -11,6 +11,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/BaseState.msg"
   "msg/JointCommand.msg"
   "msg/CartesianCommand.msg"
+  "msg/MeshTile.msg"
   DEPENDENCIES std_msgs geometry_msgs
 )
 

@@ -21,6 +21,7 @@ import rerun as rr
 import rerun.blueprint as rrb
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PolygonStamped, PoseArray
+from mercury_x1_msgs.msg import MeshTile
 from nav_msgs.msg import OccupancyGrid, Path
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
@@ -111,6 +112,9 @@ class RerunBridge(Node):
         sub(OccupancyGrid, "/local_costmap/costmap", self._on_costmap, 1)
         sub(LaserScan, "/scan", self._on_scan, qos_profile_sensor_data)
         sub(PointCloud2, "/camera/cloud", self._on_cloud, 2)
+        # nvblox GPU reconstruction, pre-tiled in C++ (mercury_x1_perception/nvblox_mesh_tiler)
+        sub(MeshTile, "/nvblox/mesh_tiles", self._on_mesh_tile,
+            QoSProfile(depth=64, reliability=ReliabilityPolicy.RELIABLE))
         # JPEG previews produced in C++ by mercury_x1_driver/image_preview_node (4 Hz)
         sub(CompressedImage, "/preview/orbbec", lambda m: self._on_image(m, "orbbec"), qos_profile_sensor_data)
         sub(CompressedImage, "/preview/bellybutton", lambda m: self._on_image(m, "bellybutton"),
@@ -258,6 +262,25 @@ class RerunBridge(Node):
         rr.set_time("ros", timestamp=_stamp(msg))
         rr.log("world/depth_cloud", rr.CoordinateFrame(msg.header.frame_id),
                rr.Points3D(xyz, radii=0.015, colors=colors))
+
+    def _on_mesh_tile(self, msg: MeshTile) -> None:
+        path = f"world/nvblox/{msg.id}"
+        tri = np.frombuffer(msg.triangles, dtype=np.uint32)
+        if len(tri) < 3:
+            rr.log(path, rr.Mesh3D(vertex_positions=np.zeros((0, 3), np.float32)), static=True)
+            return
+        pos = np.frombuffer(msg.positions, dtype=np.float32).reshape(-1, 3)
+        nrm = np.frombuffer(msg.normals, dtype=np.float32).reshape(-1, 3) if len(msg.normals) else None
+        if len(msg.colors) == pos.size:
+            rgb = np.frombuffer(msg.colors, dtype=np.uint8).reshape(-1, 3)
+        else:  # no colour integrated yet: shade by height
+            t = np.clip(pos[:, 2] / 1.6, 0, 1)[:, None]
+            rgb = (np.array([70, 110, 200]) * (1 - t) + np.array([230, 200, 120]) * t).astype(np.uint8)
+        # static: only the latest version of each tile is kept, so the memory-limited stream never
+        # garbage-collects parts of the map that have not changed for a while
+        rr.log(path, rr.CoordinateFrame(msg.header.frame_id),
+               rr.Mesh3D(vertex_positions=pos, vertex_normals=nrm, vertex_colors=rgb,
+                         triangle_indices=tri.reshape(-1, 3)), static=True)
 
     def _on_image(self, msg: CompressedImage, name: str) -> None:
         if not self.thr_img(name):

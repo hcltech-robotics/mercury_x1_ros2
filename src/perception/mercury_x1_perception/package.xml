@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>mercury_x1_perception</name>
+  <version>0.1.0</version>
+  <description>GPU perception for the Mercury X1: Isaac ROS nvblox (TSDF/ESDF on CUDA) fed by the Orbbec DaBai, its Nav2 costmap slice, and a mesh tiler for the Rerun view.</description>
+  <maintainer email="legion1581@gmail.com">Konstantin Severov</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>mercury_x1_msgs</depend>
+  <depend>nvblox_msgs</depend>
+  <exec_depend>nvblox_ros</exec_depend>
+  <exec_depend>nvblox_nav2</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
