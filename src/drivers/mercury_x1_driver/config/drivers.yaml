@@ -10,9 +10,10 @@ mercury_base:
     linear_scale: 1.0          # wheel-odometry calibration factors
     angular_scale: 1.0
     yaw_source: gyro           # gyro | wheel
-    ultrasonic_names: [front_left, front, front_right]
-    ultrasonic_guard_distance: 0.0   # m; >0 blocks forward motion when a guarded channel is closer
-    ultrasonic_guard_channels: [0, 1, 2]
+    ultrasonic_names: [left, back, right]   # MCU channels 0..2; sides + rear (left/right not yet verified)
+    ultrasonic_guard_distance: 0.0   # m; >0 blocks REVERSING when a guarded channel reads closer
+    ultrasonic_guard_channels: [1]   # rear sensor
+    battery_cells: 6                 # 24 V Li-ion pack -> BatteryState.percentage from the cell curve
 
 mercury_upper_body:
   ros__parameters:

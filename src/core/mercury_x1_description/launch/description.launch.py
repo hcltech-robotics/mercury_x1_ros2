@@ -13,5 +13,6 @@ def generate_launch_description():
     robot_description = ParameterValue(Command(["xacro ", xacro_file]), value_type=str)
     return LaunchDescription([
         Node(package="robot_state_publisher", executable="robot_state_publisher", output="screen",
-             parameters=[{"robot_description": robot_description, "publish_frequency": 30.0}]),
+             parameters=[{"robot_description": robot_description, "publish_frequency": 15.0}],
+             respawn=True, respawn_delay=2.0),
     ])

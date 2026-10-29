@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mercury X1 Control</title>
+<style>
+  :root {
+    --bg: #15171b; --panel: #1d2026; --panel2: #252931; --line: #343944; --text: #e6e8ec;
+    --muted: #9aa1ad; --accent: #4cc2ff; --ok: #3ddc84; --warn: #ffb020; --bad: #ff5468; --wp: #ffd400;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { height: 46px; display: flex; align-items: center; gap: 14px; padding: 0 14px;
+    background: var(--panel); border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px;
+    background: var(--panel2); color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+  .spacer { flex: 1; }
+  #estop { background: var(--bad); color: #fff; border: 0; font-weight: 700; padding: 8px 18px;
+    border-radius: 8px; cursor: pointer; letter-spacing: .5px; }
+  #estop:active { transform: translateY(1px); }
+  main { display: grid; grid-template-columns: 1fr 400px; height: calc(100% - 46px); }
+  #viewer { position: relative; min-width: 0; background: #0f1114; }
+  #viewer > * { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  #viewer .hint { inset: auto 12px 12px auto; width: auto; height: auto; padding: 6px 10px;
+    background: rgba(0,0,0,.6); border-radius: 6px; color: var(--wp); display: none; }
+  aside { background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; }
+  .tabs { display: flex; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 2; }
+  .tabs button { flex: 1; background: none; border: 0; color: var(--muted); padding: 10px; cursor: pointer;
+    border-bottom: 2px solid transparent; font-size: 13px; }
+  .tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+  section { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted);
+    margin: 0 0 8px; font-weight: 600; }
+  .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+  button.b { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+    padding: 6px 10px; cursor: pointer; font-size: 12px; }
+  button.b:hover { border-color: var(--accent); }
+  button.b.primary { background: #1b4f6e; border-color: #2b77a3; }
+  button.b.on { background: #1f5a3a; border-color: #2f8a57; }
+  button.b.danger { border-color: #7a2b36; color: #ff8a99; }
+  button.b:disabled { opacity: .45; cursor: default; }
+  input[type=text], select { background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 8px; font-size: 12px; min-width: 0; }
+  label { color: var(--muted); font-size: 12px; display: inline-flex; gap: 5px; align-items: center; }
+  .muted { color: var(--muted); }
+  #mapwrap { position: relative; height: 300px; background: #0f1114; border: 1px solid var(--line);
+    border-radius: 6px; overflow: hidden; touch-action: none; }
+  #map { width: 100%; height: 100%; display: block; cursor: crosshair; }
+  #mapmsg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: var(--muted); pointer-events: none; text-align: center; padding: 20px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .seg button { background: var(--panel2); color: var(--muted); border: 0; padding: 5px 9px; cursor: pointer; font-size: 12px; }
+  .seg button.active { background: #1b4f6e; color: var(--text); }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  td { padding: 3px 4px; border-bottom: 1px solid var(--line); }
+  td:first-child { color: var(--wp); width: 22px; }
+  td.act { text-align: right; white-space: nowrap; }
+  td.act button { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0 3px; font-size: 13px; }
+  td.act button:hover { color: var(--text); }
+  tr.cur td { background: rgba(255,212,0,.08); }
+  #navstate { font-size: 12px; }
+  .pad { display: grid; grid-template-columns: repeat(3, 52px); gap: 6px; justify-content: center; margin: 4px 0 8px; }
+  .pad button { height: 44px; background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; font-size: 18px; cursor: pointer; user-select: none; touch-action: none; }
+  .pad button.held { background: #1b4f6e; border-color: var(--accent); }
+  input[type=range] { flex: 1; accent-color: var(--accent); }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-variant-numeric: tabular-nums; }
+  .kv span:nth-child(odd) { color: var(--muted); }
+  .hidden { display: none !important; }
+  #toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); background: #2a2f39;
+    border: 1px solid var(--line); padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  #toast.show { opacity: 1; }
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; grid-template-rows: 45vh auto; height: auto; }
+    aside { border-left: 0; }
+    header { flex-wrap: wrap; height: auto; padding: 8px 12px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Mercury X1</h1>
+  <span class="chip"><span class="dot" id="d-conn"></span><span id="t-conn">connecting</span></span>
+  <span class="chip"><span class="dot" id="d-batt"></span><span id="t-batt">-- %</span></span>
+  <span class="chip"><span class="dot" id="d-slam"></span><span id="t-slam">SLAM off</span></span>
+  <span class="chip"><span class="dot" id="d-nav"></span><span id="t-nav">Nav off</span></span>
+  <span class="chip"><span class="dot" id="d-arms"></span><span id="t-arms">arms</span></span>
+  <span class="spacer"></span>
+  <button id="estop" title="Cancel navigation and stop the base (Space)">STOP</button>
+</header>
+<main>
+  <div id="viewer"><div class="hint" id="pickhint">Click in the 3D view to add a waypoint</div></div>
+  <aside>
+    <div class="tabs"><button class="active" data-tab="nav">Navigate</button><button data-tab="robot">Robot</button></div>
+
+    <div data-pane="nav">
+      <section>
+        <h2>Map &amp; localization</h2>
+        <div class="row">
+          <input type="text" id="mapname" list="maplist" value="default" style="width:120px" title="map name (~/maps/&lt;name&gt;.db)">
+          <datalist id="maplist"></datalist>
+          <label><input type="checkbox" id="fresh"> new map</label>
+        </div>
+        <div class="row">
+          <button class="b primary" id="b-mapping">Start mapping</button>
+          <button class="b" id="b-localize">Localize</button>
+          <button class="b danger" id="b-slamstop">Stop SLAM</button>
+          <button class="b" id="b-export" title="Save a .pgm/.yaml copy of the 2D map">Export</button>
+        </div>
+        <div class="row">
+          <button class="b primary" id="b-nav">Start Nav2</button>
+          <button class="b danger" id="b-navstop">Stop Nav2</button>
+        </div>
+      </section>
+      <section>
+        <h2>Map</h2>
+        <div class="row">
+          <div class="seg" id="tool">
+            <button data-tool="wp" class="active" title="click = waypoint, drag = heading">+ Waypoint</button>
+            <button data-tool="goto" title="click/drag: navigate here now">Go to</button>
+            <button data-tool="pose" title="click/drag: tell the localizer where the robot is">Set pose</button>
+          </div>
+          <label title="Click in the Rerun 3D view to add waypoints"><input type="checkbox" id="pick3d"> 3D pick</label>
+        </div>
+        <div id="mapwrap"><canvas id="map"></canvas><div id="mapmsg">No map yet. Start mapping or localization.</div></div>
+        <div class="row muted" style="margin-top:6px;font-size:11px">Wheel: zoom · right-drag / shift-drag: pan · double-click: center on robot</div>
+      </section>
+      <section>
+        <h2>Waypoints</h2>
+        <table id="wptable"></table>
+        <div class="row" style="margin-top:8px">
+          <button class="b primary" id="b-runonce">Run once</button>
+          <button class="b primary" id="b-cruise">Cruise ⟳</button>
+          <button class="b" id="b-clear">Clear</button>
+        </div>
+        <div id="navstate" class="muted">idle</div>
+      </section>
+    </div>
+
+    <div data-pane="robot" class="hidden">
+      <section>
+        <h2>Drive</h2>
+        <div class="pad">
+          <span></span><button data-v="1,0">▲</button><span></span>
+          <button data-v="0,1">◀</button><button data-v="0,0">■</button><button data-v="0,-1">▶</button>
+          <span></span><button data-v="-1,0">▼</button><span></span>
+        </div>
+        <div class="row"><label style="width:70px">linear</label><input type="range" id="vlin" min="0.05" max="0.4" step="0.01" value="0.15"><span id="vlin-t" style="width:60px">0.15 m/s</span></div>
+        <div class="row"><label style="width:70px">angular</label><input type="range" id="vang" min="0.1" max="1.0" step="0.05" value="0.4"><span id="vang-t" style="width:60px">0.40 r/s</span></div>
+        <div class="muted" style="font-size:11px">Keys: W/A/S/D or arrows (hold). Driving cancels navigation.</div>
+      </section>
+      <section>
+        <h2>Head</h2>
+        <div class="row"><label style="width:70px">neck</label><input type="range" id="neck" min="-60" max="60" step="1" value="0"><span id="neck-t" style="width:45px">0°</span></div>
+        <div class="row"><label style="width:70px">jaw (cam)</label><input type="range" id="jaw" min="-55" max="0" step="1" value="0"><span id="jaw-t" style="width:45px">0°</span></div>
+      </section>
+      <section>
+        <h2>Light &amp; arms</h2>
+        <div class="row">
+          <input type="color" id="led" value="#00aaff" style="width:44px;height:28px;border:0;background:none">
+          <button class="b" id="b-ledoff">LED off</button>
+          <span class="spacer"></span>
+          <button class="b" id="b-armson">Arms on</button>
+          <button class="b danger" id="b-armsoff">Arms off</button>
+        </div>
+      </section>
+      <section>
+        <h2>Status</h2>
+        <div class="kv" id="kv"></div>
+      </section>
+    </div>
+  </aside>
+</main>
+<div id="toast"></div>
+
+<script type="module">
+const $ = (s) => document.querySelector(s);
+const host = location.hostname;
+let ST = null;           // latest status from /ws
+let MAP = null;          // {info, img}
+let WAYPOINTS = [];
+let tool = "wp";
+const toast = (t) => { const e = $("#toast"); e.textContent = t; e.classList.add("show"); clearTimeout(e._t); e._t = setTimeout(() => e.classList.remove("show"), 2400); };
+const api = async (action, body = {}) => {
+  try {
+    const r = await fetch(`/api/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!j.ok) toast(j.error || `${action} failed`);
+    return j;
+  } catch (e) { toast(`${action}: ${e}`); }
+};
+
+// ---------------- Rerun viewer ----------------
+const cfg = await (await fetch("/config")).json();
+const grpcUrl = `rerun+http://${host}:${cfg.grpc_port}/proxy`;
+async function startViewer() {
+  const el = $("#viewer");
+  if (cfg.viewer_local) {
+    try {
+      const { WebViewer } = await import("/vendor/rerun/index.js");
+      const v = new WebViewer();
+      await v.start(grpcUrl, el, { hide_welcome_screen: true, width: "100%", height: "100%", theme: "dark" });
+      v.on("selection_change", (ev) => {
+        if (!$("#pick3d").checked) return;
+        const it = (ev.items || []).find((i) => i.type === "entity" && i.position);
+        if (!it) return;
+        const [x, y] = it.position;
+        const prev = WAYPOINTS[WAYPOINTS.length - 1];
+        const yaw = prev ? Math.atan2(y - prev.y, x - prev.x) : 0;
+        addWaypoint(x, y, yaw);
+        toast(`waypoint ${WAYPOINTS.length} from 3D: ${x.toFixed(2)}, ${y.toFixed(2)}`);
+      });
+      return;
+    } catch (e) { console.warn("embedded viewer failed, falling back to iframe", e); }
+  }
+  $("#pick3d").disabled = true;
+  $("#pick3d").parentElement.title = "3D picking needs the embedded viewer (still downloading on the robot?)";
+  const f = document.createElement("iframe");
+  f.src = `http://${host}:${cfg.viewer_port}/?url=${encodeURIComponent(grpcUrl)}`;
+  el.appendChild(f);
+}
+startViewer();
+$("#pick3d").addEventListener("change", (e) => $("#pickhint").style.display = e.target.checked ? "block" : "none");
+
+// ---------------- status websocket ----------------
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onmessage = (m) => { ST = JSON.parse(m.data); onStatus(); };
+  ws.onopen = () => { setDot("conn", "ok", "online"); };
+  ws.onclose = () => { setDot("conn", "bad", "offline"); setTimeout(connect, 1500); };
+}
+connect();
+function setDot(id, cls, text) { $(`#d-${id}`).className = `dot ${cls}`; $(`#t-${id}`).textContent = text; }
+
+let mapVersion = -1;
+function onStatus() {
+  const s = ST;
+  if (s.battery_pct != null) setDot("batt", s.battery_pct > 40 ? "ok" : s.battery_pct > 15 ? "warn" : "bad", `${s.battery_pct} %`);
+  else if (s.battery != null) setDot("batt", "", `${s.battery.toFixed(1)} V`);
+  $("#t-batt").parentElement.title = s.battery != null ? `${s.battery.toFixed(2)} V` : "";
+  const slam = s.procs.slam, nav = s.procs.nav;
+  setDot("slam", slam.running ? "ok" : "", slam.running ? `${slam.mode} · ${slam.map}` : "SLAM off");
+  setDot("nav", nav.running ? (s.nav.state === "navigating" ? "warn" : "ok") : "", nav.running ? `Nav ${s.nav.state}` : "Nav off");
+  const arms = Object.values(s.arms || {});
+  const powered = arms.filter((a) => a.powered).length;
+  setDot("arms", arms.length && powered === arms.length ? "ok" : powered ? "warn" : "bad", `arms ${powered}/${arms.length || 2}`);
+  if (document.activeElement !== $("#mapname") && slam.map) $("#mapname").value = slam.map;
+  if (JSON.stringify(s.waypoints) !== JSON.stringify(WAYPOINTS) && !dragging) { WAYPOINTS = s.waypoints; renderTable(); }
+  if (s.map_version !== mapVersion) { mapVersion = s.map_version; loadMap(); }
+  const n = s.nav;
+  $("#navstate").textContent = n.state + (n.loop ? " · cruising" : "") + (n.current != null && n.state === "navigating" ? ` · to #${n.current + 1}` : "") + (n.message ? ` · ${n.message}` : "");
+  $("#navstate").style.color = n.state === "error" || n.state === "aborted" ? "var(--bad)" : n.state === "navigating" ? "var(--warn)" : "var(--muted)";
+  renderTable(true);
+  renderKV();
+  drawMap();
+}
+
+function renderKV() {
+  const s = ST, b = s.base || {};
+  const p = s.pose ? `${s.pose.x.toFixed(2)}, ${s.pose.y.toFixed(2)}, ${(s.pose.yaw * 180 / Math.PI).toFixed(0)}° (${s.pose.frame})` : "—";
+  const rows = [["pose", p], ["base", b.connected ? `ok · fw ${b.fw}` : "no link"],
+    ["sonar L / back / R", b.ultrasonic ? b.ultrasonic.map((v) => v >= 2.9 ? "—" : v.toFixed(2)).join(" / ") + " m" : "—"],
+    ["rear guard", b.obstacle_hold ? "HOLDING (obstacle behind)" : "clear"]];
+  for (const [side, a] of Object.entries(s.arms || {})) rows.push([`${side} arm`, `${a.powered ? "powered" : "off"} · ${a.rate} Hz${a.moving ? " · moving" : ""}`]);
+  $("#kv").innerHTML = rows.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
+}
+
+// ---------------- map canvas ----------------
+const cv = $("#map"), ctx = cv.getContext("2d");
+let view = { s: 2, ox: 0, oy: 0, fitted: false };   // screen = map_px * s + o
+async function loadMap() {
+  const info = await (await fetch("/map.json")).json();
+  if (!info) { MAP = null; $("#mapmsg").style.display = "flex"; return; }
+  const img = new Image();
+  img.onload = () => { MAP = { info, img }; $("#mapmsg").style.display = "none"; if (!view.fitted) fitView(); drawMap(); };
+  img.src = `/map.png?v=${info.version}`;
+}
+function resize() { const r = cv.getBoundingClientRect(); cv.width = r.width * devicePixelRatio; cv.height = r.height * devicePixelRatio; drawMap(); }
+new ResizeObserver(resize).observe(cv);
+function fitView() {
+  if (!MAP) return;
+  const { width, height } = MAP.info, s = Math.min(cv.width / width, cv.height / height) * 0.95;
+  view = { s, ox: (cv.width - width * s) / 2, oy: (cv.height - height * s) / 2, fitted: true };
+}
+const w2s = (x, y) => { const i = MAP.info; const px = (x - i.origin[0]) / i.resolution, py = i.height - (y - i.origin[1]) / i.resolution; return [px * view.s + view.ox, py * view.s + view.oy]; };
+const s2w = (sx, sy) => { const i = MAP.info; const px = (sx - view.ox) / view.s, py = (sy - view.oy) / view.s; return [px * i.resolution + i.origin[0], (i.height - py) * i.resolution + i.origin[1]]; };
+function arrow(x, y, yaw, len, color, width = 2) {
+  const [sx, sy] = w2s(x, y), dx = Math.cos(yaw) * len, dy = -Math.sin(yaw) * len;
+  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = width * devicePixelRatio;
+  ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(sx + dx, sy + dy); ctx.stroke();
+  const a = Math.atan2(dy, dx), h = 7 * devicePixelRatio;
+  ctx.beginPath(); ctx.moveTo(sx + dx, sy + dy);
+  ctx.lineTo(sx + dx - h * Math.cos(a - 0.5), sy + dy - h * Math.sin(a - 0.5));
+  ctx.lineTo(sx + dx - h * Math.cos(a + 0.5), sy + dy - h * Math.sin(a + 0.5)); ctx.fill();
+}
+let preview = null;
+function drawMap() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = "#0f1114"; ctx.fillRect(0, 0, cv.width, cv.height);
+  if (!MAP) return;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(MAP.img, view.ox, view.oy, MAP.info.width * view.s, MAP.info.height * view.s);
+  const dpr = devicePixelRatio;
+  if (ST && ST.plan && ST.plan.length > 1) {
+    ctx.strokeStyle = "#4cc2ff"; ctx.lineWidth = 2 * dpr; ctx.beginPath();
+    ST.plan.forEach(([x, y], k) => { const [sx, sy] = w2s(x, y); k ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); }); ctx.stroke();
+  }
+  if (WAYPOINTS.length > 1) {
+    ctx.setLineDash([4 * dpr, 4 * dpr]); ctx.strokeStyle = "rgba(255,212,0,.5)"; ctx.lineWidth = 1.5 * dpr; ctx.beginPath();
+    WAYPOINTS.forEach((w, k) => { const [sx, sy] = w2s(w.x, w.y); k ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); });
+    if (ST && ST.nav.loop) { const [sx, sy] = w2s(WAYPOINTS[0].x, WAYPOINTS[0].y); ctx.lineTo(sx, sy); }
+    ctx.stroke(); ctx.setLineDash([]);
+  }
+  const cur = ST && ST.nav.state === "navigating" ? ST.nav.current : null;
+  WAYPOINTS.forEach((w, k) => {
+    const [sx, sy] = w2s(w.x, w.y);
+    arrow(w.x, w.y, w.yaw, 16 * dpr, "#ffd400");
+    ctx.fillStyle = k === cur ? "#ff8c00" : "#ffd400"; ctx.beginPath(); ctx.arc(sx, sy, 8 * dpr, 0, 7); ctx.fill();
+    ctx.fillStyle = "#111"; ctx.font = `${10 * dpr}px system-ui`; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(k + 1, sx, sy + 0.5);
+  });
+  if (ST && ST.pose && ST.pose.frame === "map") {
+    const p = ST.pose, [sx, sy] = w2s(p.x, p.y), r = 0.30 / MAP.info.resolution * view.s;
+    ctx.fillStyle = "rgba(61,220,132,.25)"; ctx.strokeStyle = "#3ddc84"; ctx.lineWidth = 2 * dpr;
+    ctx.beginPath(); ctx.arc(sx, sy, Math.max(r, 5 * dpr), 0, 7); ctx.fill(); ctx.stroke();
+    arrow(p.x, p.y, p.yaw, Math.max(r * 1.4, 14 * dpr), "#3ddc84", 2.5);
+  }
+  if (preview) arrow(preview.x, preview.y, preview.yaw, 22 * dpr, preview.color, 3);
+}
+
+// interactions
+let dragging = null, panning = null;
+const evPt = (e) => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * devicePixelRatio, (e.clientY - r.top) * devicePixelRatio]; };
+cv.addEventListener("contextmenu", (e) => e.preventDefault());
+cv.addEventListener("pointerdown", (e) => {
+  if (!MAP) return;
+  cv.setPointerCapture(e.pointerId);
+  const [sx, sy] = evPt(e);
+  if (e.button === 2 || e.shiftKey) { panning = { sx, sy, ox: view.ox, oy: view.oy }; return; }
+  const [x, y] = s2w(sx, sy);
+  dragging = { x, y, sx, sy };
+  preview = { x, y, yaw: 0, color: tool === "wp" ? "#ffd400" : tool === "goto" ? "#4cc2ff" : "#ff5ec4" };
+  drawMap();
+});
+cv.addEventListener("pointermove", (e) => {
+  const [sx, sy] = evPt(e);
+  if (panning) { view.ox = panning.ox + sx - panning.sx; view.oy = panning.oy + sy - panning.sy; drawMap(); return; }
+  if (!dragging) return;
+  if (Math.hypot(sx - dragging.sx, sy - dragging.sy) > 6 * devicePixelRatio) preview.yaw = Math.atan2(-(sy - dragging.sy), sx - dragging.sx);
+  drawMap();
+});
+cv.addEventListener("pointerup", (e) => {
+  if (panning) { panning = null; return; }
+  if (!dragging) return;
+  const { x, y } = dragging, yaw = preview.yaw;
+  dragging = null; preview = null;
+  if (tool === "wp") addWaypoint(x, y, yaw);
+  else if (tool === "goto") { api("goto", { x, y, yaw }); toast(`navigating to ${x.toFixed(2)}, ${y.toFixed(2)}`); }
+  else if (tool === "pose") { api("initialpose", { x, y, yaw }); toast("initial pose sent"); }
+  drawMap();
+});
+cv.addEventListener("wheel", (e) => {
+  e.preventDefault(); const [sx, sy] = evPt(e), k = Math.exp(-e.deltaY * 0.0015);
+  view.ox = sx - (sx - view.ox) * k; view.oy = sy - (sy - view.oy) * k; view.s *= k; drawMap();
+}, { passive: false });
+cv.addEventListener("dblclick", () => {
+  if (!ST || !ST.pose || !MAP) return; const [sx, sy] = w2s(ST.pose.x, ST.pose.y);
+  view.ox += cv.width / 2 - sx; view.oy += cv.height / 2 - sy; drawMap();
+});
+document.querySelectorAll("#tool button").forEach((b) => b.onclick = () => {
+  tool = b.dataset.tool; document.querySelectorAll("#tool button").forEach((x) => x.classList.toggle("active", x === b));
+});
+
+// ---------------- waypoints ----------------
+function pushWaypoints() { api("waypoints", { waypoints: WAYPOINTS }); renderTable(); drawMap(); }
+function addWaypoint(x, y, yaw) { WAYPOINTS.push({ x, y, yaw }); pushWaypoints(); }
+let lastTableKey = "";
+function renderTable(onlyIfChanged = false) {
+  const cur = ST && ST.nav.state === "navigating" ? ST.nav.current : null;
+  const key = JSON.stringify([WAYPOINTS, cur]);
+  if (onlyIfChanged && key === lastTableKey) return;
+  lastTableKey = key;
+  $("#wptable").innerHTML = WAYPOINTS.length ? WAYPOINTS.map((w, k) => `<tr class="${k === cur ? "cur" : ""}"><td>${k + 1}</td><td>${w.x.toFixed(2)}, ${w.y.toFixed(2)}</td><td>${(w.yaw * 180 / Math.PI).toFixed(0)}°</td>
+    <td class="act"><button data-a="go" data-k="${k}" title="go here">➜</button><button data-a="up" data-k="${k}" title="move up">↑</button><button data-a="del" data-k="${k}" title="delete">✕</button></td></tr>`).join("")
+    : `<tr><td></td><td class="muted" colspan="3">Click the map to add waypoints (drag to set heading).</td></tr>`;
+}
+$("#wptable").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return; const k = +b.dataset.k;
+  if (b.dataset.a === "del") WAYPOINTS.splice(k, 1);
+  if (b.dataset.a === "up" && k > 0) [WAYPOINTS[k - 1], WAYPOINTS[k]] = [WAYPOINTS[k], WAYPOINTS[k - 1]];
+  if (b.dataset.a === "go") { const w = WAYPOINTS[k]; api("goto", w); return; }
+  pushWaypoints();
+});
+$("#b-clear").onclick = () => { WAYPOINTS = []; pushWaypoints(); };
+$("#b-runonce").onclick = () => api("run", { loop: false });
+$("#b-cruise").onclick = () => api("run", { loop: true });
+
+// ---------------- SLAM / Nav ----------------
+async function refreshMaps() { const j = await (await fetch("/maps")).json(); $("#maplist").innerHTML = j.maps.map((m) => `<option value="${m}">`).join(""); }
+refreshMaps();
+$("#b-mapping").onclick = async () => { toast("starting mapping…"); await api("slam", { mode: "mapping", map: $("#mapname").value, fresh: $("#fresh").checked }); view.fitted = false; refreshMaps(); };
+$("#b-localize").onclick = async () => { toast("starting localization…"); await api("slam", { mode: "localization", map: $("#mapname").value }); view.fitted = false; };
+$("#b-slamstop").onclick = async () => { toast("stopping SLAM (saving map)…"); await api("slam_stop"); toast("SLAM stopped, map saved"); refreshMaps(); };
+$("#b-export").onclick = async () => { const j = await api("export_map"); if (j && j.ok) toast(`saved ${j.file}`); };
+$("#b-nav").onclick = async () => { toast("starting Nav2…"); await api("nav"); };
+$("#b-navstop").onclick = async () => { await api("nav_stop"); toast("Nav2 stopped"); };
+const stopAll = () => { api("stop"); toast("STOP"); };
+$("#estop").onclick = stopAll;
+
+// ---------------- tabs ----------------
+document.querySelectorAll(".tabs button").forEach((b) => b.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("active", x === b));
+  document.querySelectorAll("[data-pane]").forEach((p) => p.classList.toggle("hidden", p.dataset.pane !== b.dataset.tab));
+});
+
+// ---------------- teleop ----------------
+const held = new Set(); let teleTimer = null;
+const vl = () => +$("#vlin").value, va = () => +$("#vang").value;
+$("#vlin").oninput = () => $("#vlin-t").textContent = `${vl().toFixed(2)} m/s`;
+$("#vang").oninput = () => $("#vang-t").textContent = `${va().toFixed(2)} r/s`;
+function teleVec() {
+  let lin = 0, ang = 0;
+  for (const k of held) { const [a, b] = k.split(",").map(Number); lin += a; ang += b; }
+  return [Math.sign(lin) * vl(), Math.sign(ang) * va()];
+}
+function teleUpdate() {
+  if (held.size && !teleTimer) teleTimer = setInterval(() => { const [vx, wz] = teleVec(); api("cmd_vel", { vx, wz }); }, 100);
+  if (!held.size && teleTimer) { clearInterval(teleTimer); teleTimer = null; api("cmd_vel", { vx: 0, wz: 0 }); }
+}
+document.querySelectorAll(".pad button").forEach((b) => {
+  const v = b.dataset.v;
+  if (v === "0,0") { b.onclick = stopAll; return; }
+  b.addEventListener("pointerdown", (e) => { b.setPointerCapture(e.pointerId); held.add(v); b.classList.add("held"); teleUpdate(); });
+  const up = () => { held.delete(v); b.classList.remove("held"); teleUpdate(); };
+  b.addEventListener("pointerup", up); b.addEventListener("pointercancel", up);
+});
+const keymap = { w: "1,0", arrowup: "1,0", s: "-1,0", arrowdown: "-1,0", a: "0,1", arrowleft: "0,1", d: "0,-1", arrowright: "0,-1" };
+window.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT") return;
+  if (e.code === "Space") { e.preventDefault(); stopAll(); return; }
+  const v = keymap[e.key.toLowerCase()]; if (!v || e.repeat) return; e.preventDefault(); held.add(v); teleUpdate();
+});
+window.addEventListener("keyup", (e) => { const v = keymap[e.key.toLowerCase()]; if (v) { held.delete(v); teleUpdate(); } });
+window.addEventListener("blur", () => { held.clear(); teleUpdate(); });
+
+// ---------------- head / led / arms ----------------
+let headT = null;
+for (const id of ["neck", "jaw"]) $("#" + id).oninput = () => {
+  $(`#${id}-t`).textContent = `${$("#" + id).value}°`;
+  clearTimeout(headT); headT = setTimeout(() => api("head", { head: +$("#neck").value, eye: +$("#jaw").value, speed: 40 }), 150);
+};
+const hex2rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+$("#led").oninput = () => { const [r, g, b] = hex2rgb($("#led").value); api("led", { r, g, b }); };
+$("#b-ledoff").onclick = () => api("led", { r: 0, g: 0, b: 0 });
+$("#b-armson").onclick = () => { api("arms_power", { on: true }); toast("powering arms on"); };
+$("#b-armsoff").onclick = () => { if (confirm("Power the arms off? They will go limp if not supported.")) api("arms_power", { on: false }); };
+</script>
+</body>
+</html>

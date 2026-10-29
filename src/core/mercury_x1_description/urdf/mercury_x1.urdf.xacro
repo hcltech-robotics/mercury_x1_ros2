@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <!--
-  Mercury X1 = vendor model (mercury_robot_urdf, unchanged) + sensor frames.
+  Mercury X1 = vendor model (copy in mercury_x1_vendor.urdf, base origin moved onto the drive axle) + sensor frames.
 
   Calibration notes (2026-10-29, see mercury_x1_devlog/software/mercury-x1-low-level-protocols.md):
   * Orbbec DaBai: floor-plane fits with the jaw at -30/-40 deg show the camera pitch follows
@@ -8,13 +8,15 @@
     the tilt axis (~0.95 m above the floor). Yaw relative to the head is assumed 0.
   * Lidar (LSLiDAR M10): 0 deg points forward, not mirrored (ICP yaw == gyro yaw), 16.5 cm above
     the floor (measured). In-place rotations put it ~0 m ahead of the rotation centre (ICP showed a
-    0.115 m lever-arm error with x = 0.12).
+    0.115 m lever-arm error with x = 0.12). The lidar sits on the front edge of the base, so the
+    drive axle is under it: the vendor model is shifted back 0.115 m (see mercury_x1_vendor.urdf)
+    and base_footprint is the axle centre. Base outline in this frame: x -0.36..0.04, y +-0.153.
   * Waist (URDF "body") is mirrored w.r.t. the firmware: depth cloud vs lidar walls aligned only
     after flipping its sign (residual ~2 deg). Neck sign is still unverified.
   * Bellybutton camera, IMU and ultrasonic frames are estimates.
 -->
 <robot name="mercury_x1" xmlns:xacro="http://www.ros.org/wiki/xacro">
-  <xacro:include filename="$(find mercury_robot_urdf)/urdf/mercury_x1/mercury_x1.urdf"/>
+  <xacro:include filename="$(find mercury_x1_description)/urdf/mercury_x1_vendor.urdf"/>
 
   <xacro:property name="lidar_x" value="0.0"/>
   <xacro:property name="lidar_z" value="0.165"/>
@@ -43,7 +45,7 @@
   <joint name="camera_joint" type="fixed">
     <parent link="link_eye"/>
     <child link="camera_link"/>
-    <origin xyz="0.02 0.008 0" rpy="${-pi/2} 0 ${cam_up_deg*pi/180}"/>
+    <origin xyz="0.07 0.008 0" rpy="${-pi/2} 0 ${cam_up_deg*pi/180}"/>   <!-- x: depth-vs-lidar wall fit -->
   </joint>
 
   <!-- bellybutton RGB camera (above the lidar) -->
@@ -60,7 +62,9 @@
     <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
   </joint>
 
-  <!-- ultrasonic rangers, same height as the lidar -->
+  <!-- ultrasonic rangers, same height as the lidar: one on each side and one at the back
+       (MCU channel 0 = left, 1 = back, 2 = right; left/right assignment still to be verified).
+       Base outline in this frame: x -0.36..0.04, y +-0.153. -->
   <xacro:macro name="ultrasonic" params="name x y yaw">
     <link name="ultrasonic_${name}"/>
     <joint name="ultrasonic_${name}_joint" type="fixed">
@@ -69,7 +73,7 @@
       <origin xyz="${x} ${y} ${lidar_z}" rpy="0 0 ${yaw}"/>
     </joint>
   </xacro:macro>
-  <xacro:ultrasonic name="front_left" x="0.0" y="0.15" yaw="0.6"/>
-  <xacro:ultrasonic name="front" x="0.03" y="0.0" yaw="0.0"/>
-  <xacro:ultrasonic name="front_right" x="0.0" y="-0.15" yaw="-0.6"/>
+  <xacro:ultrasonic name="left" x="-0.16" y="0.153" yaw="${pi/2}"/>
+  <xacro:ultrasonic name="back" x="-0.36" y="0.0" yaw="${pi}"/>
+  <xacro:ultrasonic name="right" x="-0.16" y="-0.153" yaw="${-pi/2}"/>
 </robot>

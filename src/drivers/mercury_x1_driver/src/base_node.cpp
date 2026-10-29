@@ -5,7 +5,8 @@
 // Subscribes cmd_vel (geometry_msgs/Twist), base/led (std_msgs/ColorRGBA, 0..1)
 //
 // Safety: velocity limits, a cmd_vel watchdog (the MCU on its own only stops after ~1 s),
-// and an optional ultrasonic guard blocking forward motion near obstacles.
+// and an optional ultrasonic guard that blocks reversing when the rear sensor sees something close
+// (the rangers sit on the sides and the back; the lidar covers the front).
 
 #include <algorithm>
 #include <atomic>
@@ -51,12 +52,13 @@ public:
     ang_scale_ = declare_parameter("angular_scale", 1.0);
     yaw_from_gyro_ = declare_parameter("yaw_source", "gyro") == "gyro";
     us_names_ = declare_parameter("ultrasonic_names",
-        std::vector<std::string>{"front_left", "front", "front_right"});
+        std::vector<std::string>{"left", "back", "right"});
     us_max_ = declare_parameter("ultrasonic_max_range", 2.9);
     us_min_ = declare_parameter("ultrasonic_min_range", 0.03);
     us_fov_ = declare_parameter("ultrasonic_fov", 0.5);
     guard_dist_ = declare_parameter("ultrasonic_guard_distance", 0.0);
-    guard_ch_ = declare_parameter("ultrasonic_guard_channels", std::vector<int64_t>{0, 1, 2});
+    guard_ch_ = declare_parameter("ultrasonic_guard_channels", std::vector<int64_t>{1});  // rear
+    battery_cells_ = declare_parameter("battery_cells", 6);   // series Li-ion cells (24 V pack)
 
     pub_odom_ = create_publisher<nav_msgs::msg::Odometry>("odom", 10);
     pub_imu_ = create_publisher<sensor_msgs::msg::Imu>("imu/data_raw", rclcpp::SensorDataQoS());
@@ -134,7 +136,7 @@ private:
     c[1] = std::clamp(c[1], -max_lin_, max_lin_);
     c[2] = std::clamp(c[2], -max_ang_, max_ang_);
     bool hold = false;
-    if (guard_dist_ > 0 && c[0] > 0) {
+    if (guard_dist_ > 0 && c[0] < 0) {
       double nearest = std::numeric_limits<double>::infinity();
       std::lock_guard<std::mutex> lk(state_mtx_);
       for (auto ch : guard_ch_) {
@@ -286,6 +288,21 @@ private:
     }
   }
 
+  // State of charge from the resting-voltage curve of a Li-ion cell (rough under load).
+  static double socFromCellVoltage(double v)
+  {
+    static const double pts[][2] = {{3.30, 0.00}, {3.50, 0.05}, {3.60, 0.12}, {3.70, 0.30},
+      {3.80, 0.50}, {3.90, 0.66}, {4.00, 0.80}, {4.10, 0.92}, {4.20, 1.00}};
+    if (v <= pts[0][0]) {return 0.0;}
+    for (size_t i = 1; i < sizeof(pts) / sizeof(pts[0]); ++i) {
+      if (v <= pts[i][0]) {
+        const double t = (v - pts[i - 1][0]) / (pts[i][0] - pts[i - 1][0]);
+        return pts[i - 1][1] + t * (pts[i][1] - pts[i - 1][1]);
+      }
+    }
+    return 1.0;
+  }
+
   void slowTick()
   {
     const bool connected = now_s() - last_rx_ < 0.5;
@@ -311,14 +328,19 @@ private:
     b.header.stamp = st.header.stamp;
     b.voltage = st.voltage;
     b.present = connected;
-    b.percentage = std::numeric_limits<float>::quiet_NaN();
+    b.percentage = (connected && battery_cells_ > 0 && st.voltage > 1.0f) ?
+      static_cast<float>(socFromCellVoltage(st.voltage / static_cast<double>(battery_cells_))) :
+      std::numeric_limits<float>::quiet_NaN();
+    b.cell_voltage.assign(static_cast<size_t>(std::max<int64_t>(battery_cells_, 0)),
+        battery_cells_ > 0 ? st.voltage / battery_cells_ : 0.0f);
+    b.power_supply_technology = sensor_msgs::msg::BatteryState::POWER_SUPPLY_TECHNOLOGY_LION;
     pub_batt_->publish(b);
     if (!connected) {RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "no frames from base MCU");}
   }
 
   // parameters
   std::string port_, odom_frame_, base_frame_, imu_frame_;
-  int64_t baud_;
+  int64_t baud_, battery_cells_;
   bool publish_tf_, yaw_from_gyro_;
   double cmd_timeout_, max_lin_, max_ang_, lin_scale_, ang_scale_, us_max_, us_min_, us_fov_, guard_dist_;
   std::vector<std::string> us_names_;

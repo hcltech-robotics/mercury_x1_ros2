@@ -16,6 +16,7 @@ find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(mercury_x1_msgs REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
 
 add_library(mercury_x1_protocol STATIC src/serial_port.cpp src/arm_protocol.cpp src/base_protocol.cpp)
 target_include_directories(mercury_x1_protocol PUBLIC
@@ -30,7 +31,12 @@ add_executable(upper_body_node src/upper_body_node.cpp)
 target_link_libraries(upper_body_node mercury_x1_protocol)
 ament_target_dependencies(upper_body_node rclcpp sensor_msgs std_srvs mercury_x1_msgs)
 
-install(TARGETS base_node upper_body_node DESTINATION lib/${PROJECT_NAME})
+add_executable(image_preview_node src/image_preview_node.cpp)
+target_link_libraries(image_preview_node ${OpenCV_LIBS})
+target_include_directories(image_preview_node PRIVATE ${OpenCV_INCLUDE_DIRS})
+ament_target_dependencies(image_preview_node rclcpp sensor_msgs)
+
+install(TARGETS base_node upper_body_node image_preview_node DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)

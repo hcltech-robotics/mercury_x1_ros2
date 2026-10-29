@@ -2,4 +2,4 @@
 mercury_base:
   ros__parameters:
     odom_frame: odom_wheel        # rtabmap icp_odometry publishes odom -> odom_wheel on top
-    ultrasonic_guard_distance: 0.18
+    ultrasonic_guard_distance: 0.20   # stop reversing when the rear ranger reads < 0.2 m

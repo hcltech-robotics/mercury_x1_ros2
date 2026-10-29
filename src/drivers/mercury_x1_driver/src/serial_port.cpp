@@ -1,6 +1,7 @@
 #include "mercury_x1_driver/serial_port.hpp"
 
 #include <fcntl.h>
+#include <sys/file.h>
 #include <poll.h>
 #include <sys/ioctl.h>
 #include <termios.h>
@@ -41,6 +42,13 @@ void SerialPort::open(const std::string & path, int baud, Lines lines)
     throw std::runtime_error("open " + path + ": " + std::strerror(errno));
   }
   path_ = path;
+  // Goalkeeper semantics: exactly one owner per port. A second driver instance must fail
+  // loudly instead of interleaving requests with the first one.
+  if (flock(fd_, LOCK_EX | LOCK_NB) != 0) {
+    close();
+    throw std::runtime_error(path + " is busy: another process holds it (is a second driver running?)");
+  }
+  ioctl(fd_, TIOCEXCL);
   termios tio{};
   if (tcgetattr(fd_, &tio) != 0) {
     close();
@@ -49,6 +57,7 @@ void SerialPort::open(const std::string & path, int baud, Lines lines)
   cfmakeraw(&tio);
   tio.c_cflag |= CLOCAL | CREAD;
   tio.c_cflag &= ~CRTSCTS;
+  tio.c_cflag &= ~HUPCL;  // do not drop RTS/DTR on close: they reset the right-arm ESP32
   tio.c_cc[VMIN] = 0;
   tio.c_cc[VTIME] = 0;
   cfsetispeed(&tio, toSpeed(baud));
