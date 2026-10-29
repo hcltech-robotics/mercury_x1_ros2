@@ -6,7 +6,7 @@ set -e  # Exit on error
 
 # === CONFIGURATION ===
 REMOTE_USER="elephant"          # Replace with your robot's username
-REMOTE_HOST="192.168.10.175"   # Replace with your robot's IP or hostname
+REMOTE_HOST="${REMOTE_HOST:-192.168.10.176}"   # Replace with your robot's IP or hostname
 REMOTE_PATH="/home/elephant/mercury_x1_ros2"  # Destination path on robot
 
 # Optional: SSH port (default is 22)
@@ -25,6 +25,7 @@ rsync -avz \
   --exclude='/build/' \
   --exclude='/install/' \
   --exclude='/log/' \
+  --exclude='/Log/' \
   --exclude='.vscode/' \
   --exclude='*.swp' \
   --exclude='*.swo' \

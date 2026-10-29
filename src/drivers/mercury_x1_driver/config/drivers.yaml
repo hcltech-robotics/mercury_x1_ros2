@@ -1,0 +1,29 @@
+mercury_base:
+  ros__parameters:
+    port: /dev/wheeltec_controller
+    odom_frame: odom
+    base_frame: base_footprint
+    publish_tf: true
+    cmd_timeout: 0.3           # s without cmd_vel -> zero velocity (MCU itself coasts ~1 s)
+    max_linear: 0.5            # m/s
+    max_angular: 1.0           # rad/s
+    linear_scale: 1.0          # wheel-odometry calibration factors
+    angular_scale: 1.0
+    yaw_source: gyro           # gyro | wheel
+    ultrasonic_names: [front_left, front, front_right]
+    ultrasonic_guard_distance: 0.0   # m; >0 blocks forward motion when a guarded channel is closer
+    ultrasonic_guard_channels: [0, 1, 2]
+
+mercury_upper_body:
+  ros__parameters:
+    left_port: /dev/left_arm
+    right_port: /dev/right_arm
+    power_on_start: true       # enable servos at start (arms hold their pose; nothing moves)
+    poll_body_coords: true
+    default_speed: 30
+    max_speed: 100
+    publish_rate: 50.0
+    extra_joint_names: [eye, head, body]      # URDF names: jaw tilt, neck pan, waist
+    extra_joint_ids: [11, 12, 13]             # firmware joint ids on the right-arm MCU
+    extra_joint_signs: [-1.0, 1.0, 1.0]
+    extra_joint_offsets_deg: [0.0, 0.0, 0.0]
