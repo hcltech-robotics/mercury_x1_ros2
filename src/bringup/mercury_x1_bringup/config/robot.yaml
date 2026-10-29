@@ -1,0 +1,5 @@
+# Driver overrides used by mercury_x1_bringup (on top of mercury_x1_driver/config/drivers.yaml).
+mercury_base:
+  ros__parameters:
+    odom_frame: odom_wheel        # rtabmap icp_odometry publishes odom -> odom_wheel on top
+    ultrasonic_guard_distance: 0.18

@@ -307,7 +307,7 @@ public:
     // neck/jaw/waist: URDF joint name -> firmware id, with sign/offset into the URDF convention
     extra_names_ = declare_parameter("extra_joint_names", std::vector<std::string>{"eye", "head", "body"});
     const auto ids = declare_parameter("extra_joint_ids", std::vector<int64_t>{11, 12, 13});
-    extra_sign_ = declare_parameter("extra_joint_signs", std::vector<double>{-1.0, 1.0, 1.0});
+    extra_sign_ = declare_parameter("extra_joint_signs", std::vector<double>{1.0, 1.0, -1.0});
     extra_offset_ = declare_parameter("extra_joint_offsets_deg", std::vector<double>{0.0, 0.0, 0.0});
     if (ids.size() != extra_names_.size() || extra_sign_.size() != ids.size() || extra_offset_.size() != ids.size()) {
       throw std::runtime_error("extra_joint_* parameter lists must have equal length");

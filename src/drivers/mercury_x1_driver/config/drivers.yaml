@@ -25,5 +25,5 @@ mercury_upper_body:
     publish_rate: 50.0
     extra_joint_names: [eye, head, body]      # URDF names: jaw tilt, neck pan, waist
     extra_joint_ids: [11, 12, 13]             # firmware joint ids on the right-arm MCU
-    extra_joint_signs: [-1.0, 1.0, 1.0]
+    extra_joint_signs: [1.0, 1.0, -1.0]       # calibrated: jaw firmware<0 = camera down = URDF eye<0; waist mirrored (depth vs lidar). neck: unverified
     extra_joint_offsets_deg: [0.0, 0.0, 0.0]

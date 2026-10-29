@@ -1,0 +1,75 @@
+<?xml version="1.0"?>
+<!--
+  Mercury X1 = vendor model (mercury_robot_urdf, unchanged) + sensor frames.
+
+  Calibration notes (2026-10-29, see mercury_x1_devlog/software/mercury-x1-low-level-protocols.md):
+  * Orbbec DaBai: floor-plane fits with the jaw at -30/-40 deg show the camera pitch follows
+    the jaw 1:1 with a -5.7 deg offset (looks slightly up at jaw 0) and the optical centre sits on
+    the tilt axis (~0.95 m above the floor). Yaw relative to the head is assumed 0.
+  * Lidar (LSLiDAR M10): 0 deg points forward, not mirrored (ICP yaw == gyro yaw), 16.5 cm above
+    the floor (measured). In-place rotations put it ~0 m ahead of the rotation centre (ICP showed a
+    0.115 m lever-arm error with x = 0.12).
+  * Waist (URDF "body") is mirrored w.r.t. the firmware: depth cloud vs lidar walls aligned only
+    after flipping its sign (residual ~2 deg). Neck sign is still unverified.
+  * Bellybutton camera, IMU and ultrasonic frames are estimates.
+-->
+<robot name="mercury_x1" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:include filename="$(find mercury_robot_urdf)/urdf/mercury_x1/mercury_x1.urdf"/>
+
+  <xacro:property name="lidar_x" value="0.0"/>
+  <xacro:property name="lidar_z" value="0.165"/>
+  <xacro:property name="cam_up_deg" value="5.7"/>
+
+  <!-- 2D lidar -->
+  <link name="laser"/>
+  <joint name="laser_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="laser"/>
+    <origin xyz="${lidar_x} 0 ${lidar_z}" rpy="0 0 0"/>
+  </joint>
+
+  <!-- base-board IMU (ICM-20948 on the STM32 board) -->
+  <link name="imu_link"/>
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="imu_link"/>
+    <origin xyz="0 0 0.10" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Orbbec DaBai in the jaw. link_eye's x axis is the jaw's forward direction, its z the tilt
+       axis; camera_link is ROS-standard (x forward, y left, z up). The orbbec driver publishes
+       camera_link -> camera_*_optical_frame. -->
+  <link name="camera_link"/>
+  <joint name="camera_joint" type="fixed">
+    <parent link="link_eye"/>
+    <child link="camera_link"/>
+    <origin xyz="0.02 0.008 0" rpy="${-pi/2} 0 ${cam_up_deg*pi/180}"/>
+  </joint>
+
+  <!-- bellybutton RGB camera (above the lidar) -->
+  <link name="bellybutton_camera_link"/>
+  <joint name="bellybutton_camera_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="bellybutton_camera_link"/>
+    <origin xyz="0.01 0 0.30" rpy="0 0 0"/>
+  </joint>
+  <link name="bellybutton_camera_optical_frame"/>
+  <joint name="bellybutton_camera_optical_joint" type="fixed">
+    <parent link="bellybutton_camera_link"/>
+    <child link="bellybutton_camera_optical_frame"/>
+    <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
+  </joint>
+
+  <!-- ultrasonic rangers, same height as the lidar -->
+  <xacro:macro name="ultrasonic" params="name x y yaw">
+    <link name="ultrasonic_${name}"/>
+    <joint name="ultrasonic_${name}_joint" type="fixed">
+      <parent link="base_footprint"/>
+      <child link="ultrasonic_${name}"/>
+      <origin xyz="${x} ${y} ${lidar_z}" rpy="0 0 ${yaw}"/>
+    </joint>
+  </xacro:macro>
+  <xacro:ultrasonic name="front_left" x="0.0" y="0.15" yaw="0.6"/>
+  <xacro:ultrasonic name="front" x="0.03" y="0.0" yaw="0.0"/>
+  <xacro:ultrasonic name="front_right" x="0.0" y="-0.15" yaw="-0.6"/>
+</robot>

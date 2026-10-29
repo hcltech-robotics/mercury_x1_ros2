@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>mercury_x1_bringup</name>
+  <version>0.1.0</version>
+  <description>Mercury X1 bringup: sensors, RTAB-Map lidar+RGB-D SLAM/localization, Nav2.</description>
+  <maintainer email="legion1581@gmail.com">Konstantin Severov</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>mercury_x1_driver</exec_depend>
+  <exec_depend>mercury_x1_description</exec_depend>
+  <exec_depend>lslidar_driver</exec_depend>
+  <exec_depend>orbbec_camera</exec_depend>
+  <exec_depend>usb_cam</exec_depend>
+  <exec_depend>rtabmap_slam</exec_depend>
+  <exec_depend>rtabmap_odom</exec_depend>
+  <exec_depend>rtabmap_sync</exec_depend>
+  <exec_depend>rtabmap_util</exec_depend>
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>nav2_mppi_controller</exec_depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
