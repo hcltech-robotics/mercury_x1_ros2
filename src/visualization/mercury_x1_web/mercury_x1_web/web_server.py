@@ -24,7 +24,7 @@ import urllib.request
 import numpy as np
 import rclpy
 import rclpy.executors
-from aiohttp import web
+from aiohttp import WSMsgType, web
 from ament_index_python.packages import get_package_share_directory
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import Pose, PoseArray, PoseStamped, PoseWithCovarianceStamped, Twist
@@ -44,7 +44,7 @@ from std_srvs.srv import SetBool, Trigger
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
 MAPS_DIR = os.path.expanduser("~/maps")
-VIEWER_VERSION = "0.39.0"
+VIEWER_VERSION = "0.32.0"   # must match rerun-sdk on the robot and dimos-viewer (0.32.x)
 VIEWER_FILES = ("index.js", "re_viewer.js", "re_viewer_bg.wasm")
 VIEWER_CACHE = os.path.expanduser(f"~/.cache/mercury_x1_web/rerun-web-viewer/{VIEWER_VERSION}")
 
@@ -121,6 +121,10 @@ class WebNode(Node):
         self.wp_handle = None
         self.goal_handle = None
         self.cancel_requested = False
+        # what a click in a 3D view (browser Rerun viewer or native dimos-viewer) does
+        self.click_mode = "waypoint"          # waypoint | goto | pose | off
+        self.last_click: dict | None = None
+        self.waypoints_changed = None         # set by App: persist + republish
 
         self.chain = PoseChain()
         self.create_subscription(TFMessage, "/tf", self.chain.update, 50)
@@ -193,6 +197,36 @@ class WebNode(Node):
             _, _, p.orientation.z, p.orientation.w = yaw_to_quat(float(w["yaw"]))
             pa.poses.append(p)
         self.pub_wps.publish(pa)
+
+    IGNORED_CLICK_PREFIXES = ("world/robot", "cams", "world/orbbec_camera", "world/bellybutton_camera")
+
+    def handle_click(self, x: float, y: float, z: float, entity: str, source: str) -> None:
+        """A point picked in a 3D view -> waypoint / goal / initial pose (runs on the ROS thread)."""
+        entity = (entity or "").lstrip("/")
+        result = ""
+        if self.click_mode == "off":
+            result = "ignored (view only)"
+        elif entity.startswith(self.IGNORED_CLICK_PREFIXES):
+            result = f"ignored (clicked {entity})"
+        else:
+            pose = self.robot_pose()
+            here = (pose["x"], pose["y"]) if pose and pose["frame"] == "map" else None
+            if self.click_mode == "waypoint":
+                prev = (self.waypoints[-1]["x"], self.waypoints[-1]["y"]) if self.waypoints else here
+                yaw = math.atan2(y - prev[1], x - prev[0]) if prev else 0.0
+                self.waypoints.append({"x": float(x), "y": float(y), "yaw": yaw})
+                if self.waypoints_changed:
+                    self.waypoints_changed()
+                result = f"waypoint {len(self.waypoints)}"
+            elif self.click_mode == "goto":
+                yaw = math.atan2(y - here[1], x - here[0]) if here else 0.0
+                self.go_to(x, y, yaw)
+                result = "navigating"
+            elif self.click_mode == "pose":
+                self.set_initial_pose(x, y, pose["yaw"] if pose else 0.0)
+                result = "initial pose set"
+        self.last_click = {"x": round(x, 2), "y": round(y, 2), "z": round(z, 2), "entity": entity,
+                           "source": source, "result": result, "t": time.time()}
 
     def cmd_vel(self, vx: float, wz: float) -> None:
         t = Twist()
@@ -305,6 +339,8 @@ class WebNode(Node):
             "map_version": self.map_version,
             "plan": self.plan,
             "waypoints": self.waypoints,
+            "click_mode": self.click_mode,
+            "last_click": self.last_click,
         }
 
 
@@ -317,6 +353,9 @@ class App:
         self.map_name = "default"
         self.static_dir = os.path.join(get_package_share_directory("mercury_x1_web"), "web")
         self.viewer_ready = all(os.path.exists(os.path.join(VIEWER_CACHE, f)) for f in VIEWER_FILES)
+        self.dimos_port = 3030
+        self.dimos_clients = 0
+        node.waypoints_changed = self.save_waypoints
         os.makedirs(MAPS_DIR, exist_ok=True)
 
     # -- vendored Rerun web viewer (fetched once from jsDelivr) ----------------------------------
@@ -344,6 +383,43 @@ class App:
         ctype = "application/wasm" if name.endswith(".wasm") else "text/javascript"
         return web.FileResponse(os.path.join(VIEWER_CACHE, name), headers={
             "Content-Type": ctype, "Cache-Control": "public, max-age=86400"})
+
+    def teleop(self, vx: float, wz: float) -> None:
+        n = self.node
+        if (vx or wz) and n.nav["state"] == "navigating":
+            n.post(lambda: n.cancel(stop_base=False))   # driving by hand overrides navigation
+        n.post(lambda: n.cmd_vel(max(-0.4, min(0.4, vx)), max(-1.0, min(1.0, wz))))
+
+    # -- dimos-viewer (Dimensional's Rerun fork) interaction protocol ------------------------------
+    async def dimos_ws(self, req: web.Request) -> web.WebSocketResponse:
+        """JSON over websocket, as sent by `dimos-viewer --ws-url ws://<robot>:3030/ws`:
+        click{x,y,z,entity_path,timestamp_ms}, twist{linear_*,angular_*}, stop, heartbeat."""
+        ws = web.WebSocketResponse(heartbeat=20)
+        await ws.prepare(req)
+        n = self.node
+        n.get_logger().info(f"dimos-viewer connected from {req.remote}")
+        self.dimos_clients += 1
+        try:
+            async for msg in ws:
+                if msg.type != WSMsgType.TEXT:
+                    continue
+                try:
+                    m = json.loads(msg.data)
+                except ValueError:
+                    continue
+                kind = m.get("type")
+                if kind == "click":
+                    n.post(lambda m=m: n.handle_click(float(m["x"]), float(m["y"]), float(m.get("z", 0.0)),
+                                                      str(m.get("entity_path", "")), "dimos-viewer"))
+                elif kind == "twist":
+                    self.teleop(float(m.get("linear_x", 0.0)), float(m.get("angular_z", 0.0)))
+                elif kind == "stop":          # key release, Space (e-stop) or overlay disengage
+                    n.post(n.cancel)
+        finally:
+            self.dimos_clients -= 1
+            n.post(lambda: n.cmd_vel(0.0, 0.0))
+            n.get_logger().info("dimos-viewer disconnected")
+        return ws
 
     # -- waypoints persistence -----------------------------------------------------------------
     def wp_file(self) -> str:
@@ -397,6 +473,7 @@ class App:
                 st = self.node.status()
                 st["procs"] = self.sup.status()
                 st["map_name"] = self.map_name
+                st["dimos_viewers"] = self.dimos_clients
                 await ws.send_str(json.dumps(st))
                 await asyncio.sleep(0.2)
         except (ConnectionResetError, asyncio.CancelledError):
@@ -409,10 +486,15 @@ class App:
         n = self.node
         loop = asyncio.get_running_loop()
         if action == "cmd_vel":
-            vx, wz = float(body.get("vx", 0)), float(body.get("wz", 0))
-            if (vx or wz) and n.nav["state"] == "navigating":
-                n.post(lambda: n.cancel(stop_base=False))
-            n.post(lambda: n.cmd_vel(max(-0.4, min(0.4, vx)), max(-1.0, min(1.0, wz))))
+            self.teleop(float(body.get("vx", 0)), float(body.get("wz", 0)))
+        elif action == "click":       # point picked in the embedded Rerun viewer
+            n.post(lambda: n.handle_click(float(body["x"]), float(body["y"]), float(body.get("z", 0.0)),
+                                          str(body.get("entity", "")), "web"))
+        elif action == "click_mode":
+            mode = body.get("mode", "waypoint")
+            if mode not in ("waypoint", "goto", "pose", "off"):
+                return web.json_response({"ok": False, "error": f"bad mode {mode}"})
+            n.click_mode = mode
         elif action == "stop":
             n.post(n.cancel)
         elif action == "goto":
@@ -487,11 +569,27 @@ class App:
         threading.Thread(target=self.fetch_viewer, daemon=True).start()
         self.load_waypoints()
 
-        async def on_shutdown(_app):
-            for name in ("nav", "slam"):
-                await asyncio.get_running_loop().run_in_executor(None, lambda n=name: self.sup.stop(n))
-        app.on_shutdown.append(on_shutdown)
-        web.run_app(app, port=self.port, print=lambda *_: None, handle_signals=True)
+        dimos = web.Application()
+        dimos.router.add_get("/ws", self.dimos_ws)
+
+        async def serve() -> None:
+            runners = []
+            for application, port in ((app, self.port), (dimos, self.dimos_port)):
+                runner = web.AppRunner(application)
+                await runner.setup()
+                await web.TCPSite(runner, port=port).start()
+                runners.append(runner)
+            stop = asyncio.Event()
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, stop.set)
+            await stop.wait()
+            for name in ("nav", "slam"):     # rtabmap saves its database on SIGINT
+                await loop.run_in_executor(None, lambda n=name: self.sup.stop(n))
+            for runner in runners:
+                await runner.cleanup()
+
+        asyncio.run(serve())
 
 
 def main(args=None) -> None:
@@ -503,7 +601,7 @@ def main(args=None) -> None:
     ex = rclpy.executors.SingleThreadedExecutor()   # rclpy multi-threaded spinning is CPU-heavy
     ex.add_node(node)
     threading.Thread(target=ex.spin, daemon=True).start()
-    node.get_logger().info(f"control page on http://0.0.0.0:{port}")
+    node.get_logger().info(f"control page on http://0.0.0.0:{port}, dimos-viewer websocket on :3030/ws")
     try:
         App(node, port, grpc_port, viewer_port).run()
     finally:

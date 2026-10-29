@@ -1,7 +1,12 @@
 {
  "base_link": {
-  "file": "base_link.glb",
-  "faces": 40000,
+  "files": [
+   "base_link_0.glb",
+   "base_link_1.glb",
+   "base_link_2.glb",
+   "base_link_3.glb"
+  ],
+  "faces": 149999,
   "faces_orig": 216666,
   "color": [
    70,
@@ -10,8 +15,13 @@
   ]
  },
  "link_body": {
-  "file": "link_body.glb",
-  "faces": 79389,
+  "files": [
+   "link_body_0.glb",
+   "link_body_1.glb",
+   "link_body_2.glb",
+   "link_body_3.glb"
+  ],
+  "faces": 149999,
   "faces_orig": 365707,
   "color": [
    214,
@@ -20,8 +30,13 @@
   ]
  },
  "link_head": {
-  "file": "link_head.glb",
-  "faces": 39999,
+  "files": [
+   "link_head_0.glb",
+   "link_head_1.glb",
+   "link_head_2.glb",
+   "link_head_3.glb"
+  ],
+  "faces": 150000,
   "faces_orig": 396684,
   "color": [
    236,
@@ -30,7 +45,9 @@
   ]
  },
  "link_eye": {
-  "file": "link_eye.glb",
+  "files": [
+   "link_eye.glb"
+  ],
   "faces": 1996,
   "faces_orig": 1996,
   "color": [
@@ -40,7 +57,9 @@
   ]
  },
  "link1_L": {
-  "file": "link1_L.glb",
+  "files": [
+   "link1_L.glb"
+  ],
   "faces": 21058,
   "faces_orig": 21058,
   "color": [
@@ -50,7 +69,9 @@
   ]
  },
  "link2_L": {
-  "file": "link2_L.glb",
+  "files": [
+   "link2_L.glb"
+  ],
   "faces": 3038,
   "faces_orig": 3038,
   "color": [
@@ -60,7 +81,9 @@
   ]
  },
  "link3_L": {
-  "file": "link3_L.glb",
+  "files": [
+   "link3_L.glb"
+  ],
   "faces": 15310,
   "faces_orig": 15310,
   "color": [
@@ -70,7 +93,9 @@
   ]
  },
  "link4_L": {
-  "file": "link4_L.glb",
+  "files": [
+   "link4_L.glb"
+  ],
   "faces": 7170,
   "faces_orig": 7170,
   "color": [
@@ -80,7 +105,9 @@
   ]
  },
  "link5_L": {
-  "file": "link5_L.glb",
+  "files": [
+   "link5_L.glb"
+  ],
   "faces": 8462,
   "faces_orig": 8462,
   "color": [
@@ -90,7 +117,9 @@
   ]
  },
  "link6_L": {
-  "file": "link6_L.glb",
+  "files": [
+   "link6_L.glb"
+  ],
   "faces": 11176,
   "faces_orig": 11176,
   "color": [
@@ -100,7 +129,9 @@
   ]
  },
  "link7_L": {
-  "file": "link7_L.glb",
+  "files": [
+   "link7_L.glb"
+  ],
   "faces": 252,
   "faces_orig": 252,
   "color": [
@@ -110,7 +141,9 @@
   ]
  },
  "link1_R": {
-  "file": "link1_R.glb",
+  "files": [
+   "link1_R.glb"
+  ],
   "faces": 21058,
   "faces_orig": 21058,
   "color": [
@@ -120,7 +153,9 @@
   ]
  },
  "link2_R": {
-  "file": "link2_R.glb",
+  "files": [
+   "link2_R.glb"
+  ],
   "faces": 3038,
   "faces_orig": 3038,
   "color": [
@@ -130,7 +165,9 @@
   ]
  },
  "link3_R": {
-  "file": "link3_R.glb",
+  "files": [
+   "link3_R.glb"
+  ],
   "faces": 15310,
   "faces_orig": 15310,
   "color": [
@@ -140,7 +177,9 @@
   ]
  },
  "link4_R": {
-  "file": "link4_R.glb",
+  "files": [
+   "link4_R.glb"
+  ],
   "faces": 7170,
   "faces_orig": 7170,
   "color": [
@@ -150,7 +189,9 @@
   ]
  },
  "link5_R": {
-  "file": "link5_R.glb",
+  "files": [
+   "link5_R.glb"
+  ],
   "faces": 8462,
   "faces_orig": 8462,
   "color": [
@@ -160,7 +201,9 @@
   ]
  },
  "link6_R": {
-  "file": "link6_R.glb",
+  "files": [
+   "link6_R.glb"
+  ],
   "faces": 11176,
   "faces_orig": 11176,
   "color": [
@@ -170,7 +213,9 @@
   ]
  },
  "link7_R": {
-  "file": "link7_R.glb",
+  "files": [
+   "link7_R.glb"
+  ],
   "faces": 252,
   "faces_orig": 252,
   "color": [

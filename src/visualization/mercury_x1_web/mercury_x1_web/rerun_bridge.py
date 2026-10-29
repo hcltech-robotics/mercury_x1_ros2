@@ -158,8 +158,10 @@ class RerunBridge(Node):
             self.get_logger().warn("no robot meshes installed")
             return
         for link, info in index.items():
-            rr.log(f"world/robot/{link}", rr.Asset3D(path=os.path.join(mesh_dir, info["file"])),
-                   rr.CoordinateFrame(link), static=True)
+            for k, fname in enumerate(info.get("files") or [info["file"]]):
+                # one GLB per message, each well under a few MB (see tools/convert_meshes.py --chunk)
+                rr.log(f"world/robot/{link}/part{k}", rr.Asset3D(path=os.path.join(mesh_dir, fname)),
+                       rr.CoordinateFrame(link), static=True)
         rr.log("world/robot/base_axes", rr.TransformAxes3D(axis_length=0.3), rr.CoordinateFrame("base_footprint"),
                static=True)
 
@@ -191,29 +193,41 @@ class RerunBridge(Node):
                           quaternion=[q.x, q.y, q.z, q.w], opacity=opacity, colormap=cmap)
 
     @staticmethod
-    def _map_rgba(msg: OccupancyGrid):
-        """Occupancy grid as RGBA: free light, occupied dark, unknown fully transparent."""
+    def _map_mesh(msg: OccupancyGrid):
+        """Occupancy grid as a textured floor quad. Unlike GridMap, a mesh is pickable, so a click on
+        the floor in the viewer reports the exact (x, y) - that is what click-to-waypoint relies on.
+        Cropped to the explored area + 1 m; RViz-like opaque colours read on dark and light themes."""
         info = msg.info
-        d = np.asarray(msg.data, dtype=np.int16).reshape(info.height, info.width)
-        rgba = np.zeros((info.height, info.width, 4), np.uint8)
+        h, w, res = info.height, info.width, info.resolution
+        d = np.asarray(msg.data, dtype=np.int16).reshape(h, w)
         known = d >= 0
-        occ = d.clip(0, 100).astype(np.float32) / 100.0
-        shade = (235 - 215 * occ).astype(np.uint8)
-        rgba[..., 0] = shade
-        rgba[..., 1] = shade
-        rgba[..., 2] = np.clip(shade.astype(np.int16) + 8, 0, 255).astype(np.uint8)
-        rgba[..., 3] = np.where(known, 235, 0)
+        if not known.any():
+            return None
+        rows, cols = np.where(known.any(1))[0], np.where(known.any(0))[0]
+        m = int(round(1.0 / res))
+        r0, r1 = max(rows[0] - m, 0), min(rows[-1] + m + 1, h)
+        c0, c1 = max(cols[0] - m, 0), min(cols[-1] + m + 1, w)
+        sub = d[r0:r1, c0:c1]
+        occ = sub.clip(0, 100).astype(np.float32) / 100.0
+        free_rgb, occ_rgb, unk_rgb = np.array([214, 218, 224]), np.array([28, 30, 36]), np.array([86, 92, 104])
+        rgb = (free_rgb[None, None] * (1 - occ[..., None]) + occ_rgb[None, None] * occ[..., None])
+        rgb[sub < 0] = unk_rgb
+        tex = np.ascontiguousarray(rgb[::-1].astype(np.uint8))      # texture row 0 = y-max
         o, q = info.origin.position, info.origin.orientation
-        return rr.GridMap(data=np.ascontiguousarray(rgba[::-1]).tobytes(),   # ROS row 0 = y-min
-                          format=rr.components.ImageFormat(width=info.width, height=info.height,
-                                                           color_model="RGBA", channel_datatype="U8"),
-                          cell_size=info.resolution, translation=[o.x, o.y, o.z],
-                          quaternion=[q.x, q.y, q.z, q.w])
+        yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+        cy, sy = math.cos(yaw), math.sin(yaw)
+        local = [(c0 * res, r0 * res), (c1 * res, r0 * res), (c1 * res, r1 * res), (c0 * res, r1 * res)]
+        verts = [[o.x + cy * x - sy * y, o.y + sy * x + cy * y, o.z] for x, y in local]
+        return rr.Mesh3D(vertex_positions=verts, triangle_indices=[[0, 1, 2], [0, 2, 3]],
+                         vertex_normals=[[0.0, 0.0, 1.0]] * 4,
+                         vertex_texcoords=[[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
+                         albedo_texture=tex)
 
     def _on_map(self, msg: OccupancyGrid) -> None:
         rr.set_time("ros", timestamp=_stamp(msg))
-        rr.log("world/map", rr.CoordinateFrame(msg.header.frame_id or "map"),
-               self._map_rgba(msg))
+        mesh = self._map_mesh(msg)
+        if mesh is not None:
+            rr.log("world/map", rr.CoordinateFrame(msg.header.frame_id or "map"), mesh)
 
     def _on_costmap(self, msg: OccupancyGrid) -> None:
         if not self.thr_costmap():
@@ -328,7 +342,7 @@ def main(args=None) -> None:
     ex.add_node(node)
     try:
         ex.spin()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
     finally:
         node.destroy_node()

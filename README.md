@@ -9,7 +9,21 @@ ssh elephant@192.168.10.176 '~/mercury_x1_ros2/scripts/mx1_up.sh'    # hardware 
 open http://192.168.10.176:8080               # SLAM / Nav2 / waypoints / teleop from the page
 ssh elephant@192.168.10.176 '~/mercury_x1_ros2/scripts/mx1_stop.sh'  # stop everything (rtabmap saves the map)
 ```
-Robot-side pip deps (user site): `rerun-sdk==0.39.0 aiohttp "pandas>=2.2,<3"` (the apt pandas breaks under numpy 2).
+Robot-side pip deps (user site): `rerun-sdk==0.32.0 aiohttp "pandas>=2.2,<3"` (the apt pandas breaks under numpy 2).
+Rerun is pinned to 0.32 so the native **dimos-viewer** (Dimensional's Rerun fork) can connect.
+
+### Clicking in 3D (browser or dimos-viewer)
+The map is logged as a pickable floor mesh: a plain click on it is sent to the robot and becomes a
+waypoint / go-to goal / initial pose / nothing, depending on the click mode chosen on the page
+(Waypoint · Go to · Set pose · View). Clicks on the robot model and camera images are ignored.
+
+Native viewer on your PC (GPU-accelerated, click-to-nav + WASD overlay):
+```bash
+uvx --from dimos-viewer==0.32.0a3 dimos-viewer \
+    --connect rerun+http://192.168.10.176:9876/proxy --ws-url ws://192.168.10.176:3030/ws
+```
+Click the WASD overlay (bottom-right) to engage keyboard driving; Shift = fast, Space = stop. In the
+browser page the same is the **⌨ Drive** button (Esc releases).
 
 | Package | What |
 |---|---|

@@ -43,9 +43,15 @@ def main():
     ap.add_argument("urdf")
     ap.add_argument("package_root", help="directory that package://mercury_robot_urdf maps to")
     ap.add_argument("out")
-    ap.add_argument("--faces", type=int, default=40000, help="max faces per link")
+    ap.add_argument("--faces", type=int, default=150000, help="max faces per link")
+    ap.add_argument("--crease", type=float, default=30.0, help="normals are smooth across edges flatter than this [deg]")
+    ap.add_argument("--chunk", type=int, default=40000,
+                    help="max faces per GLB: Rerun 0.32's gRPC server blocks forever on single messages of a few MB")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
+    for old in os.listdir(a.out):
+        if old.endswith(".glb"):
+            os.remove(os.path.join(a.out, old))
     root = ET.parse(a.urdf).getroot()
     index = {}
     for link in root.findall("link"):
@@ -78,16 +84,28 @@ def main():
         n0 = len(mesh.faces)
         if n0 > a.faces:
             mesh = mesh.simplify_quadric_decimation(face_count=a.faces)
+        # smooth shading within surfaces, sharp at real CAD edges
+        mesh = trimesh.graph.smooth_shade(mesh, angle=math.radians(a.crease), facet_minarea=None)
         T = rpy_matrix(rpy)
         T[:3, 3] = xyz
         mesh.apply_transform(T)
         color = link_color(name, color)
         rgba = np.array(color + [255], dtype=np.uint8)
         mesh.visual = trimesh.visual.ColorVisuals(mesh, vertex_colors=np.tile(rgba, (len(mesh.vertices), 1)))
-        out = os.path.join(a.out, f"{name}.glb")
-        mesh.export(out, include_normals=True)
-        index[name] = {"file": f"{name}.glb", "faces": len(mesh.faces), "faces_orig": n0, "color": color}
-        print(f"{name:12s} {n0:7d} -> {len(mesh.faces):6d} faces  {os.path.getsize(out) / 1e6:5.2f} MB")
+        normals = np.asarray(mesh.vertex_normals)
+        files, size = [], 0
+        for k, start in enumerate(range(0, len(mesh.faces), a.chunk)):
+            faces = mesh.faces[start:start + a.chunk]
+            used, inv = np.unique(faces.ravel(), return_inverse=True)
+            part = trimesh.Trimesh(vertices=mesh.vertices[used], faces=inv.reshape(-1, 3),
+                                   vertex_normals=normals[used], process=False)
+            part.visual = trimesh.visual.ColorVisuals(part, vertex_colors=np.tile(rgba, (len(used), 1)))
+            fname = f"{name}.glb" if len(mesh.faces) <= a.chunk else f"{name}_{k}.glb"
+            part.export(os.path.join(a.out, fname), include_normals=True)
+            files.append(fname)
+            size += os.path.getsize(os.path.join(a.out, fname))
+        index[name] = {"files": files, "faces": len(mesh.faces), "faces_orig": n0, "color": color}
+        print(f"{name:12s} {n0:7d} -> {len(mesh.faces):6d} faces  {len(files)} part(s)  {size / 1e6:5.2f} MB")
     with open(os.path.join(a.out, "index.json"), "w") as f:
         json.dump(index, f, indent=1)
 
