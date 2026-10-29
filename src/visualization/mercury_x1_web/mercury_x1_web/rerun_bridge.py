@@ -76,6 +76,8 @@ class RerunBridge(Node):
         self.img_hz = float(p("image_rate", 4.0).value)
         self.cloud_hz = float(p("cloud_rate", 3.0).value)
         self.scan_hz = float(p("scan_rate", 10.0).value)
+        # the bellybutton camera has no calibration file (camera_info K is zero): approximate it
+        self.belly_hfov = math.radians(float(p("bellybutton_hfov_deg", 75.0).value))
         self.tf_hz = float(p("tf_rate", 10.0).value)            # odometry chain
         self.joint_tf_hz = float(p("joint_tf_rate", 5.0).value)  # robot links (joint states)
 
@@ -114,6 +116,8 @@ class RerunBridge(Node):
         sub(CompressedImage, "/preview/bellybutton", lambda m: self._on_image(m, "bellybutton"),
             qos_profile_sensor_data)
         sub(CameraInfo, "/camera/color/camera_info", lambda m: self.cam_info.__setitem__("orbbec", m),
+            qos_profile_sensor_data)
+        sub(CameraInfo, "/bellybutton/camera_info", lambda m: self.cam_info.__setitem__("bellybutton", m),
             qos_profile_sensor_data)
         for name in ("left", "back", "right"):
             sub(Range, f"/ultrasonic/{name}", lambda m, n=name: self._on_range(m, n), qos_profile_sensor_data)
@@ -250,9 +254,14 @@ class RerunBridge(Node):
         info = self.cam_info.get(name)
         if info is not None and self.thr_frustum(name):
             # 3D frustum with the live image at 1 Hz (preview keeps the camera_info resolution)
-            frame = info.header.frame_id
+            frame = info.header.frame_id or msg.header.frame_id
+            K = np.array(info.k, dtype=np.float64).reshape(3, 3)
+            w, h = (info.width or 640), (info.height or 480)
+            if K[0, 0] <= 0:   # uncalibrated: pinhole from an assumed horizontal FOV
+                f = (w / 2) / math.tan(self.belly_hfov / 2)
+                K = np.array([[f, 0, w / 2], [0, f, h / 2], [0, 0, 1]])
             rr.log(f"world/{name}_camera",
-                   rr.Pinhole(image_from_camera=np.array(info.k).reshape(3, 3), resolution=[info.width, info.height],
+                   rr.Pinhole(image_from_camera=K, resolution=[w, h],
                               camera_xyz=rr.ViewCoordinates.RDF, parent_frame=frame, child_frame=f"{name}_image",
                               image_plane_distance=0.4),
                    rr.EncodedImage(contents=jpg, media_type="image/jpeg"),

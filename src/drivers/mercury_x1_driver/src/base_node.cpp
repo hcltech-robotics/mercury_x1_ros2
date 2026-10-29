@@ -328,8 +328,12 @@ private:
     b.header.stamp = st.header.stamp;
     b.voltage = st.voltage;
     b.present = connected;
-    b.percentage = (connected && battery_cells_ > 0 && st.voltage > 1.0f) ?
-      static_cast<float>(socFromCellVoltage(st.voltage / static_cast<double>(battery_cells_))) :
+    // the pack voltage swings with arm/base load: estimate charge from a ~30 s low-passed voltage
+    if (connected && st.voltage > 1.0f) {
+      v_filt_ = v_filt_ <= 0 ? st.voltage : v_filt_ + (st.voltage - v_filt_) / 30.0;
+    }
+    b.percentage = (connected && battery_cells_ > 0 && v_filt_ > 1.0) ?
+      static_cast<float>(socFromCellVoltage(v_filt_ / static_cast<double>(battery_cells_))) :
       std::numeric_limits<float>::quiet_NaN();
     b.cell_voltage.assign(static_cast<size_t>(std::max<int64_t>(battery_cells_, 0)),
         battery_cells_ > 0 ? st.voltage / battery_cells_ : 0.0f);
@@ -368,6 +372,7 @@ private:
   std::string firmware_;
   uint8_t stop_flag_{0};
   double voltage_{0};
+  double v_filt_{0};   // slow-filtered voltage for the state-of-charge estimate (1 Hz updates)
   std::array<double, 6> us_m_{};
   geometry_msgs::msg::Twist measured_;
   // odometry (rx thread only)
