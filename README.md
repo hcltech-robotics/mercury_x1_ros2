@@ -1,4 +1,33 @@
 # mercury_x1_ros2
+
+## New stack (2026): goalkeeper drivers + RTAB-Map + Nav2 + Rerun web UI
+
+```bash
+./deploy.sh                                   # rsync to elephant@192.168.10.176 (REMOTE_HOST=... to override)
+ssh elephant@192.168.10.176 'cd ~/mercury_x1_ros2 && colcon build --packages-up-to mercury_x1_bringup mercury_x1_web'
+ssh elephant@192.168.10.176 '~/mercury_x1_ros2/scripts/mx1_up.sh'    # hardware + Rerun bridge + control page
+open http://192.168.10.176:8080               # SLAM / Nav2 / waypoints / teleop from the page
+ssh elephant@192.168.10.176 '~/mercury_x1_ros2/scripts/mx1_stop.sh'  # stop everything (rtabmap saves the map)
+```
+Robot-side pip deps (user site): `rerun-sdk==0.39.0 aiohttp "pandas>=2.2,<3"` (the apt pandas breaks under numpy 2).
+
+| Package | What |
+|---|---|
+| `src/drivers/mercury_x1_driver` | C++ `base_node` (odom+TF, IMU, battery %, ultrasonic L/back/R, RGB LED, cmd_vel watchdog, rear guard) and `upper_body_node` (both arms + neck/jaw/waist: 50 Hz joint states, ArmState with flange coords, preemptible joint/Cartesian commands, power/stop services). Exclusive serial ownership. |
+| `src/core/mercury_x1_msgs` | `ArmState`, `BaseState`, `JointCommand`, `CartesianCommand` |
+| `src/core/mercury_x1_description` | URDF + calibrated sensor frames (base_footprint = drive axle) |
+| `src/bringup/mercury_x1_bringup` | `robot.launch.py`, `slam.launch.py mode:=mapping\|localization map:=<name>`, `nav.launch.py` |
+| `src/visualization/mercury_x1_web` | `rerun_bridge` (TF-aware Rerun scene, gRPC :9876, viewer :9090) + `web_server` (:8080) |
+
+Key topics: `/cmd_vel`, `/odom` (lidar ICP), `/wheel/odom`, `/imu/data_raw`, `/battery`, `/ultrasonic/{left,back,right}`, `/base/led`,
+`/joint_states`, `/{left,right}_arm/state`, `/upper_body/joint_command`, `/upper_body/cartesian_command`,
+services `/{left,right}_arm/power`, `/{left,right}_arm/stop`, `/upper_body/stop`. Maps: `~/maps/<name>.db` (+ `.waypoints.json`).
+
+Protocol notes and calibration: `mercury_x1_devlog/software/mercury-x1-low-level-protocols.md`.
+
+---
+
+## Original vendor README
 Use of Mercury X1 mobile chassis ROS2
 
 ## Support  
