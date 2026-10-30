@@ -5,10 +5,24 @@
 ```bash
 ./deploy.sh                                   # rsync to elephant@192.168.10.176 (REMOTE_HOST=... to override)
 ssh elephant@192.168.10.176 'cd ~/mercury_x1_ros2 && colcon build --packages-up-to mercury_x1_bringup mercury_x1_web'
-ssh elephant@192.168.10.176 '~/mercury_x1_ros2/scripts/mx1_up.sh'    # hardware + Rerun bridge + control page
+ssh elephant@192.168.10.176 '~/mercury_x1_ros2/start.sh'             # whole stack: hardware + page + SLAM + Nav2
+ssh elephant@192.168.10.176 '~/mercury_x1_ros2/scripts/mx1_up.sh'    # ... or only hardware + Rerun bridge + page
 open http://192.168.10.176:8080               # SLAM / Nav2 / waypoints / teleop from the page
 ssh elephant@192.168.10.176 '~/mercury_x1_ros2/scripts/mx1_stop.sh'  # stop everything (rtabmap saves the map)
 ```
+**Autostart:** `scripts/install_autostart.sh` installs the systemd unit `mercury-x1` (`config/systemd/`),
+which runs `./start.sh` at boot: SLAM continues the most recently saved map (`~/maps/*.db`) in mapping mode,
+then Nav2. Override in `~/.config/mercury_x1/autostart.env` (`MX1_MAP=office`, `MX1_MODE=localization`,
+`MX1_SLAM=false`, `MX1_NAV=false`). `sudo systemctl stop|start|restart mercury-x1`, `journalctl -u mercury-x1`.
+The robot needs `RemoveIPC=no` (`/etc/systemd/logind.conf.d/90-mercury-keep-ipc.conf`): otherwise logind deletes
+the stack's Fast-DDS shared memory whenever the last ssh session closes, and later processes can't connect.
+
+**ROS environment** (`scripts/ros_env.sh`, sourced by every script and `~/mx1_env.sh`): `ROS_DOMAIN_ID=176`;
+ROS network **robot only** (default: Fast-DDS UDP on loopback only, `config/fastdds_localhost.xml`, no DDS
+multicast on the WiFi) or **LAN** (`config/fastdds_lan.xml`, other machines can join). The switch is on the page
+(Robot tab, "ROS 2 network"); it is saved in `~/.config/mercury_x1/ros_network` and restarts the stack
+(`scripts/mx1_restart.sh`), with SLAM / Nav2 resuming as they were. The page and viewer use HTTP / gRPC, so they
+work in both modes.
 Robot-side pip deps (user site): `rerun-sdk==0.32.0 aiohttp "pandas>=2.2,<3"` (the apt pandas breaks under numpy 2).
 Rerun is pinned to 0.32 so the native **dimos-viewer** (Dimensional's Rerun fork) can connect.
 

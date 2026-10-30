@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Fast-DDS profile for the Mercury X1. The default shared-memory segment (512 KB) is smaller than one
+<!-- Fast-DDS profile for the Mercury X1, "LAN" mode (scripts/ros_env.sh): ROS traffic also reaches other
+     machines over the network. "Robot only" mode (fastdds_localhost.xml, the default) keeps it on the robot.
+     The default shared-memory segment (512 KB) is smaller than one
      640x480 colour (921 KB) or depth (614 KB) image, so those fell back to fragmented UDP over loopback and
      about half of the frames were lost. A 16 MB segment keeps whole images in shared memory. UDP stays
      enabled for other machines (Rerun/RViz on the LAN, the dimos viewer). -->

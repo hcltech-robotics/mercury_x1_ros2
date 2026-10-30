@@ -1,0 +1,21 @@
+# Mercury X1 ROS 2 stack at boot: drivers, sensors, control page (:8080), SLAM and Nav2 (./start.sh).
+# Install / remove: scripts/install_autostart.sh [--remove]. Logs: journalctl -u mercury-x1, /tmp/mx1_*.log
+[Unit]
+Description=Mercury X1 ROS 2 stack (drivers, control page, SLAM, Nav2)
+Wants=network-online.target bluetooth.target
+After=network-online.target bluetooth.target nvpmodel.service
+
+[Service]
+Type=oneshot
+# start.sh launches everything detached and returns; the processes stay in this unit's cgroup
+RemainAfterExit=yes
+User=elephant
+WorkingDirectory=/home/elephant/mercury_x1_ros2
+ExecStart=/home/elephant/mercury_x1_ros2/start.sh
+# SIGINT first, so RTAB-Map saves its database (also on shutdown / reboot)
+ExecStop=/home/elephant/mercury_x1_ros2/scripts/mx1_stop.sh
+TimeoutStartSec=300
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Fast-DDS profile for the Mercury X1, "Robot only" mode (the default, scripts/ros_env.sh): no ROS traffic
+     leaves the robot, so the discovery multicast and topic data never load the WiFi. UDP is bound to the
+     loopback interface only; the web page / Rerun viewer use HTTP + gRPC and are unaffected.
+     "LAN" mode (fastdds_lan.xml) lets other machines join with ROS_DOMAIN_ID=176.
+     The default shared-memory segment (512 KB) is smaller than one 640x480 colour (921 KB) or depth
+     (614 KB) image, so those fell back to fragmented UDP over loopback and about half of the frames were
+     lost. A 16 MB segment keeps whole images in shared memory; loopback UDP carries the discovery. -->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>shm_big</transport_id>
+      <type>SHM</type>
+      <segment_size>16777216</segment_size>
+      <maxMessageSize>16777216</maxMessageSize>
+    </transport_descriptor>
+    <transport_descriptor>
+      <transport_id>udp</transport_id>
+      <type>UDPv4</type>
+      <interfaceWhiteList><address>127.0.0.1</address></interfaceWhiteList>
+      <sendBufferSize>4194304</sendBufferSize>
+      <receiveBufferSize>4194304</receiveBufferSize>
+    </transport_descriptor>
+  </transport_descriptors>
+  <participant profile_name="mx1_participant_localhost" is_default_profile="true">
+    <rtps>
+      <userTransports>
+        <transport_id>shm_big</transport_id>
+        <transport_id>udp</transport_id>
+      </userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>

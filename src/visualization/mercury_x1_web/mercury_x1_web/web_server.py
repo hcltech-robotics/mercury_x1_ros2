@@ -47,6 +47,9 @@ LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, relia
 MAPS_DIR = os.path.expanduser("~/maps")
 VIEWER_VERSION = "0.32.0"   # must match rerun-sdk on the robot and dimos-viewer (0.32.x)
 VIEWER_FILES = ("index.js", "re_viewer.js", "re_viewer_bg.wasm")
+MX1_WS = os.environ.get("MX1_WS", os.path.expanduser("~/mercury_x1_ros2"))
+CONF_DIR = os.path.expanduser("~/.config/mercury_x1")
+ROS_NETWORK_FILE = os.path.join(CONF_DIR, "ros_network")   # read by scripts/ros_env.sh at stack start
 VIEWER_CACHE = os.path.expanduser(f"~/.cache/mercury_x1_web/rerun-web-viewer/{VIEWER_VERSION}")
 
 
@@ -382,6 +385,7 @@ class App:
         self.grpc_port, self.viewer_port = grpc_port, viewer_port
         self.sup = Supervisor(os.path.expanduser("~/.ros/mercury_x1_web"))
         self.map_name = "default"
+        self.restarting = False
         self.static_dir = os.path.join(get_package_share_directory("mercury_x1_web"), "web")
         self.viewer_ready = all(os.path.exists(os.path.join(VIEWER_CACHE, f)) for f in VIEWER_FILES)
         self.dimos_port = 3030
@@ -493,6 +497,31 @@ class App:
                                   "resolution": i.resolution, "origin": [i.origin.position.x, i.origin.position.y],
                                   "frame": m.header.frame_id})
 
+    def ros_network(self) -> dict:
+        """network = what this stack runs with, configured = what the next (re)start uses"""
+        try:
+            with open(ROS_NETWORK_FILE) as f:
+                configured = f.read().strip()
+        except OSError:
+            configured = "localhost"
+        return {"domain": int(os.environ.get("ROS_DOMAIN_ID", 0)), "network": os.environ.get("MX1_ROS_NETWORK", "?"),
+                "configured": configured if configured == "lan" else "localhost", "restarting": self.restarting}
+
+    def restart_stack(self) -> None:
+        """restart every ROS process (DDS transports are fixed when a process starts); SLAM / Nav2
+        resume as they are now via resume.env (read once by start.sh)"""
+        slam, nav = self.sup.status()["slam"], self.sup.status()["nav"]
+        with open(os.path.join(CONF_DIR, "resume.env"), "w") as f:
+            f.write(f"MX1_SLAM={'true' if slam['running'] else 'false'}\n"
+                    f"MX1_NAV={'true' if nav['running'] else 'false'}\n")
+            if slam["running"]:
+                f.write(f"MX1_MAP={slam.get('map', self.map_name)}\nMX1_MODE={slam.get('mode', 'mapping')}\n")
+        self.restarting = True
+        # setsid -f: detached from this process, which the restart stops
+        subprocess.Popen(["setsid", "-f", os.path.join(MX1_WS, "scripts", "mx1_restart.sh")],
+                         stdout=open("/tmp/mx1_restart.log", "w"), stderr=subprocess.STDOUT,
+                         stdin=subprocess.DEVNULL, start_new_session=True)
+
     async def maps(self, req):
         names = sorted(f[:-3] for f in os.listdir(MAPS_DIR) if f.endswith(".db"))
         return web.json_response({"maps": names, "current": self.map_name})
@@ -507,6 +536,7 @@ class App:
                 st["map_name"] = self.map_name
                 st["dimos_viewers"] = self.dimos_clients
                 st["system"] = self.sysstats.snapshot()
+                st["ros"] = self.ros_network()
                 await ws.send_str(json.dumps(st))
                 await asyncio.sleep(0.2)
         except (ConnectionResetError, asyncio.CancelledError):
@@ -540,6 +570,15 @@ class App:
             n.post(lambda: n.run_waypoints(bool(body.get("loop", False))))
         elif action == "initialpose":
             n.post(lambda: n.set_initial_pose(body["x"], body["y"], body.get("yaw", 0.0)))
+        elif action == "ros_network":   # {"network": "localhost" | "lan"} -> saved, then the stack restarts
+            net = body.get("network")
+            if net not in ("localhost", "lan"):
+                return web.json_response({"ok": False, "error": f"bad network {net}"})
+            os.makedirs(CONF_DIR, exist_ok=True)
+            with open(ROS_NETWORK_FILE, "w") as f:
+                f.write(net + "\n")
+            n.post(n.cancel)
+            await loop.run_in_executor(None, self.restart_stack)
         elif action == "remote":      # {"op": scan|connect|disconnect|autoconnect|forget, ...} -> unitree_remote
             if body.get("op") not in ("scan", "connect", "disconnect", "autoconnect", "forget"):
                 return web.json_response({"ok": False, "error": "bad remote op"})

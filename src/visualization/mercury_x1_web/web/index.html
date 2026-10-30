@@ -229,6 +229,13 @@
         </div>
       </section>
       <section>
+        <h2>ROS 2 network</h2>
+        <div class="row">
+          <label class="switch" id="sw-lan" title="Off: ROS traffic stays on the robot (no DDS multicast on the WiFi). On: other machines on the LAN can join. Switching restarts the stack."><input type="checkbox"><span class="track"></span>LAN</label>
+          <span class="muted" id="ros-net">—</span>
+        </div>
+      </section>
+      <section>
         <h2>Status</h2>
         <div class="sys" id="sys">
           <span class="lbl">CPU</span><div class="bar"><i id="sys-cpu"></i></div><span class="val" id="sys-cpu-t">—</span>
@@ -351,6 +358,11 @@ function onStatus() {
   const armsList = Object.values(s.arms || {});
   setArmsSwitch(armsList.length > 0 && armsList.every((a) => a.powered));
   setFreeSwitch(armsList.some((a) => a.freedrive));
+  if (st.ros) {
+    setLanSwitch(st.ros.network === "lan");
+    const pending = st.ros.configured !== st.ros.network ? ` → ${st.ros.configured === "lan" ? "LAN" : "robot only"} on restart` : "";
+    $("#ros-net").textContent = `domain ${st.ros.domain} · ${st.ros.network === "lan" ? "LAN" : "robot only"}${st.ros.restarting ? " · restarting…" : pending}`;
+  }
   drawMap();
 }
 
@@ -691,13 +703,13 @@ const hex2rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 25
 $("#led").oninput = () => { const [r, g, b] = hex2rgb($("#led").value); api("led", { r, g, b }); };
 $("#b-ledoff").onclick = () => api("led", { r: 0, g: 0, b: 0 });
 // switches follow the robot state; a click asks for the change and waits for the state to confirm it
-function bindSwitch(id, onChange) {
+function bindSwitch(id, onChange, holdMs = 8000) {
   const el = $(id), cb = el.querySelector("input");
   cb.addEventListener("change", async () => {
     const want = cb.checked;
     cb.checked = !want;                         // shown state = robot state until it reports back
     if (await onChange(want) === false) return;
-    el.classList.add("busy"); el._until = Date.now() + 8000;
+    el.classList.add("busy"); el._until = Date.now() + holdMs;
   });
   return (state) => {
     if (el._until && Date.now() < el._until && state !== !cb.checked) return;   // still switching
@@ -712,6 +724,12 @@ const setFreeSwitch = bindSwitch("#sw-free", (on) => {
   if (on && !confirm("Freedrive: the arms can be moved by hand. Hold the arms - they may sink. Continue?")) return false;
   api("freedrive", { on }); toast(on ? "freedrive on (remote: Select toggles)" : "freedrive off - arms hold");
 });
+const setLanSwitch = bindSwitch("#sw-lan", (lan) => {
+  const what = lan ? "LAN: other machines can see the robot's ROS topics (DDS traffic on the WiFi)"
+                   : "Robot only: ROS traffic stays on the robot";
+  if (!confirm(`${what}.\n\nThis restarts every ROS node (~30 s): the base stops, navigation is cancelled, SLAM / Nav2 come back as they are now. Continue?`)) return false;
+  api("ros_network", { network: lan ? "lan" : "localhost" }); toast("restarting the stack…");
+}, 90000);
 </script>
 </body>
 </html>
