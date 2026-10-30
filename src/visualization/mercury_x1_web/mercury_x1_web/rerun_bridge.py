@@ -126,6 +126,8 @@ class RerunBridge(Node):
         for name in ("left", "back", "right"):
             sub(Range, f"/ultrasonic/{name}", lambda m, n=name: self._on_range(m, n), qos_profile_sensor_data)
         sub(Path, "/plan", self._on_plan, 1)
+        # cuVSLAM RGB-D visual odometry (mercury_x1_perception/cuvslam_rgbd_node), for comparison
+        sub(Path, "/vslam/path", self._on_vslam_path, 1)
         sub(PoseArray, "/web/waypoints", self._on_waypoints, LATCHED)
         sub(PolygonStamped, "/local_costmap/published_footprint", self._on_footprint, 1)
         sub(BatteryState, "/battery", self._on_battery, 10)
@@ -321,6 +323,14 @@ class RerunBridge(Node):
         rr.set_time("ros", timestamp=_stamp(msg))
         rr.log("world/plan", rr.CoordinateFrame(msg.header.frame_id or "map"),
                rr.LineStrips3D([pts] if pts else [], colors=[[60, 200, 255]], radii=0.02))
+
+    def _on_vslam_path(self, msg: Path) -> None:
+        if not self.thr_slow("vslam"):
+            return
+        pts = [[p.pose.position.x, p.pose.position.y, 0.05] for p in msg.poses]
+        rr.set_time("ros", timestamp=_stamp(msg))
+        rr.log("world/vslam_path", rr.CoordinateFrame(msg.header.frame_id or "vslam_odom"),
+               rr.LineStrips3D([pts] if pts else [], colors=[[200, 90, 255]], radii=0.012))
 
     def _on_waypoints(self, msg: PoseArray) -> None:
         pos, vec, labels = [], [], []

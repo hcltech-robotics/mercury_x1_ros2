@@ -10,6 +10,12 @@
   <depend>rclcpp</depend>
   <depend>mercury_x1_msgs</depend>
   <depend>nvblox_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_eigen</depend>
+  <depend>eigen</depend>
   <exec_depend>nvblox_ros</exec_depend>
   <exec_depend>nvblox_nav2</exec_depend>
 
