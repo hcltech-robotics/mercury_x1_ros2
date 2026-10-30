@@ -39,6 +39,7 @@ from sensor_msgs.msg import BatteryState
 from tf2_msgs.msg import TFMessage
 
 from .pose_chain import PoseChain
+from .sysstats import SysStats
 from std_msgs.msg import ColorRGBA, String
 from std_srvs.srv import SetBool, Trigger
 
@@ -385,6 +386,7 @@ class App:
         self.viewer_ready = all(os.path.exists(os.path.join(VIEWER_CACHE, f)) for f in VIEWER_FILES)
         self.dimos_port = 3030
         self.dimos_clients = 0
+        self.sysstats = SysStats()           # CPU / GPU load and temperatures for the status page
         node.waypoints_changed = self.save_waypoints
         os.makedirs(MAPS_DIR, exist_ok=True)
 
@@ -504,6 +506,7 @@ class App:
                 st["procs"] = self.sup.status()
                 st["map_name"] = self.map_name
                 st["dimos_viewers"] = self.dimos_clients
+                st["system"] = self.sysstats.snapshot()
                 await ws.send_str(json.dumps(st))
                 await asyncio.sleep(0.2)
         except (ConnectionResetError, asyncio.CancelledError):

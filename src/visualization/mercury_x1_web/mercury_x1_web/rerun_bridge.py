@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import socket
 import threading
 import time
 
@@ -87,6 +88,15 @@ class RerunBridge(Node):
         self.robot_parts = self._robot_parts()
         uri = rr.serve_grpc(grpc_port=grpc_port, server_memory_limit=mem,
                             cors_allow_origin=["*"], default_blueprint=self._blueprint(self.robot_parts))
+        # after a hard restart the old viewer port lingers in TIME_WAIT for ~60 s and rerun's web server
+        # then hangs instead of failing: wait until the port can really be bound
+        for _ in range(120):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                try:
+                    probe.bind(("0.0.0.0", web_port))
+                    break
+                except OSError:
+                    time.sleep(1.0)
         rr.serve_web_viewer(web_port=web_port, open_browser=False, connect_to=uri)
         self.get_logger().info(f"rerun gRPC {uri}, viewer http://<robot>:{web_port}")
 

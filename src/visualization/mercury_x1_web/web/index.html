@@ -22,6 +22,17 @@
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
   .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
   .spacer { flex: 1; }
+  .sys { display: grid; grid-template-columns: 52px 1fr 92px; gap: 5px 8px; align-items: center;
+    font-variant-numeric: tabular-nums; margin-bottom: 10px; }
+  .sys .lbl { color: var(--muted); }
+  .sys .val { text-align: right; white-space: nowrap; }
+  .bar { height: 8px; background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--ok); transition: width .4s, background .4s; }
+  .cores { display: grid; grid-template-columns: repeat(auto-fit, minmax(26px, 1fr)); gap: 4px; align-items: end; }
+  .core { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10px; color: var(--muted); }
+  .core .col { width: 14px; height: 30px; background: var(--panel2); border: 1px solid var(--line); border-radius: 3px;
+    display: flex; align-items: flex-end; overflow: hidden; }
+  .core .col i { display: block; width: 100%; height: 0; background: var(--ok); transition: height .4s, background .4s; }
   .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; color: var(--text); font-size: 12px; }
   .switch input { display: none; }
   .switch .track { width: 34px; height: 18px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line);
@@ -116,6 +127,7 @@
   <span class="chip"><span class="dot" id="d-slam"></span><span id="t-slam">SLAM off</span></span>
   <span class="chip"><span class="dot" id="d-nav"></span><span id="t-nav">Nav off</span></span>
   <span class="chip"><span class="dot" id="d-arms"></span><span id="t-arms">arms</span></span>
+  <span class="chip" id="c-sys" title="CPU / GPU load and hottest temperature (details: Robot tab · Status)"><span class="dot" id="d-sys"></span><span id="t-sys">CPU -- · GPU --</span></span>
   <span class="chip" title="Unitree BLE remote (Robot tab)"><span class="dot" id="d-remote"></span><span id="t-remote">remote</span></span>
   <span class="chip hidden" id="c-dimos" title="native dimos-viewer clients connected to ws://&lt;robot&gt;:3030/ws"><span class="dot ok"></span><span id="t-dimos">dimos-viewer</span></span>
   <span class="spacer"></span>
@@ -218,6 +230,12 @@
       </section>
       <section>
         <h2>Status</h2>
+        <div class="sys" id="sys">
+          <span class="lbl">CPU</span><div class="bar"><i id="sys-cpu"></i></div><span class="val" id="sys-cpu-t">—</span>
+          <span class="lbl">cores</span><div class="cores" id="sys-cores"></div><span class="val muted" id="sys-mhz">—</span>
+          <span class="lbl">GPU</span><div class="bar"><i id="sys-gpu"></i></div><span class="val" id="sys-gpu-t">—</span>
+          <span class="lbl">RAM</span><div class="bar"><i id="sys-ram"></i></div><span class="val" id="sys-ram-t">—</span>
+        </div>
         <div class="kv" id="kv"></div>
       </section>
     </div>
@@ -245,13 +263,17 @@ const api = async (action, body = {}) => {
 // ---------------- Rerun viewer ----------------
 const cfg = await (await fetch("/config")).json();
 const grpcUrl = `rerun+http://${host}:${cfg.grpc_port}/proxy`;
+let viewer = null, viewerStarting = false, hideTimer = null;
 async function startViewer() {
   const el = $("#viewer");
+  if (viewer || viewerStarting) return;
   if (cfg.viewer_local) {
+    viewerStarting = true;
     try {
       const { WebViewer } = await import("/vendor/rerun/index.js");
       const v = new WebViewer();
       await v.start(grpcUrl, el, { hide_welcome_screen: true, width: "100%", height: "100%", theme: "dark" });
+      viewer = v;
       // same behaviour as dimos-viewer: a plain click on any 3D point is sent to the robot,
       // which turns it into a waypoint / goal / pose according to the current click mode
       let lastClick = 0;
@@ -265,6 +287,7 @@ async function startViewer() {
       });
       return;
     } catch (e) { console.warn("embedded viewer failed, falling back to iframe", e); }
+    finally { viewerStarting = false; }
   }
   toast("3D clicks need the embedded viewer (still downloading on the robot?) - using the plain viewer");
   const f = document.createElement("iframe");
@@ -272,6 +295,21 @@ async function startViewer() {
   el.appendChild(f);
 }
 startViewer();
+// The robot's Rerun gRPC server feeds all viewers in lockstep: a throttled background tab stops
+// reading and stalls the live stream for every other viewer. Disconnect while hidden, reconnect on return.
+document.addEventListener("visibilitychange", () => {
+  clearTimeout(hideTimer);
+  if (document.hidden) {
+    hideTimer = setTimeout(() => {
+      if (!viewer) return;
+      try { viewer.stop(); } catch (e) { console.warn(e); }
+      viewer = null;
+      for (const c of [...$("#viewer").children]) if (c.id !== "hud") c.remove();
+    }, 5000);
+  } else {
+    startViewer();
+  }
+});
 
 // ---------------- status websocket ----------------
 function connect() {
@@ -287,6 +325,7 @@ let mapVersion = -1, lastClickT = null, toolChanged = 0;
 function onStatus() {
   const s = ST;
   renderBattery(s);
+  renderSys(s.system);
   const slam = s.procs.slam, nav = s.procs.nav;
   setDot("slam", slam.running ? "ok" : "", slam.running ? `${slam.mode} · ${slam.map}` : "SLAM off");
   setDot("nav", nav.running ? (s.nav.state === "navigating" ? "warn" : "ok") : "", nav.running ? `Nav ${s.nav.state}` : "Nav off");
@@ -315,13 +354,48 @@ function onStatus() {
   drawMap();
 }
 
+const loadColor = (p) => p > 85 ? "var(--bad)" : p > 60 ? "var(--warn)" : "var(--ok)";
+const tempColor = (t) => t >= 90 ? "var(--bad)" : t >= 75 ? "var(--warn)" : "var(--text)";
+function renderSys(y) {
+  if (!y || y.cpu == null) return;
+  const t = y.temp || {}, hot = Math.max(t.cpu ?? 0, t.gpu ?? 0, t.tj ?? 0);
+  const fill = (id, p) => { const e = $(id); e.style.width = `${Math.min(100, p)}%`; e.style.background = loadColor(p); };
+  fill("#sys-cpu", y.cpu);
+  $("#sys-cpu-t").innerHTML = `${y.cpu.toFixed(0)} %` + (t.cpu != null ? ` · <span style="color:${tempColor(t.cpu)}">${t.cpu.toFixed(0)}°C</span>` : "");
+  const cores = $("#sys-cores");
+  if (cores.children.length !== y.cores.length) {
+    cores.innerHTML = y.cores.map((_, i) => `<div class="core" title="core ${i}"><div class="col"><i></i></div><span>0</span></div>`).join("");
+  }
+  y.cores.forEach((p, i) => {
+    const c = cores.children[i], bar = c.querySelector("i");
+    bar.style.height = `${Math.min(100, p ?? 0)}%`; bar.style.background = loadColor(p ?? 0);
+    c.querySelector("span").textContent = p == null ? "–" : p.toFixed(0);
+    c.title = `core ${i}: ${p ?? "?"} % @ ${y.core_mhz?.[i] ?? "?"} MHz`;
+  });
+  const mhz = (y.core_mhz || []).filter((f) => f != null);
+  $("#sys-mhz").textContent = mhz.length ? `${Math.max(...mhz)} MHz` : "—";
+  if (y.gpu != null) {
+    fill("#sys-gpu", y.gpu);
+    $("#sys-gpu-t").innerHTML = `${y.gpu.toFixed(0)} %` + (t.gpu != null ? ` · <span style="color:${tempColor(t.gpu)}">${t.gpu.toFixed(0)}°C</span>` : "");
+    $("#sys-gpu").parentElement.title = `GPU ${y.gpu_mhz ?? "?"} MHz`;
+  }
+  if (y.ram_used_mb != null && y.ram_total_mb) {
+    const p = 100 * y.ram_used_mb / y.ram_total_mb;
+    fill("#sys-ram", p);
+    $("#sys-ram-t").textContent = `${(y.ram_used_mb / 1024).toFixed(1)} / ${(y.ram_total_mb / 1024).toFixed(1)} GB`;
+  }
+  setDot("sys", hot >= 90 || y.cpu > 90 ? "bad" : hot >= 75 || y.cpu > 75 ? "warn" : "ok",
+         `CPU ${y.cpu.toFixed(0)}% · GPU ${y.gpu != null ? y.gpu.toFixed(0) : "--"}% · ${hot ? hot.toFixed(0) + "°C" : "--"}`);
+  $("#c-sys").title = `CPU ${t.cpu ?? "?"}°C · GPU ${t.gpu ?? "?"}°C · junction ${t.tj ?? "?"}°C (throttles at 95°C)`;
+}
+
 function renderBattery(s) {
   const fill = $("#batt-fill"), pct = s.battery_pct;
   if (pct != null) {
     const p = Math.max(0, Math.min(100, pct));
     fill.style.width = `calc(${p}% - 2px)`;
     fill.style.background = p > 30 ? "var(--ok)" : p > 15 ? "var(--warn)" : "var(--bad)";
-    $("#t-batt").textContent = `${Math.round(p)} %`;
+    $("#t-batt").textContent = `${Math.round(p)} %` + (s.battery != null ? ` · ${s.battery.toFixed(1)} V` : "");
   } else {
     fill.style.width = "0";
     $("#t-batt").textContent = s.battery != null ? `${s.battery.toFixed(1)} V` : "-- %";
