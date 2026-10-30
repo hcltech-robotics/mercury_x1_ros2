@@ -40,6 +40,7 @@ from tf2_msgs.msg import TFMessage
 from visualization_msgs.msg import Marker
 
 from .pose_chain import PoseChain
+from .slam3d import voxel_down
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                      reliability=ReliabilityPolicy.RELIABLE)
@@ -64,7 +65,10 @@ NVBLOX_LAYERS = {
     "slam3d": (PointCloud2, "/slam/cloud3d", LATCHED, 0.2),
 }
 VIEW_LAYERS = ("camera",)   # switchable like the nvblox layers, but no subscription: camera frustums + image
-DEPTH_MAX_POINTS = 40000   # the back-projected depth cloud has ~180k points
+# The viewer gets voxel grids, not raw clouds (mapping still uses the full-resolution depth):
+DEPTH_VOXEL = 0.05         # [m] live depth points (~100k points/frame -> a few thousand voxels)
+SLAM3D_VOXEL = 0.05        # [m] = web_server.LIVE3D_VOXEL (the cloud arrives already voxelised)
+SLAM3D_TILE = 2.0          # [m] whole-map tiles: only tiles whose voxels changed are re-sent
 
 
 def _turbo(t: np.ndarray) -> np.ndarray:
@@ -198,6 +202,7 @@ class RerunBridge(Node):
         self.nvblox_subs: dict = {}
         self.thr_nvblox = {k: Throttle(v[3]) for k, v in NVBLOX_LAYERS.items()}
         self.mesh_tiles: set[str] = set()          # tile ids logged, blanked when the mesh layer goes off
+        self.slam3d_tiles: dict[str, int] = {}     # whole-map tile -> hash of what the viewer has
         self.layers_wanted: list[str] | None = None
         self.show_camera = True                    # "camera" layer: frustums with the live image
         p("nvblox_layers", self._saved_layers())
@@ -282,8 +287,10 @@ class RerunBridge(Node):
         self.get_logger().info(f"nvblox layers: {sorted(self.nvblox_subs) or 'none'}, camera {'on' if camera else 'off'}")
 
     def _clear_layer(self, key: str) -> None:
-        if key == "slam3d":  # static: replace with an empty cloud (re-sent, latched, on resubscribe)
-            self._log("world/slam3d", rr.Points3D(np.zeros((0, 3), np.float32)), static=True)
+        if key == "slam3d":  # static tiles: blank each (the latched cloud is re-sent on resubscribe)
+            for tid in self.slam3d_tiles:
+                self._log(f"world/slam3d/{tid}", rr.Points3D(np.zeros((0, 3), np.float32)), static=True)
+            self.slam3d_tiles.clear()
             return
         if key == "mesh":   # static tiles: overwrite each with an empty mesh (the tiler resends all on resubscribe)
             for tid in self.mesh_tiles:
@@ -307,12 +314,10 @@ class RerunBridge(Node):
         """the depth image nvblox integrates, back-projected to 3D (camera frame), coloured by range"""
         if not self.thr_nvblox["depth"]():
             return
-        xyz = cloud_xyz(msg)
-        if len(xyz) > DEPTH_MAX_POINTS:
-            xyz = xyz[:: int(math.ceil(len(xyz) / DEPTH_MAX_POINTS))]
+        xyz, _ = voxel_down(cloud_xyz(msg), None, DEPTH_VOXEL)
         self._set_time(_stamp(msg))
         self._log("world/nvblox/depth", rr.CoordinateFrame(msg.header.frame_id),
-               rr.Points3D(xyz, radii=0.008, colors=_turbo(np.linalg.norm(xyz, axis=1) / 4.0)))
+               rr.Points3D(xyz, radii=DEPTH_VOXEL * 0.45, colors=_turbo(np.linalg.norm(xyz, axis=1) / 4.0)))
 
     def _on_voxels(self, msg: Marker, key: str) -> None:
         """TSDF / colour layer as voxel cubes (nvblox publishes CUBE_LIST markers with per-voxel colours)"""
@@ -342,8 +347,31 @@ class RerunBridge(Node):
         if "rgb" in offs:
             packed = buf[:, offs["rgb"]:offs["rgb"] + 4].copy().view(np.uint32)[:, 0]
             colors = np.stack([(packed >> 16) & 255, (packed >> 8) & 255, packed & 255], 1).astype(np.uint8)
-        self._log("world/slam3d", rr.CoordinateFrame(msg.header.frame_id or "map"),
-                  rr.Points3D(xyz, radii=0.015, colors=colors), static=True)
+        # 2 m x 2 m tiles, static (the viewer keeps only the latest of each); unchanged tiles are not re-sent,
+        # so a growing map streams only where it grew
+        frame = msg.header.frame_id or "map"
+        if colors is None:
+            colors = np.full((len(xyz), 3), 200, np.uint8)
+        tx = np.floor(xyz[:, 0] / SLAM3D_TILE).astype(np.int32)
+        ty = np.floor(xyz[:, 1] / SLAM3D_TILE).astype(np.int32)
+        order = np.lexsort((ty, tx))
+        xyz, colors, tx, ty = xyz[order], colors[order], tx[order], ty[order]
+        cuts = np.flatnonzero((np.diff(tx) != 0) | (np.diff(ty) != 0)) + 1
+        seen, sent = set(), 0
+        for a, b in zip(np.r_[0, cuts], np.r_[cuts, len(xyz)]):
+            tid = f"{tx[a]}_{ty[a]}"
+            seen.add(tid)
+            h = hash((xyz[a:b].tobytes(), colors[a:b].tobytes()))
+            if self.slam3d_tiles.get(tid) == h:
+                continue
+            self.slam3d_tiles[tid] = h
+            self._log(f"world/slam3d/{tid}", rr.CoordinateFrame(frame),
+                      rr.Points3D(xyz[a:b], radii=SLAM3D_VOXEL * 0.5, colors=colors[a:b]), static=True)
+            sent += b - a
+        for tid in [t for t in self.slam3d_tiles if t not in seen]:
+            del self.slam3d_tiles[tid]
+            self._log(f"world/slam3d/{tid}", rr.Points3D(np.zeros((0, 3), np.float32)), static=True)
+        self.get_logger().info(f"whole-map 3D: {len(xyz)} voxels in {len(seen)} tiles, sent {sent}")
 
     def _on_nvblox_occupancy(self, msg: OccupancyGrid) -> None:
         """nvblox' own 2D occupancy (from the depth camera), drawn just above the floor"""

@@ -129,6 +129,23 @@ def read_ply(path: str) -> tuple[np.ndarray, np.ndarray | None]:
     return xyz, rgb
 
 
+def voxel_down(xyz: np.ndarray, rgb: np.ndarray | None, size: float) -> tuple[np.ndarray, np.ndarray | None]:
+    """one point per occupied voxel: the voxel centre, coloured with the mean colour of its points"""
+    if len(xyz) == 0:
+        return xyz, rgb
+    q = np.floor(xyz / size).astype(np.int64)
+    q -= q.min(0)
+    span = q.max(0) + 1
+    key = (q[:, 0] * span[1] + q[:, 1]) * span[2] + q[:, 2]
+    uniq, first, inv = np.unique(key, return_index=True, return_inverse=True)
+    centres = ((np.floor(xyz[first] / size) + 0.5) * size).astype(np.float32)
+    if rgb is None:
+        return centres, None
+    n = np.bincount(inv, minlength=len(uniq)).astype(np.float32)
+    cols = np.stack([np.bincount(inv, weights=rgb[:, c], minlength=len(uniq)) / n for c in range(3)], 1)
+    return centres, cols.astype(np.uint8)
+
+
 def list_exports() -> list[dict]:
     os.makedirs(EXPORT_DIR, exist_ok=True)
     out = []

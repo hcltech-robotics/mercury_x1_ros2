@@ -41,8 +41,9 @@ Wi-Fi changes run `sudo -n nmcli` (NetworkManager falls back to the previous net
 Starting **mapping** levels the head first (neck 0°, jaw −5.7° = camera horizontal) and the page refuses
 head moves while mapping runs; RTAB-Map's 2D grid uses the lidar **and** the depth camera
 (`Grid/Sensor 2`), so tables / overhangs between 6 cm and 1.4 m end up in the saved map.
-The page's **SLAM 3D map → Whole map (3D)** layer is the whole map as a coloured cloud from the stored
-RGB-D frames (`rtabmap-export` every 20 s while on), fitted to the live map frame on the nodes both share
+The page's **SLAM 3D map → Whole map (3D)** layer is the whole map from the stored RGB-D frames as a
+5 cm voxel grid in 2 m tiles (`rtabmap-export`, re-exported only when the graph changed, ≤ every 30 s while
+mapping; the bridge re-sends only changed tiles), fitted to the live map frame on the nodes both share
 (`Grid/3D` stays off: a database reprocessed with it gave a 2D map of a single scan fan);
 **Export cloud / Export mesh** write a .ply / zipped textured .obj via `rtabmap-export` to
 `~/maps/exports` (downloads on the page). Exports copy the database byte-wise: never open the live
@@ -69,7 +70,7 @@ it. Published only on change (a new footprint makes the costmaps re-inflate). Ar
 
 ### 3D view layers
 Page → "3D view": **Cameras in 3D** (frustums of the jaw and bellybutton cameras with the live image, 2 Hz; default on),
-nvblox: Mesh + Depth points (default), ESDF slice (distance to obstacles at the costmap slice height,
+nvblox: Mesh + Depth points (default; shown as 5 cm voxels, mapping uses the full depth), ESDF slice (distance to obstacles at the costmap slice height,
 what Nav2 uses), Depth points (back-projected depth, downsampled to 40k), TSDF voxels, Colour voxels,
 Occupancy. The choice is the `nvblox_layers` parameter of `rerun_bridge`, saved in
 `~/.config/mercury_x1/viz_layers.json`; layers that are off are not subscribed at all.

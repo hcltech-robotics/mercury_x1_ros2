@@ -62,6 +62,8 @@ NVBLOX_LAYERS = ("mesh", "esdf", "depth", "tsdf", "color", "occupancy", "slam3d"
 DEFAULT_VIZ_LAYERS = ["mesh", "depth", "camera"]
 TRASH_DIR = os.path.join(MAPS_DIR, ".trash")   # deleted maps, purged after TRASH_DAYS
 TRASH_DAYS = 7
+LIVE3D_VOXEL = 0.05         # [m] voxel size of the whole-map 3D layer
+LIVE3D_PERIOD = 30.0        # [s] at most one re-export per this while the map grows (mapping)
 WAYPOINT_PICK_RADIUS = 0.6   # [m] a "delete" click removes the nearest waypoint within this distance
 # head pose while mapping: neck straight, Orbbec level (its pitch = -jaw - 5.7 deg, see the URDF notes)
 MAPPING_HEAD = {"head": 0.0, "eye": -5.7}
@@ -653,27 +655,41 @@ class App:
         return os.path.join(MAPS_DIR, f"{self.map_name}.db")
 
     def _live3d_loop(self) -> None:
-        """While the viewer's 'Whole map (3D)' layer is on: every 20 s export the map database as a coloured
-        cloud plus node poses, fit the export's frame to rtabmap's live map frame on the nodes both share,
-        and publish the aligned cloud. rtabmap-export optimises the graph on its own (another origin), and
-        in a multi-session database it may pick a different connected piece than the live map: then there
-        is nothing to align and the layer says so instead of drawing the cloud in the wrong place."""
+        """While the viewer's 'Whole map (3D)' layer is on: export the map database as a coloured cloud plus
+        node poses, fit the export's frame to rtabmap's live map frame on the nodes both share, and publish
+        the aligned cloud as a voxel grid (LIVE3D_VOXEL, one point per voxel). rtabmap-export optimises the
+        graph on its own (another origin), and in a multi-session database it may pick a different connected
+        piece than the live map: then there is nothing to align and the layer says so.
+        Re-exported only when the live graph changed (never while localizing on a finished map), and at most
+        every LIVE3D_PERIOD while mapping; the latched topic keeps the last cloud for new subscribers."""
         n = self.node
+        last_key, last_export, subs = None, 0.0, 0
         while True:
-            time.sleep(20.0)
-            if n.pub_cloud3d.get_subscription_count() == 0 or not self.sup.status()["slam"]["running"]:
+            time.sleep(5.0)
+            nsubs = n.pub_cloud3d.get_subscription_count()
+            if nsubs == 0 or not self.sup.status()["slam"]["running"]:
+                subs = nsubs
                 continue
             db = self._db_path()
             if not os.path.exists(db):
                 continue
+            live = n.live_graph()
+            if live is None:
+                self.export3d["live"] = "3D layer: rtabmap did not return its graph"
+                continue
+            # graph unchanged and nobody new (the bridge re-subscribing gets the latched cloud anyway)
+            key = (self.map_name, len(live), max(live, default=0), round(sum(p[0] + p[1] for p in live.values()), 1))
+            if key == last_key and nsubs <= subs:
+                subs = nsubs
+                continue
+            subs = nsubs
+            if last_key is not None and key[0] == last_key[0] and time.time() - last_export < LIVE3D_PERIOD:
+                continue
+            last_key, last_export = key, time.time()
             try:
                 out_dir = os.path.join(slam3d.SNAP_DIR, "live")
                 ply = slam3d.export_cloud(db, out_dir, "live", voxel=0.03, poses=True)
                 exp = slam3d.read_poses(os.path.join(out_dir, "live_poses.txt"))
-                live = n.live_graph()
-                if live is None:
-                    self.export3d["live"] = "3D layer: rtabmap did not return its graph"
-                    continue
                 ids = sorted(set(exp) & set(live))
                 if len(ids) < 3:
                     self.export3d["live"] = (f"3D layer: the export ({len(exp)} nodes) and the live map ({len(live)} nodes) "
@@ -684,10 +700,11 @@ class App:
                     self.export3d["live"] = f"3D layer: export and live map disagree ({err:.2f} m mean on {len(ids)} nodes)"
                     continue
                 xyz, rgb = slam3d.read_ply(ply)
-                msg = cloud_msg((xyz @ r.T + t).astype(np.float32), rgb, "map", n.get_clock().now().to_msg())
+                vox, vrgb = slam3d.voxel_down((xyz @ r.T + t).astype(np.float32), rgb, LIVE3D_VOXEL)
+                msg = cloud_msg(vox, vrgb, "map", n.get_clock().now().to_msg())
                 n.post(lambda m=msg: n.pub_cloud3d.publish(m))
-                self.export3d["live"] = (f"3D layer: {len(xyz)} points from {len(exp)} nodes "
-                                         f"({len(ids)} shared with the live map, fit {err * 100:.0f} cm)")
+                self.export3d["live"] = (f"3D layer: {len(vox)} voxels ({LIVE3D_VOXEL * 100:.0f} cm) from {len(xyz)} points, "
+                                         f"{len(exp)} nodes, fit {err * 100:.0f} cm, {time.strftime('%H:%M:%S')}")
             except Exception as e:  # noqa: BLE001 - keep the loop alive
                 self.export3d["live"] = f"3D layer: {e}"
 
