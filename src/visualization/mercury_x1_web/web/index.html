@@ -223,12 +223,11 @@
           <label class="switch" data-layer="camera" title="Camera frustums in the 3D view with the live image on them (jaw Orbbec + bellybutton, 2 Hz)"><input type="checkbox"><span class="track"></span>Cameras in 3D</label>
         </div>
         <div class="muted" style="font-size:11px;margin-bottom:8px">To look through the jaw camera: the "Orbbec (jaw)" panel on the right of the viewer; the depth points / mesh below show what it sees in 3D.</div>
-        <h2>3D layers</h2>
+        <h2>nvblox · local 3D</h2>
         <div class="row" id="nvblox-layers">
           <label class="switch" data-layer="mesh" title="Surface mesh (TSDF marching cubes), coloured by the camera"><input type="checkbox"><span class="track"></span>Mesh</label>
           <label class="switch" data-layer="esdf" title="ESDF slice: distance to the nearest obstacle at the costmap slice height (red = touching, blue = 1.5 m+) - what Nav2 sees"><input type="checkbox"><span class="track"></span>ESDF slice</label>
           <label class="switch" data-layer="depth" title="Live depth image back-projected to 3D, shown as 5 cm voxels (mapping uses the full depth)"><input type="checkbox"><span class="track"></span>Depth points</label>
-          <label class="switch" data-layer="voxmap" title="The whole RTAB-Map map as solid 5 cm cubes in its camera colours (re-sent only where the map changed)"><input type="checkbox"><span class="track"></span>Voxel map</label>
           <label class="switch" data-layer="tsdf" title="TSDF voxels near the surface (5 cm cubes)"><input type="checkbox"><span class="track"></span>TSDF voxels</label>
           <label class="switch" data-layer="color" title="Colour voxels (5 cm cubes)"><input type="checkbox"><span class="track"></span>Colour voxels</label>
           <label class="switch" data-layer="occupancy" title="nvblox 2D occupancy grid from the depth camera"><input type="checkbox"><span class="track"></span>Occupancy</label>
@@ -237,6 +236,7 @@
         <h2 style="margin-top:12px">SLAM 3D map</h2>
         <div class="row" id="slam-layers">
           <label class="switch" data-layer="slam3d" title="The whole RTAB-Map map as coloured 5 cm points (lighter than the Voxel map cubes), aligned to the live map"><input type="checkbox"><span class="track"></span>Whole map (points)</label>
+          <label class="switch" data-layer="voxmap" title="The whole RTAB-Map map as solid 5 cm cubes in its camera colours (re-sent only where the map changed)"><input type="checkbox"><span class="track"></span>Voxel map</label>
           <span class="spacer"></span>
           <button class="b" id="b-exp-cloud" title="Coloured point cloud of the whole map (.ply, a few seconds)">Export cloud</button>
           <button class="b" id="b-exp-mesh" title="Textured mesh of the whole map (.obj + texture, zipped; about a minute)">Export mesh</button>
