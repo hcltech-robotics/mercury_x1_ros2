@@ -14,12 +14,25 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
     font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  header { height: 46px; display: flex; align-items: center; gap: 14px; padding: 0 14px;
+  header { height: 50px; display: flex; align-items: center; gap: 10px; padding: 0 12px;
     background: var(--panel); border-bottom: 1px solid var(--line); }
+  /* header groups: Robot / Navigation / System, each chip = state-coloured icon + text */
+  .grp { display: flex; align-items: center; gap: 4px; padding: 3px 6px 3px 8px; border: 1px solid var(--line);
+    border-radius: 10px; background: #191c21; }
+  .glbl { font-size: 9px; font-weight: 700; letter-spacing: .9px; text-transform: uppercase; color: #6c7380;
+    margin-right: 2px; writing-mode: vertical-rl; transform: rotate(180deg); line-height: 1; }
+  .ic { display: inline-flex; color: var(--muted); }
+  .ic svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .ic.ok { color: var(--ok); } .ic.warn { color: var(--warn); } .ic.bad { color: var(--bad); }
+  #live { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; font-size: 11px;
+    font-weight: 700; letter-spacing: .5px; font-variant-numeric: tabular-nums; border: 1px solid var(--line); min-width: 104px; }
+  #live.ok { color: var(--ok); border-color: #2f8a57; } #live.warn { color: var(--warn); border-color: #8a6a1f; }
+  #live.bad { color: var(--bad); border-color: #7a2b36; }
+  #live .ic { color: inherit; } #live .ic svg { transition: transform .12s; } #live.beat .ic svg { transform: scale(1.35); }
   header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .2px; }
   #c-estop { background: var(--bad); color: #fff; font-weight: 700; letter-spacing: .06em; }
   .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px;
-    background: var(--panel2); color: var(--muted); font-size: 12px; white-space: nowrap; }
+    background: var(--panel2); color: var(--text); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
   .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
   .spacer { flex: 1; }
@@ -133,14 +146,22 @@
 <body>
 <header>
   <h1>Mercury X1</h1>
-  <span class="chip"><span class="dot" id="d-conn"></span><span id="t-conn">connecting</span></span>
-  <span class="chip hidden" id="c-estop" title="Physical E-stop pressed: base MCU and arm servo power are cut. Release the button, then switch the arms back on.">E-STOP</span>
-  <span class="chip" id="c-batt"><span class="batt"><i id="batt-fill"></i></span><span id="t-batt">-- %</span></span>
-  <span class="chip"><span class="dot" id="d-slam"></span><span id="t-slam">SLAM off</span></span>
-  <span class="chip"><span class="dot" id="d-nav"></span><span id="t-nav">Nav off</span></span>
-  <span class="chip"><span class="dot" id="d-arms"></span><span id="t-arms">arms</span></span>
-  <span class="chip" id="c-sys" title="CPU / GPU load and hottest temperature (details: Robot tab · Status)"><span class="dot" id="d-sys"></span><span id="t-sys">CPU -- · GPU --</span></span>
-  <span class="chip" title="Unitree BLE remote (Robot tab)"><span class="dot" id="d-remote"></span><span id="t-remote">remote</span></span>
+  <span id="live" class="bad" title="Status stream from the robot: updates per second, or how long since the last one"><span class="ic"><svg viewBox="0 0 24 24"><polyline points="2 12 6 12 9 4 15 20 18 12 22 12"/></svg></span><span id="t-live">connecting</span></span>
+  <div class="grp"><span class="glbl">Robot</span>
+    <span class="chip hidden" id="c-estop" title="Physical E-stop pressed: base MCU and arm servo power are cut. Release the button, then switch the arms back on."><span class="ic"><svg viewBox="0 0 24 24"><path d="M8 2h8l6 6v8l-6 6H8l-6-6V8z"/><path d="M12 7v6M12 16.5v.5"/></svg></span>E-STOP</span>
+    <span class="chip" id="c-batt"><span class="batt"><i id="batt-fill"></i></span><span id="t-batt">-- %</span></span>
+    <span class="chip" title="Arm servo power (Robot tab)"><span class="ic" id="d-arms"><svg viewBox="0 0 24 24"><path d="M5 21h10M10 21v-5"/><circle cx="10" cy="14" r="2"/><path d="M11.5 12.5L16 7"/><circle cx="17" cy="6" r="2"/><path d="M18.5 7.5l2.5 3M15.5 4.5L18 2"/></svg></span><span id="t-arms">arms</span></span>
+    <span class="chip" title="Unitree BLE remote (Robot tab)"><span class="ic" id="d-remote"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="11" rx="5"/><path d="M7 10.5v4M5 12.5h4"/><circle cx="15.5" cy="11.5" r=".9"/><circle cx="18" cy="14" r=".9"/></svg></span><span id="t-remote">remote</span></span>
+  </div>
+  <div class="grp"><span class="glbl">Nav</span>
+    <span class="chip" title="RTAB-Map: mapping / localizing, on which map"><span class="ic" id="d-slam"><svg viewBox="0 0 24 24"><path d="M3 6.5l6-2.5 6 2.5 6-2.5v13.5l-6 2.5-6-2.5-6 2.5z"/><path d="M9 4v13.5M15 6.5V20"/></svg></span><span id="t-slam">SLAM off</span></span>
+    <span class="chip" title="Nav2"><span class="ic" id="d-nav"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg></span><span id="t-nav">Nav2 off</span></span>
+  </div>
+  <div class="grp" id="c-sys" title="Jetson load, hottest temperature, module power (details: Robot tab · Status)"><span class="glbl">Jetson</span>
+    <span class="chip"><span class="ic" id="d-sys"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg></span><span id="t-sys">CPU -- · GPU --</span></span>
+    <span class="chip"><span class="ic" id="d-temp"><svg viewBox="0 0 24 24"><path d="M14 14.8V5a2 2 0 0 0-4 0v9.8a4 4 0 1 0 4 0z"/></svg></span><span id="t-temp">--°C</span></span>
+    <span class="chip"><span class="ic" id="d-watt"><svg viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg></span><span id="t-watt">-- W</span></span>
+  </div>
   <span class="spacer"></span>
   <button id="drive" title="Engage keyboard driving: W/A/S/D or arrows, Shift = fast, Space = stop, Esc = release">⌨ Drive</button>
   <button id="estop" title="Cancel navigation and stop the base (Space)">STOP</button>
@@ -358,14 +379,30 @@ document.addEventListener("visibilitychange", () => {
 });
 
 // ---------------- status websocket ----------------
+// heartbeat: every status message (5/s) pulses the LIVE chip; it turns amber / red when updates stop
+let wsOpen = false, lastMsg = 0; const msgTimes = [];
 function connect() {
   const ws = new WebSocket(`ws://${location.host}/ws`);
-  ws.onmessage = (m) => { ST = JSON.parse(m.data); onStatus(); };
-  ws.onopen = () => { setDot("conn", "ok", "online"); };
-  ws.onclose = () => { setDot("conn", "bad", "offline"); setTimeout(connect, 1500); };
+  ws.onmessage = (m) => {
+    ST = JSON.parse(m.data); lastMsg = Date.now(); msgTimes.push(lastMsg);
+    const l = $("#live"); l.classList.add("beat"); setTimeout(() => l.classList.remove("beat"), 120);
+    onStatus();
+  };
+  ws.onopen = () => { wsOpen = true; };
+  ws.onclose = () => { wsOpen = false; setTimeout(connect, 1500); };
 }
 connect();
-function setDot(id, cls, text) { $(`#d-${id}`).className = `dot ${cls}`; $(`#t-${id}`).textContent = text; }
+setInterval(() => {
+  const now = Date.now(), age = (now - lastMsg) / 1000;
+  while (msgTimes.length && now - msgTimes[0] > 3000) msgTimes.shift();
+  let cls, text;
+  if (!wsOpen) { cls = "bad"; text = lastMsg ? `OFFLINE ${age.toFixed(0)} s` : "connecting"; }
+  else if (age > 5) { cls = "bad"; text = `STALE ${age.toFixed(0)} s`; }
+  else if (age > 1.5) { cls = "warn"; text = `SLOW ${age.toFixed(1)} s`; }
+  else { cls = "ok"; text = `LIVE ${(msgTimes.length / 3).toFixed(1)}/s`; }
+  $("#live").className = cls + ($("#live").classList.contains("beat") ? " beat" : ""); $("#t-live").textContent = text;
+}, 250);
+function setDot(id, cls, text) { $(`#d-${id}`).className = `ic ${cls}`; $(`#t-${id}`).textContent = text; }
 
 let mapVersion = -1, lastClickT = null, toolChanged = 0;
 function onStatus() {
@@ -376,11 +413,13 @@ function onStatus() {
   const slam = s.procs.slam, nav = s.procs.nav;
   const headLocked = s.head_hold !== false && slam.running && slam.mode === "mapping";   // head held level while mapping
   for (const id of ["neck", "jaw"]) { $("#" + id).disabled = headLocked; $("#" + id).title = headLocked ? "held level while mapping" : ""; }
-  setDot("slam", slam.running ? "ok" : "", slam.running ? `${slam.mode} · ${slam.map}` : "SLAM off");
-  setDot("nav", nav.running ? (s.nav.state === "navigating" ? "warn" : "ok") : "", nav.running ? `Nav ${s.nav.state}` : "Nav off");
+  setDot("slam", slam.running ? (slam.mode === "mapping" ? "warn" : "ok") : "",
+         slam.running ? `${slam.mode === "mapping" ? "Mapping" : "Localizing"} · ${slam.map}` : "SLAM off");
+  setDot("nav", nav.running ? (s.nav.state === "navigating" ? "warn" : ["error", "aborted"].includes(s.nav.state) ? "bad" : "ok") : "",
+         nav.running ? `Nav2 ${s.nav.state}` : "Nav2 off");
   const arms = Object.values(s.arms || {});
   const powered = arms.filter((a) => a.powered).length;
-  setDot("arms", arms.length && powered === arms.length ? "ok" : powered ? "warn" : "bad", `arms ${powered}/${arms.length || 2}`);
+  setDot("arms", arms.length && powered === arms.length ? "ok" : powered ? "warn" : "bad", `arms ${powered}/${arms.length || 2} on`);
   renderMaps(s);
   $("#wpmap").textContent = s.map_name ? `· map ${s.map_name}` : "";
   if (JSON.stringify(s.waypoints) !== JSON.stringify(WAYPOINTS) && !dragging) { WAYPOINTS = s.waypoints; renderTable(); }
@@ -450,9 +489,12 @@ function renderSys(y) {
     fill("#sys-ram", p);
     $("#sys-ram-t").textContent = `${(y.ram_used_mb / 1024).toFixed(1)} / ${(y.ram_total_mb / 1024).toFixed(1)} GB`;
   }
-  setDot("sys", hot >= 90 || y.cpu > 90 ? "bad" : hot >= 75 || y.cpu > 75 ? "warn" : "ok",
-         `CPU ${y.cpu.toFixed(0)}% · GPU ${y.gpu != null ? y.gpu.toFixed(0) : "--"}% · ${hot ? hot.toFixed(0) + "°C" : "--"}`);
-  $("#c-sys").title = `CPU ${t.cpu ?? "?"}°C · GPU ${t.gpu ?? "?"}°C · junction ${t.tj ?? "?"}°C (throttles at 95°C)`;
+  setDot("sys", y.cpu > 90 ? "bad" : y.cpu > 75 ? "warn" : "ok", `CPU ${y.cpu.toFixed(0)}% · GPU ${y.gpu != null ? y.gpu.toFixed(0) : "--"}%`);
+  setDot("temp", hot >= 90 ? "bad" : hot >= 75 ? "warn" : "ok", hot ? `${hot.toFixed(0)}°C` : "--°C");
+  const W = (y.power && y.power.watts) || {};
+  setDot("watt", W.VDD_IN == null ? "" : W.VDD_IN > 20 ? "warn" : "ok", W.VDD_IN != null ? `${W.VDD_IN.toFixed(1)} W` : "-- W");
+  $("#c-sys").title = `CPU ${t.cpu ?? "?"}°C · GPU ${t.gpu ?? "?"}°C · junction ${t.tj ?? "?"}°C (throttles at 95°C)` +
+    (y.power ? ` · ${y.power.mode} · CPU+GPU ${W.VDD_CPU_GPU_CV ?? "?"} W · SoC ${W.VDD_SOC ?? "?"} W` : "");
 }
 
 // Jetson power mode, rail power, clock limits, fan (sysstats.power)
