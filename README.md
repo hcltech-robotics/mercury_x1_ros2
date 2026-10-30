@@ -52,8 +52,24 @@ RGB-D frames (`rtabmap-export` every 20 s while on), fitted to the live map fram
 Each mapping start opens a new session in the database, and sessions that never get linked by a loop
 closure split the map (`office` had 24 sessions in 4 disconnected pieces). Map a place in one go.
 
-### nvblox layers in the 3D view
-Page → "3D layers · nvblox": Mesh + Depth points (default), ESDF slice (distance to obstacles at the costmap slice height,
+### Maps, waypoints
+Page → **Maps** lists `~/maps/*.db` (newest first, size, waypoint count, which one SLAM uses):
+▶ localize, ✎ continue mapping, ✕ delete (moved with its waypoints / .pgm to `~/maps/.trash/`, purged
+after 7 days; the map in use cannot be deleted). **New map** starts an empty map (an existing map of
+that name goes to the trash first). Waypoints belong to a map (`<name>.waypoints.json`): ✕ per row,
+**Delete all**, or the **✕ Waypoint** tool (click a waypoint on the 2D map or in the 3D view).
+
+### Arm-aware footprint
+`nav.launch.py` also starts `arm_footprint.py` (`arm_footprint:=false` to skip): 5 Hz, the arm links'
+mesh hulls (`config/arm_hulls.yaml`, from `mercury_x1_web/tools/arm_hulls.py`) + 8 cm for a hand beyond
+each flange go through TF into base_footprint. If anything sticks out more than 5 cm past the
+nav2.yaml outline, `/local_costmap/footprint` and `/global_costmap/footprint` get the convex hull of
+the outline and those points (+4 cm); MPPI (`consider_footprint`) and the behaviours collide-check with
+it. Published only on change (a new footprint makes the costmaps re-inflate). Arms hanging: outline.
+
+### 3D view layers
+Page → "3D view": **Cameras in 3D** (frustums of the jaw and bellybutton cameras with the live image, 2 Hz; default on),
+nvblox: Mesh + Depth points (default), ESDF slice (distance to obstacles at the costmap slice height,
 what Nav2 uses), Depth points (back-projected depth, downsampled to 40k), TSDF voxels, Colour voxels,
 Occupancy. The choice is the `nvblox_layers` parameter of `rerun_bridge`, saved in
 `~/.config/mercury_x1/viz_layers.json`; layers that are off are not subscribed at all.
@@ -61,7 +77,7 @@ Occupancy. The choice is the `nvblox_layers` parameter of `rerun_bridge`, saved 
 ### Clicking in 3D
 The map is logged as a pickable floor mesh: a plain click on it is sent to the robot and becomes a
 waypoint / go-to goal / initial pose / nothing, depending on the click mode chosen on the page
-(Waypoint · Go to · Set pose · View). Clicks on the robot model and camera images are ignored.
+(+ Waypoint · ✕ Waypoint · Go to · Set pose · View). Clicks on the robot model and camera images are ignored.
 
 Keyboard driving: the **⌨ Drive** button (W/A/S/D or arrows, Shift = fast, Space = stop, Esc releases).
 
@@ -70,7 +86,7 @@ Keyboard driving: the **⌨ Drive** button (W/A/S/D or arrows, Shift = fast, Spa
 | `src/drivers/mercury_x1_driver` | C++ `base_node` (odom+TF, IMU, battery %, ultrasonic L/back/R, RGB LED, cmd_vel watchdog, rear guard) and `upper_body_node` (both arms + neck/jaw/waist: 50 Hz joint states, ArmState with flange coords, preemptible joint/Cartesian commands, power/stop services). Exclusive serial ownership. |
 | `src/core/mercury_x1_msgs` | `ArmState`, `BaseState`, `JointCommand`, `CartesianCommand` |
 | `src/core/mercury_x1_description` | URDF + calibrated sensor frames (base_footprint = drive axle) |
-| `src/bringup/mercury_x1_bringup` | `robot.launch.py`, `slam.launch.py mode:=mapping\|localization map:=<name>`, `nav.launch.py` |
+| `src/bringup/mercury_x1_bringup` | `robot.launch.py`, `slam.launch.py mode:=mapping\|localization map:=<name>`, `nav.launch.py` (+ `arm_footprint.py`) |
 | `src/visualization/mercury_x1_web` | `rerun_bridge` (TF-aware Rerun scene, gRPC :9876, viewer :9090) + `web_server` (:8080) |
 
 Key topics: `/cmd_vel`, `/odom` (lidar ICP), `/wheel/odom`, `/imu/data_raw`, `/battery`, `/ultrasonic/{left,back,right}`, `/base/led`,

@@ -15,6 +15,7 @@ import json
 import math
 import os
 import queue
+import shutil
 import signal
 import subprocess
 import threading
@@ -56,8 +57,12 @@ MX1_WS = os.environ.get("MX1_WS", os.path.expanduser("~/mercury_x1_ros2"))
 CONF_DIR = os.path.expanduser("~/.config/mercury_x1")
 ROS_NETWORK_FILE = os.path.join(CONF_DIR, "ros_network")   # read by scripts/ros_env.sh at stack start
 VIZ_LAYERS_FILE = os.path.join(CONF_DIR, "viz_layers.json")  # read by rerun_bridge at start
-NVBLOX_LAYERS = ("mesh", "esdf", "depth", "tsdf", "color", "occupancy", "slam3d")   # = rerun_bridge.NVBLOX_LAYERS
-DEFAULT_VIZ_LAYERS = ["mesh", "depth"]
+# = rerun_bridge.NVBLOX_LAYERS + "camera" (camera frustums with the live image in the 3D view)
+NVBLOX_LAYERS = ("mesh", "esdf", "depth", "tsdf", "color", "occupancy", "slam3d", "camera")
+DEFAULT_VIZ_LAYERS = ["mesh", "depth", "camera"]
+TRASH_DIR = os.path.join(MAPS_DIR, ".trash")   # deleted maps, purged after TRASH_DAYS
+TRASH_DAYS = 7
+WAYPOINT_PICK_RADIUS = 0.6   # [m] a "delete" click removes the nearest waypoint within this distance
 # head pose while mapping: neck straight, Orbbec level (its pitch = -jaw - 5.7 deg, see the URDF notes)
 MAPPING_HEAD = {"head": 0.0, "eye": -5.7}
 VIEWER_CACHE = os.path.expanduser(f"~/.cache/mercury_x1_web/rerun-web-viewer/{VIEWER_VERSION}")
@@ -151,7 +156,7 @@ class WebNode(Node):
         self.goal_handle = None
         self.cancel_requested = False
         # what a click in the 3D view (embedded Rerun viewer) does
-        self.click_mode = "waypoint"          # waypoint | goto | pose | off
+        self.click_mode = "waypoint"          # waypoint | delete | goto | pose | off
         self.last_click: dict | None = None
         self.waypoints_changed = None         # set by App: persist + republish
         self.remote: dict | None = None       # Unitree BLE remote (mercury_x1_teleop/unitree_remote)
@@ -301,6 +306,8 @@ class WebNode(Node):
                 if self.waypoints_changed:
                     self.waypoints_changed()
                 result = f"waypoint {len(self.waypoints)}"
+            elif self.click_mode == "delete":
+                result = self.delete_waypoint_near(x, y)
             elif self.click_mode == "goto":
                 yaw = math.atan2(y - here[1], x - here[0]) if here else 0.0
                 self.go_to(x, y, yaw)
@@ -310,6 +317,18 @@ class WebNode(Node):
                 result = "initial pose set"
         self.last_click = {"x": round(x, 2), "y": round(y, 2), "z": round(z, 2), "entity": entity,
                            "source": source, "result": result, "t": time.time()}
+
+    def delete_waypoint_near(self, x: float, y: float) -> str:
+        if not self.waypoints:
+            return "no waypoints"
+        k = min(range(len(self.waypoints)), key=lambda i: math.hypot(self.waypoints[i]["x"] - x, self.waypoints[i]["y"] - y))
+        d = math.hypot(self.waypoints[k]["x"] - x, self.waypoints[k]["y"] - y)
+        if d > WAYPOINT_PICK_RADIUS:
+            return f"no waypoint within {WAYPOINT_PICK_RADIUS} m"
+        del self.waypoints[k]
+        if self.waypoints_changed:
+            self.waypoints_changed()
+        return f"deleted waypoint {k + 1}"
 
     def cmd_vel(self, vx: float, wz: float) -> None:
         t = Twist()
@@ -477,6 +496,8 @@ class App:
         self.head_hold = True        # hold the head level while mapping (switch on the page)
         self.wifi = Wifi()
         self.export3d = {"busy": "", "message": "", "files": slam3d.list_exports(), "live": ""}
+        self._maps_cache: list[dict] = []
+        self._maps_t = 0.0
         threading.Thread(target=self._live3d_loop, daemon=True, name="live3d").start()
         self.head_port = head_port
         self.sysstats = SysStats()           # CPU / GPU load and temperatures for the status page
@@ -582,7 +603,11 @@ class App:
     def load_viz_layers() -> list[str]:
         try:
             with open(VIZ_LAYERS_FILE) as f:
-                return [k for k in json.load(f).get("nvblox", []) if k in NVBLOX_LAYERS]
+                saved = json.load(f)
+            layers = [k for k in saved.get("nvblox", []) if k in NVBLOX_LAYERS]
+            if saved.get("version", 1) < 2:      # saved before the camera layer existed: on, like before
+                layers.append("camera")
+            return layers
         except (OSError, ValueError, AttributeError):
             return list(DEFAULT_VIZ_LAYERS)
 
@@ -685,9 +710,44 @@ class App:
             raise web.HTTPNotFound()
         return web.FileResponse(path, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
+    def map_list(self) -> list[dict]:
+        slam = self.sup.status()["slam"]
+        out = []
+        for f in os.listdir(MAPS_DIR):
+            if not f.endswith(".db"):
+                continue
+            name, st = f[:-3], os.stat(os.path.join(MAPS_DIR, f))
+            try:
+                with open(os.path.join(MAPS_DIR, f"{name}.waypoints.json")) as wf:
+                    nwp = len(json.load(wf))
+            except (OSError, ValueError, TypeError):
+                nwp = 0
+            out.append({"name": name, "size_mb": round(st.st_size / 1e6, 1), "mtime": st.st_mtime,
+                        "time": time.strftime("%Y-%m-%d %H:%M", time.localtime(st.st_mtime)), "waypoints": nwp,
+                        "active": slam.get("mode") if slam["running"] and slam.get("map") == name else None})
+        return sorted(out, key=lambda m: -m["mtime"])
+
     async def maps(self, req):
-        names = sorted(f[:-3] for f in os.listdir(MAPS_DIR) if f.endswith(".db"))
-        return web.json_response({"maps": names, "current": self.map_name})
+        maps = self.map_list()
+        return web.json_response({"maps": [m["name"] for m in maps], "details": maps, "current": self.map_name})
+
+    def delete_map(self, name: str) -> str:
+        """move <name>.db and its side files to ~/maps/.trash/<name>-<time>/ (3D exports stay)"""
+        dest = os.path.join(TRASH_DIR, f"{name}-{time.strftime('%Y%m%d-%H%M%S')}")
+        os.makedirs(dest, exist_ok=True)
+        for ext in (".db", ".waypoints.json", ".pgm", ".yaml"):
+            src = os.path.join(MAPS_DIR, name + ext)
+            if os.path.exists(src):
+                shutil.move(src, os.path.join(dest, name + ext))
+        cutoff = time.time() - TRASH_DAYS * 86400
+        for d in os.listdir(TRASH_DIR):
+            path = os.path.join(TRASH_DIR, d)
+            if os.path.getmtime(path) < cutoff:
+                shutil.rmtree(path, ignore_errors=True)
+        if name == self.map_name:
+            self.node.waypoints = []
+            self.node.post(self.node.publish_waypoints)
+        return dest
 
     async def ws(self, req):
         ws = web.WebSocketResponse(heartbeat=10)
@@ -702,6 +762,9 @@ class App:
                 st["export3d"] = {**self.export3d, "files": self.export3d["files"][:6]}
                 st["system"] = self.sysstats.snapshot()
                 st["ros"] = self.ros_network()
+                if time.monotonic() - self._maps_t > 3.0:     # saved maps: cheap, but no need at 5 Hz
+                    self._maps_cache, self._maps_t = self.map_list(), time.monotonic()
+                st["maps"] = self._maps_cache
                 await ws.send_str(json.dumps(st))
                 await asyncio.sleep(0.2)
         except (ConnectionResetError, asyncio.CancelledError):
@@ -720,13 +783,29 @@ class App:
                                           str(body.get("entity", "")), "web"))
         elif action == "click_mode":
             mode = body.get("mode", "waypoint")
-            if mode not in ("waypoint", "goto", "pose", "off"):
+            if mode not in ("waypoint", "delete", "goto", "pose", "off"):
                 return web.json_response({"ok": False, "error": f"bad mode {mode}"})
             n.click_mode = mode
         elif action == "stop":
             n.post(n.cancel)
         elif action == "goto":
             n.post(lambda: n.go_to(body["x"], body["y"], body.get("yaw", 0.0)))
+        elif action == "map_delete":    # {"name"}: to ~/maps/.trash (kept TRASH_DAYS days)
+            name = str(body.get("name", ""))
+            slam = self.sup.status()["slam"]
+            if not name or "/" in name or name.startswith(".") or not os.path.exists(os.path.join(MAPS_DIR, f"{name}.db")):
+                return web.json_response({"ok": False, "error": f"no map '{name}'"})
+            if slam["running"] and slam.get("map") == name:
+                return web.json_response({"ok": False, "error": f"'{name}' is in use - stop SLAM first"})
+            dest = await loop.run_in_executor(None, lambda: self.delete_map(name))
+            self._maps_t = 0.0
+            return web.json_response({"ok": True, "trash": dest})
+        elif action == "waypoint_delete":   # {"index"}
+            k = int(body.get("index", -1))
+            if not 0 <= k < len(n.waypoints):
+                return web.json_response({"ok": False, "error": "no such waypoint"})
+            del n.waypoints[k]
+            self.save_waypoints()
         elif action == "waypoints":
             n.waypoints = [{"x": float(w["x"]), "y": float(w["y"]), "yaw": float(w.get("yaw", 0))}
                            for w in body.get("waypoints", [])]
@@ -755,7 +834,7 @@ class App:
             self.viz_layers = layers
             os.makedirs(CONF_DIR, exist_ok=True)
             with open(VIZ_LAYERS_FILE, "w") as f:
-                json.dump({"nvblox": layers}, f)
+                json.dump({"nvblox": layers, "version": 2}, f)
             n.post(lambda: n.set_nvblox_layers(layers))
         elif action == "ros_network":   # {"network": "localhost" | "lan"} -> saved, then the stack restarts
             net = body.get("network")
@@ -801,8 +880,15 @@ class App:
             fresh = bool(body.get("fresh", False))
             if mode == "localization" and not os.path.exists(os.path.join(MAPS_DIR, f"{name}.db")):
                 return web.json_response({"ok": False, "error": f"no map '{name}' - build it in mapping mode first"})
+            if mode == "mapping" and fresh and os.path.exists(os.path.join(MAPS_DIR, f"{name}.db")):
+                slam = self.sup.status()["slam"]
+                if slam["running"] and slam.get("map") == name:
+                    await loop.run_in_executor(None, lambda: self.sup.stop("slam"))
+                # replacing a map: the old one (and its waypoints) goes to the trash, not lost
+                await loop.run_in_executor(None, lambda: self.delete_map(name))
             self.map_name = name
             self.load_waypoints()
+            self._maps_t = 0.0
             if mode == "mapping" and self.head_hold:   # the depth camera feeds the map: look straight ahead, level
                 self.level_head()
             cmd = ["ros2", "launch", "mercury_x1_bringup", "slam.launch.py", f"mode:={mode}", f"map:={name}",

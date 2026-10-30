@@ -63,6 +63,7 @@ NVBLOX_LAYERS = {
     # the map frame (web_server re-exports it every 20 s while this is subscribed)
     "slam3d": (PointCloud2, "/slam/cloud3d", LATCHED, 0.2),
 }
+VIEW_LAYERS = ("camera",)   # switchable like the nvblox layers, but no subscription: camera frustums + image
 DEPTH_MAX_POINTS = 40000   # the back-projected depth cloud has ~180k points
 
 
@@ -153,7 +154,7 @@ class RerunBridge(Node):
         self.thr_tf = Throttle(self.tf_hz)
         self.thr_joint_tf = Throttle(self.joint_tf_hz)
         self.thr_img = Throttle(self.img_hz)
-        self.thr_frustum = Throttle(1.0)
+        self.thr_frustum = Throttle(2.0)
         self.thr_cloud = Throttle(self.cloud_hz)
         self.thr_scan = Throttle(self.scan_hz)
         self.thr_us = Throttle(5.0)
@@ -198,6 +199,7 @@ class RerunBridge(Node):
         self.thr_nvblox = {k: Throttle(v[3]) for k, v in NVBLOX_LAYERS.items()}
         self.mesh_tiles: set[str] = set()          # tile ids logged, blanked when the mesh layer goes off
         self.layers_wanted: list[str] | None = None
+        self.show_camera = True                    # "camera" layer: frustums with the live image
         p("nvblox_layers", self._saved_layers())
         self.add_on_set_parameters_callback(self._on_params)
         self._apply_layers(list(self.get_parameter("nvblox_layers").value))
@@ -240,15 +242,18 @@ class RerunBridge(Node):
     def _saved_layers() -> list[str]:
         try:
             with open(VIZ_LAYERS_FILE) as f:
-                layers = [k for k in json.load(f).get("nvblox", []) if k in NVBLOX_LAYERS]
+                saved = json.load(f)
+            layers = [k for k in saved.get("nvblox", []) if k in NVBLOX_LAYERS or k in VIEW_LAYERS]
+            if saved.get("version", 1) < 2:   # saved before the camera layer existed: on, like before
+                layers.append("camera")
             return layers or [""]           # rclpy cannot infer the type of an empty list
         except (OSError, ValueError, AttributeError):
-            return ["mesh", "depth"]
+            return ["mesh", "depth", "camera"]
 
     def _on_params(self, params) -> SetParametersResult:
         for prm in params:
             if prm.name == "nvblox_layers":
-                bad = [k for k in prm.value if k and k not in NVBLOX_LAYERS]
+                bad = [k for k in prm.value if k and k not in NVBLOX_LAYERS and k not in VIEW_LAYERS]
                 if bad:
                     return SetParametersResult(successful=False, reason=f"unknown layers {bad}")
                 self.layers_wanted = [k for k in prm.value if k]   # applied by the timer, outside the callback
@@ -260,6 +265,12 @@ class RerunBridge(Node):
             self._apply_layers(wanted)
 
     def _apply_layers(self, wanted: list[str]) -> None:
+        camera = "camera" in wanted
+        if self.show_camera and not camera:
+            self._set_time(time.time())
+            for name in ("orbbec", "bellybutton"):
+                self._log(f"world/{name}_camera", rr.Clear(recursive=True))
+        self.show_camera = camera
         wanted = [k for k in wanted if k in NVBLOX_LAYERS]
         for key in [k for k in self.nvblox_subs if k not in wanted]:
             self.destroy_subscription(self.nvblox_subs.pop(key))
@@ -268,7 +279,7 @@ class RerunBridge(Node):
             if key not in self.nvblox_subs:
                 ty, topic, qos, _ = NVBLOX_LAYERS[key]
                 self.nvblox_subs[key] = self.create_subscription(ty, topic, self.nvblox_handlers[key], qos)
-        self.get_logger().info(f"nvblox layers: {sorted(self.nvblox_subs) or 'none'}")
+        self.get_logger().info(f"nvblox layers: {sorted(self.nvblox_subs) or 'none'}, camera {'on' if camera else 'off'}")
 
     def _clear_layer(self, key: str) -> None:
         if key == "slam3d":  # static: replace with an empty cloud (re-sent, latched, on resubscribe)
@@ -515,8 +526,8 @@ class RerunBridge(Node):
         self._set_time(_stamp(msg))
         self._log(f"cams/{name}", rr.EncodedImage(contents=jpg, media_type="image/jpeg"))
         info = self.cam_info.get(name)
-        if info is not None and self.thr_frustum(name):
-            # 3D frustum with the live image at 1 Hz (preview keeps the camera_info resolution)
+        if info is not None and self.show_camera and self.thr_frustum(name):
+            # 3D frustum with the live image at 2 Hz (preview keeps the camera_info resolution)
             frame = info.header.frame_id or msg.header.frame_id
             K = np.array(info.k, dtype=np.float64).reshape(3, 3)
             w, h = (info.width or 640), (info.height or 480)
@@ -564,6 +575,7 @@ class RerunBridge(Node):
             pos.append([p.position.x, p.position.y, 0.05])
             vec.append([0.35 * math.cos(yaw), 0.35 * math.sin(yaw), 0.0])
             labels.append(str(i + 1))
+        self._set_time(time.time())   # newest on the timeline: otherwise an older stamp can hide a deletion
         self._log("world/waypoints", rr.CoordinateFrame(msg.header.frame_id or "map"),
                rr.Arrows3D(origins=pos, vectors=vec, colors=[[255, 220, 0]] * len(pos), radii=0.03, labels=labels))
 
@@ -571,6 +583,7 @@ class RerunBridge(Node):
         pts = [[p.x, p.y, 0.02] for p in msg.polygon.points]
         if pts:
             pts.append(pts[0])
+        self._set_time(time.time())
         self._log("world/footprint", rr.CoordinateFrame(msg.header.frame_id),
                rr.LineStrips3D([pts], colors=[[0, 255, 140]], radii=0.01))
 
@@ -581,6 +594,7 @@ class RerunBridge(Node):
         p = [pose[1], pose[2], 0.02]
         if not self.trail or math.dist(p, self.trail[-1]) > 0.03:
             self.trail = (self.trail + [p])[-3000:]
+            self._set_time(time.time())
             self._log("world/trail", rr.CoordinateFrame("map"),
                    rr.LineStrips3D([self.trail], colors=[[255, 255, 255, 120]], radii=0.008))
 

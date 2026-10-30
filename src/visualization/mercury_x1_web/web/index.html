@@ -101,6 +101,14 @@
   td.act button { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0 3px; font-size: 13px; }
   td.act button:hover { color: var(--text); }
   tr.cur td { background: rgba(255,212,0,.08); }
+  td.act button.del { color: #ff8a99; font-size: 15px; padding: 0 6px; }
+  table.maps td:first-child { color: var(--text); width: auto; font-weight: 600; }
+  table.maps td.meta { color: var(--muted); font-size: 11px; }
+  table.maps tr.active td { background: rgba(76,194,255,.10); }
+  table.maps td.act button { font-size: 14px; padding: 0 5px; }
+  .badge { display: inline-block; font-size: 10px; font-weight: 600; padding: 0 6px; border-radius: 999px;
+    background: #1b4f6e; color: #fff; margin-left: 4px; vertical-align: 1px; }
+  .badge.mapping { background: #5a4410; }
   #navstate { font-size: 12px; }
   .pad { display: grid; grid-template-columns: repeat(3, 52px); gap: 6px; justify-content: center; margin: 4px 0 8px; }
   .pad button { height: 44px; background: var(--panel2); border: 1px solid var(--line); color: var(--text);
@@ -145,39 +153,53 @@
 
     <div data-pane="nav">
       <section>
-        <h2>Map &amp; localization</h2>
-        <div class="row">
-          <input type="text" id="mapname" list="maplist" value="default" style="width:120px" title="map name (~/maps/&lt;name&gt;.db)">
-          <datalist id="maplist"></datalist>
-          <label><input type="checkbox" id="fresh"> new map</label>
+        <h2>Maps</h2>
+        <div id="slamline" class="row" style="font-size:12px"></div>
+        <table id="maptable" class="maps"></table>
+        <div class="row" style="margin-top:8px">
+          <input type="text" id="newmap" placeholder="new map name" style="width:130px" title="letters, digits, - and _ (~/maps/&lt;name&gt;.db)">
+          <button class="b primary" id="b-newmap" title="Start an empty map with this name, head held level. Drive the area once and finish where you started.">New map</button>
+          <span class="spacer"></span>
+          <button class="b danger" id="b-slamstop" title="Stop mapping / localization (the map is saved)">Stop SLAM</button>
         </div>
-        <div class="row">
-          <button class="b primary" id="b-mapping">Start mapping</button>
-          <button class="b" id="b-localize">Localize</button>
-          <button class="b danger" id="b-slamstop">Stop SLAM</button>
-          <button class="b" id="b-export" title="Save a .pgm/.yaml copy of the 2D map">Export</button>
-        </div>
+        <div class="muted" style="font-size:11px">▶ localize on a map (Nav2 uses it) · ✎ continue mapping it (only links up if the robot re-finds a known place; else the map splits into pieces) · ✕ delete (kept 7 days in ~/maps/.trash).</div>
+      </section>
+      <section>
+        <h2>Localization &amp; navigation</h2>
         <div class="row">
           <button class="b primary" id="b-nav">Start Nav2</button>
           <button class="b danger" id="b-navstop">Stop Nav2</button>
+          <span class="spacer"></span>
+          <button class="b" id="b-export" title="Save a .pgm/.yaml copy of the 2D map in ~/maps">Save 2D map</button>
         </div>
-      </section>
-      <section>
-        <h2>Map</h2>
         <div class="row">
           <div class="seg" id="tool">
             <button data-tool="waypoint" class="active" title="click = waypoint, drag = heading">+ Waypoint</button>
+            <button data-tool="delete" title="click a waypoint (map or 3D view) to delete it">✕ Waypoint</button>
             <button data-tool="goto" title="click/drag: navigate here now">Go to</button>
             <button data-tool="pose" title="click/drag: tell the localizer where the robot is">Set pose</button>
             <button data-tool="off" title="clicks only select / inspect">View</button>
           </div>
-          <span class="muted" style="font-size:11px">applies to map and 3D view clicks</span>
         </div>
         <div id="mapwrap"><canvas id="map"></canvas><div id="mapmsg">No map yet. Start mapping or localization.</div></div>
-        <div class="row muted" style="margin-top:6px;font-size:11px">Wheel: zoom · right-drag / shift-drag: pan · double-click: center on robot</div>
+        <div class="row muted" style="margin-top:6px;font-size:11px">Clicks in the map and in the 3D view follow the tool above · wheel: zoom · right/shift-drag: pan · double-click: center on robot</div>
+        <h2 style="margin-top:12px">Waypoints <span id="wpmap" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
+        <table id="wptable"></table>
+        <div class="row" style="margin-top:8px">
+          <button class="b primary" id="b-runonce">Run once</button>
+          <button class="b primary" id="b-cruise">Cruise ⟳</button>
+          <span class="spacer"></span>
+          <button class="b danger" id="b-clear">Delete all</button>
+        </div>
+        <div id="navstate" class="muted">idle</div>
       </section>
       <section>
-        <h2>3D layers · nvblox</h2>
+        <h2>3D view</h2>
+        <div class="row" id="view-layers">
+          <label class="switch" data-layer="camera" title="Camera frustums in the 3D view with the live image on them (jaw Orbbec + bellybutton, 2 Hz)"><input type="checkbox"><span class="track"></span>Cameras in 3D</label>
+        </div>
+        <div class="muted" style="font-size:11px;margin-bottom:8px">To look through the jaw camera: the "Orbbec (jaw)" panel on the right of the viewer; the depth points / mesh below show what it sees in 3D.</div>
+        <h2>nvblox · local 3D</h2>
         <div class="row" id="nvblox-layers">
           <label class="switch" data-layer="mesh" title="Surface mesh (TSDF marching cubes), coloured by the camera"><input type="checkbox"><span class="track"></span>Mesh</label>
           <label class="switch" data-layer="esdf" title="ESDF slice: distance to the nearest obstacle at the costmap slice height (red = touching, blue = 1.5 m+) - what Nav2 sees"><input type="checkbox"><span class="track"></span>ESDF slice</label>
@@ -196,16 +218,6 @@
         </div>
         <div class="muted" style="font-size:11px" id="exp3d-msg"></div>
         <div id="exp3d-files" style="font-size:12px"></div>
-      </section>
-      <section>
-        <h2>Waypoints</h2>
-        <table id="wptable"></table>
-        <div class="row" style="margin-top:8px">
-          <button class="b primary" id="b-runonce">Run once</button>
-          <button class="b primary" id="b-cruise">Cruise ⟳</button>
-          <button class="b" id="b-clear">Clear</button>
-        </div>
-        <div id="navstate" class="muted">idle</div>
       </section>
     </div>
 
@@ -277,6 +289,7 @@
 const $ = (s) => document.querySelector(s);
 const host = location.hostname;
 let ST = null;           // latest status from /ws
+const LAYER_SEL = "#view-layers [data-layer], #nvblox-layers [data-layer], #slam-layers [data-layer]";
 let MAP = null;          // {info, img}
 let WAYPOINTS = [];
 let tool = "waypoint";
@@ -364,7 +377,8 @@ function onStatus() {
   const arms = Object.values(s.arms || {});
   const powered = arms.filter((a) => a.powered).length;
   setDot("arms", arms.length && powered === arms.length ? "ok" : powered ? "warn" : "bad", `arms ${powered}/${arms.length || 2}`);
-  if (document.activeElement !== $("#mapname") && slam.map) $("#mapname").value = slam.map;
+  renderMaps(s);
+  $("#wpmap").textContent = s.map_name ? `· map ${s.map_name}` : "";
   if (JSON.stringify(s.waypoints) !== JSON.stringify(WAYPOINTS) && !dragging) { WAYPOINTS = s.waypoints; renderTable(); }
   if (s.map_version !== mapVersion) { mapVersion = s.map_version; loadMap(); }
   if (s.click_mode && s.click_mode !== tool && Date.now() - toolChanged > 1500) setTool(s.click_mode, false);
@@ -383,7 +397,7 @@ function onStatus() {
   setFreeSwitch(armsList.some((a) => a.freedrive));
   setHoldSwitch(s.head_hold !== false);
   if (s.viz_layers && Date.now() > layersUntil) {
-    for (const el of document.querySelectorAll("#nvblox-layers [data-layer], #slam-layers [data-layer]"))
+    for (const el of document.querySelectorAll(LAYER_SEL))
       el.querySelector("input").checked = s.viz_layers.nvblox.includes(el.dataset.layer);
   }
   $("#c-estop").classList.toggle("hidden", !s.estop);
@@ -599,22 +613,24 @@ cv.addEventListener("pointerdown", (e) => {
   const [x, y] = s2w(sx, sy);
   dragging = { x, y, sx, sy };
   if (tool === "off") { dragging = null; return; }
+  if (tool === "delete") return;
   preview = { x, y, yaw: 0, color: tool === "waypoint" ? "#ffd400" : tool === "goto" ? "#4cc2ff" : "#ff5ec4" };
   drawMap();
 });
 cv.addEventListener("pointermove", (e) => {
   const [sx, sy] = evPt(e);
   if (panning) { view.ox = panning.ox + sx - panning.sx; view.oy = panning.oy + sy - panning.sy; drawMap(); return; }
-  if (!dragging) return;
+  if (!dragging || !preview) return;
   if (Math.hypot(sx - dragging.sx, sy - dragging.sy) > 6 * devicePixelRatio) preview.yaw = Math.atan2(-(sy - dragging.sy), sx - dragging.sx);
   drawMap();
 });
 cv.addEventListener("pointerup", (e) => {
   if (panning) { panning = null; return; }
   if (!dragging) return;
-  const { x, y } = dragging, yaw = preview.yaw;
+  const { x, y, sx, sy } = dragging, yaw = preview ? preview.yaw : 0;
   dragging = null; preview = null;
   if (tool === "off") { /* view only */ }
+  else if (tool === "delete") deleteWaypointAt(sx, sy);
   else if (tool === "waypoint") addWaypoint(x, y, yaw);
   else if (tool === "goto") { api("goto", { x, y, yaw }); toast(`navigating to ${x.toFixed(2)}, ${y.toFixed(2)}`); }
   else if (tool === "pose") { api("initialpose", { x, y, yaw }); toast("initial pose sent"); }
@@ -638,6 +654,16 @@ document.querySelectorAll("#tool button").forEach((b) => b.onclick = () => setTo
 // ---------------- waypoints ----------------
 function pushWaypoints() { api("waypoints", { waypoints: WAYPOINTS }); renderTable(); drawMap(); }
 function addWaypoint(x, y, yaw) { WAYPOINTS.push({ x, y, yaw }); pushWaypoints(); }
+function deleteWaypoint(k) {
+  WAYPOINTS.splice(k, 1); renderTable(); drawMap();
+  api("waypoint_delete", { index: k });
+}
+function deleteWaypointAt(sx, sy) {        // nearest marker within ~18 px of the click
+  let best = -1, bd = 18 * devicePixelRatio;
+  WAYPOINTS.forEach((w, k) => { const [wx, wy] = w2s(w.x, w.y), d = Math.hypot(wx - sx, wy - sy); if (d < bd) { bd = d; best = k; } });
+  if (best < 0) { toast("no waypoint there"); return; }
+  deleteWaypoint(best); toast(`deleted waypoint ${best + 1}`);
+}
 let lastTableKey = "";
 function renderTable(onlyIfChanged = false) {
   const cur = ST && ST.nav.state === "navigating" ? ST.nav.current : null;
@@ -645,26 +671,58 @@ function renderTable(onlyIfChanged = false) {
   if (onlyIfChanged && key === lastTableKey) return;
   lastTableKey = key;
   $("#wptable").innerHTML = WAYPOINTS.length ? WAYPOINTS.map((w, k) => `<tr class="${k === cur ? "cur" : ""}"><td>${k + 1}</td><td>${w.x.toFixed(2)}, ${w.y.toFixed(2)}</td><td>${(w.yaw * 180 / Math.PI).toFixed(0)}°</td>
-    <td class="act"><button data-a="go" data-k="${k}" title="go here">➜</button><button data-a="up" data-k="${k}" title="move up">↑</button><button data-a="del" data-k="${k}" title="delete">✕</button></td></tr>`).join("")
+    <td class="act"><button data-a="go" data-k="${k}" title="go here">➜</button><button data-a="up" data-k="${k}" title="move up">↑</button><button data-a="del" class="del" data-k="${k}" title="delete">✕</button></td></tr>`).join("")
     : `<tr><td></td><td class="muted" colspan="3">Click the map to add waypoints (drag to set heading).</td></tr>`;
 }
 $("#wptable").addEventListener("click", (e) => {
   const b = e.target.closest("button"); if (!b) return; const k = +b.dataset.k;
-  if (b.dataset.a === "del") WAYPOINTS.splice(k, 1);
+  if (b.dataset.a === "del") { deleteWaypoint(k); return; }
   if (b.dataset.a === "up" && k > 0) [WAYPOINTS[k - 1], WAYPOINTS[k]] = [WAYPOINTS[k], WAYPOINTS[k - 1]];
   if (b.dataset.a === "go") { const w = WAYPOINTS[k]; api("goto", w); return; }
   pushWaypoints();
 });
-$("#b-clear").onclick = () => { WAYPOINTS = []; pushWaypoints(); };
+$("#b-clear").onclick = () => { if (WAYPOINTS.length && confirm(`Delete all ${WAYPOINTS.length} waypoints of this map?`)) { WAYPOINTS = []; pushWaypoints(); } };
 $("#b-runonce").onclick = () => api("run", { loop: false });
 $("#b-cruise").onclick = () => api("run", { loop: true });
 
 // ---------------- SLAM / Nav ----------------
-async function refreshMaps() { const j = await (await fetch("/maps")).json(); $("#maplist").innerHTML = j.maps.map((m) => `<option value="${m}">`).join(""); }
-refreshMaps();
-$("#b-mapping").onclick = async () => { toast("starting mapping…"); await api("slam", { mode: "mapping", map: $("#mapname").value, fresh: $("#fresh").checked }); view.fitted = false; refreshMaps(); };
-$("#b-localize").onclick = async () => { toast("starting localization…"); await api("slam", { mode: "localization", map: $("#mapname").value }); view.fitted = false; };
-$("#b-slamstop").onclick = async () => { toast("stopping SLAM (saving map)…"); await api("slam_stop"); toast("SLAM stopped, map saved"); refreshMaps(); };
+// saved maps (~/maps/*.db), newest first; the status carries the list
+let mapsKey = "";
+function renderMaps(s) {
+  const slam = s.procs.slam, maps = s.maps || [];
+  $("#slamline").innerHTML = slam.running
+    ? `<span class="dot ${slam.mode === "mapping" ? "warn" : "ok"}"></span> ${slam.mode === "mapping" ? "Mapping" : "Localizing on"} <b>${slam.map}</b>`
+    : `<span class="dot"></span> SLAM off · pick a map below`;
+  const key = JSON.stringify([maps, slam.running, slam.map, slam.mode]);
+  if (key === mapsKey) return;
+  mapsKey = key;
+  $("#maptable").innerHTML = maps.length ? maps.map((m) => {
+    const act = m.active ? `<span class="badge ${m.active}">${m.active === "mapping" ? "mapping" : "in use"}</span>` : "";
+    return `<tr class="${m.active ? "active" : ""}"><td>${m.name}${act}</td>
+      <td class="meta">${m.time} · ${m.size_mb} MB${m.waypoints ? ` · ${m.waypoints} wp` : ""}</td>
+      <td class="act"><button data-a="loc" data-m="${m.name}" title="localize on this map">▶</button><button data-a="extend" data-m="${m.name}" title="continue mapping this map">✎</button><button data-a="del" class="del" data-m="${m.name}" title="delete this map" ${m.active ? "disabled" : ""}>✕</button></td></tr>`;
+  }).join("") : `<tr><td class="muted" colspan="3">No saved maps yet - name one below and press New map.</td></tr>`;
+}
+async function startSlam(mode, map, fresh = false) {
+  toast(mode === "mapping" ? `mapping '${map}'…` : `localizing on '${map}'…`);
+  const j = await api("slam", { mode, map, fresh });
+  if (j && j.ok) view.fitted = false;
+}
+$("#maptable").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b || b.disabled) return; const m = b.dataset.m;
+  if (b.dataset.a === "loc") startSlam("localization", m);
+  if (b.dataset.a === "extend" && confirm(`Continue mapping '${m}'?\n\nStart where the map was recorded: the new drive only joins the map once RTAB-Map recognises a known place, otherwise it becomes a separate piece.`)) startSlam("mapping", m);
+  if (b.dataset.a === "del" && confirm(`Delete map '${m}' and its waypoints?\n\nIt is kept in ~/maps/.trash for 7 days.`))
+    api("map_delete", { name: m }).then((j) => j && j.ok && toast(`deleted '${m}'`));
+});
+$("#b-newmap").onclick = () => {
+  const name = $("#newmap").value.trim().replace(/[^A-Za-z0-9_-]/g, "");
+  if (!name) { toast("type a map name (letters, digits, - _)"); $("#newmap").focus(); return; }
+  if ((ST.maps || []).some((m) => m.name === name) && !confirm(`A map '${name}' exists. Replace it with a new, empty map?`)) return;
+  $("#newmap").value = "";
+  startSlam("mapping", name, true);
+};
+$("#b-slamstop").onclick = async () => { toast("stopping SLAM (saving map)…"); await api("slam_stop"); toast("SLAM stopped, map saved"); };
 $("#b-exp-cloud").onclick = () => api("export3d", { kind: "cloud" });
 $("#b-exp-mesh").onclick = () => api("export3d", { kind: "mesh" });
 $("#b-export").onclick = async () => { const j = await api("export_map"); if (j && j.ok) toast(`saved ${j.file}`); };
@@ -767,10 +825,10 @@ const setFreeSwitch = bindSwitch("#sw-free", (on) => {
 const setHoldSwitch = bindSwitch("#sw-hold", (on) => { api("head_hold", { on }); });
 // nvblox layers in the 3D view: the bridge subscribes only to the layers that are on
 let layersUntil = 0;
-for (const el of document.querySelectorAll("#nvblox-layers [data-layer], #slam-layers [data-layer]")) {
+for (const el of document.querySelectorAll(LAYER_SEL)) {
   el.querySelector("input").addEventListener("change", () => {
     layersUntil = Date.now() + 1500;           // keep the click until the status reports it back
-    const on = [...document.querySelectorAll("#nvblox-layers [data-layer], #slam-layers [data-layer]")]
+    const on = [...document.querySelectorAll(LAYER_SEL)]
       .filter((e) => e.querySelector("input").checked).map((e) => e.dataset.layer);
     api("viz_layers", { nvblox: on });
   });
