@@ -52,8 +52,10 @@ class Track:
             self.start = self.last = (x, y, yaw)
         lx, ly, lyaw = self.last
         step, dyaw = math.hypot(x - lx, y - ly), abs(wrap(yaw - lyaw))
-        # path / turn totals only count real motion: standing still, scan matching jitters by ~1 mm
-        if step < 0.003 and dyaw < math.radians(0.3):
+        # path / turn totals only count real motion: standing still, ICP / SLAM jitter by mm and tenths of a
+        # degree per update, which summed to ~3 cm/s. Distance is measured between accepted poses, so
+        # a 2 cm / 1 deg step loses nothing on real motion.
+        if step < 0.02 and dyaw < math.radians(1.0):
             self.stamp = time.monotonic()
             return
         self.path += step
