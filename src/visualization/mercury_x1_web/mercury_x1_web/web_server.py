@@ -37,13 +37,14 @@ from rclpy.node import Node
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import SetParameters
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import BatteryState
+from sensor_msgs.msg import BatteryState, PointCloud2, PointField
 from tf2_msgs.msg import TFMessage
 
 from .pose_chain import PoseChain
+from . import slam3d
 from .sysstats import SysStats
 from .wifi import Wifi
-from std_msgs.msg import ColorRGBA, String
+from std_msgs.msg import Bool, ColorRGBA, String
 from std_srvs.srv import SetBool, Trigger
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
@@ -54,7 +55,7 @@ MX1_WS = os.environ.get("MX1_WS", os.path.expanduser("~/mercury_x1_ros2"))
 CONF_DIR = os.path.expanduser("~/.config/mercury_x1")
 ROS_NETWORK_FILE = os.path.join(CONF_DIR, "ros_network")   # read by scripts/ros_env.sh at stack start
 VIZ_LAYERS_FILE = os.path.join(CONF_DIR, "viz_layers.json")  # read by rerun_bridge at start
-NVBLOX_LAYERS = ("mesh", "esdf", "depth", "tsdf", "color", "occupancy")   # = rerun_bridge.NVBLOX_LAYERS
+NVBLOX_LAYERS = ("mesh", "esdf", "depth", "tsdf", "color", "occupancy", "slam3d")   # = rerun_bridge.NVBLOX_LAYERS
 DEFAULT_VIZ_LAYERS = ["mesh", "depth"]
 # head pose while mapping: neck straight, Orbbec level (its pitch = -jaw - 5.7 deg, see the URDF notes)
 MAPPING_HEAD = {"head": 0.0, "eye": -5.7}
@@ -72,6 +73,20 @@ def pose_stamped(x: float, y: float, yaw: float, frame: str, stamp) -> PoseStamp
     p.pose.position.x, p.pose.position.y = float(x), float(y)
     _, _, p.pose.orientation.z, p.pose.orientation.w = yaw_to_quat(float(yaw))
     return p
+
+
+def cloud_msg(xyz: np.ndarray, rgb: np.ndarray | None, frame: str, stamp) -> PointCloud2:
+    """x, y, z + packed rgb (the usual ROS layout) PointCloud2"""
+    pts = np.zeros(len(xyz), dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("rgb", "<u4")])
+    pts["x"], pts["y"], pts["z"] = xyz[:, 0], xyz[:, 1], xyz[:, 2]
+    if rgb is not None:
+        pts["rgb"] = (rgb[:, 0].astype(np.uint32) << 16) | (rgb[:, 1].astype(np.uint32) << 8) | rgb[:, 2]
+    msg = PointCloud2(height=1, width=len(xyz), is_bigendian=False, point_step=16, row_step=16 * len(xyz),
+                      is_dense=True, data=pts.tobytes())
+    msg.header.frame_id, msg.header.stamp = frame, stamp
+    msg.fields = [PointField(name=k, offset=4 * i, datatype=PointField.FLOAT32, count=1)
+                  for i, k in enumerate(("x", "y", "z", "rgb"))]
+    return msg
 
 
 # ---------------------------------------------------------------------------------------------
@@ -155,6 +170,15 @@ class WebNode(Node):
         self.pub_led = self.create_publisher(ColorRGBA, "/base/led", 10)
         self.pub_joint = self.create_publisher(JointCommand, "/upper_body/joint_command", 10)
         self.pub_remote = self.create_publisher(String, "/remote/cmd", 10)
+        # whole-map coloured cloud from the RTAB-Map database (App._live3d_loop), only while someone listens
+        self.pub_cloud3d = self.create_publisher(PointCloud2, "/slam/cloud3d", LATCHED)
+        # The physical E-stop cuts the base MCU's power (its USB serial device disappears) and the arm
+        # servos' power (the arm controllers report powered=false, and their link may drop out too);
+        # nothing reports the button itself. Base link lost while no arm reports power = E-stop.
+        self.estop = False
+        self.pub_estop = self.create_publisher(Bool, "/estop", LATCHED)
+        self.pub_estop.publish(Bool(data=False))
+        self.create_timer(0.5, self._check_estop)
         self.create_subscription(String, "/remote/status", self._on_remote, LATCHED)
         self.create_subscription(String, "/remote/button", self._on_remote_button, 10)
         self.ac_wps = ActionClient(self, FollowWaypoints, "/follow_waypoints")
@@ -383,6 +407,20 @@ class WebNode(Node):
         if cli.wait_for_service(timeout_sec=0.5):
             cli.call_async(req)
 
+    def _check_estop(self) -> None:
+        base_up = self.base is not None and self.base.connected
+        arms = list(self.arms.values())
+        estop = self.base is not None and not base_up and bool(arms) and not any(a.powered for a in arms)
+        if estop == self.estop:
+            return
+        self.estop = estop
+        self.pub_estop.publish(Bool(data=estop))
+        if estop:
+            self.get_logger().warn("E-STOP: base MCU off and arm power cut")
+            self.cancel(stop_base=False)        # the base is unpowered; drop goals so nothing resumes on release
+        else:
+            self.get_logger().info("E-stop released (base MCU back or arms powered)")
+
     def status(self) -> dict:
         base = self.base
         arms = {s: {"powered": a.powered, "connected": a.connected, "moving": a.moving,
@@ -406,6 +444,7 @@ class WebNode(Node):
             "click_mode": self.click_mode,
             "last_click": self.last_click,
             "remote": self.remote,
+            "estop": self.estop,
         }
 
 
@@ -422,6 +461,8 @@ class App:
         self.viz_layers = self.load_viz_layers()
         self.head_hold = True        # hold the head level while mapping (switch on the page)
         self.wifi = Wifi()
+        self.export3d = {"busy": "", "message": "", "files": slam3d.list_exports()}
+        threading.Thread(target=self._live3d_loop, daemon=True, name="live3d").start()
         self.head_port = head_port
         self.sysstats = SysStats()           # CPU / GPU load and temperatures for the status page
         node.waypoints_changed = self.save_waypoints
@@ -487,7 +528,7 @@ class App:
     def head_status(self) -> dict:
         st = self.node.status()
         return {"battery": st["battery"], "battery_pct": st["battery_pct"], "charge": st["charge"],
-                "base": st["base"], "arms": st["arms"], "remote": st["remote"], "nav": st["nav"]["state"],
+                "base": st["base"], "arms": st["arms"], "remote": st["remote"], "nav": st["nav"]["state"], "estop": st["estop"],
                 "procs": self.sup.status(), "map_name": self.map_name, "system": self.sysstats.snapshot(),
                 "nodes": self.node.node_names, "wifi": self.wifi.snapshot(), "ros": self.ros_network(),
                 "time": time.strftime("%H:%M")}
@@ -567,6 +608,48 @@ class App:
                          stdout=open("/tmp/mx1_restart.log", "w"), stderr=subprocess.STDOUT,
                          stdin=subprocess.DEVNULL, start_new_session=True)
 
+    # -- 3D map: live layer + exports (slam3d) -------------------------------------------------
+    def _db_path(self) -> str:
+        return os.path.join(MAPS_DIR, f"{self.map_name}.db")
+
+    def _live3d_loop(self) -> None:
+        """re-export the whole map as a coloured cloud every 20 s while the viewer's SLAM 3D layer is on"""
+        n = self.node
+        while True:
+            time.sleep(20.0)
+            if n.pub_cloud3d.get_subscription_count() == 0 or not self.sup.status()["slam"]["running"]:
+                continue
+            db = self._db_path()
+            if not os.path.exists(db):
+                continue
+            try:
+                ply = slam3d.export_cloud(db, os.path.join(slam3d.SNAP_DIR, "live"), "live", voxel=0.03)
+                xyz, rgb = slam3d.read_ply(ply)
+            except Exception as e:  # noqa: BLE001 - keep the loop alive
+                n.get_logger().warn(f"live 3D map: {e}", throttle_duration_sec=60.0)
+                continue
+            msg = cloud_msg(xyz, rgb, "map", n.get_clock().now().to_msg())
+            n.post(lambda m=msg: n.pub_cloud3d.publish(m))
+
+    def _export3d_job(self, kind: str) -> None:
+        name = f"{self.map_name}_{time.strftime('%Y%m%d-%H%M%S')}"
+        self.export3d.update(busy=f"exporting {kind} of '{self.map_name}'", message="")
+        try:
+            fn = slam3d.export_mesh if kind == "mesh" else slam3d.export_cloud
+            out = fn(self._db_path(), slam3d.EXPORT_DIR, name)
+            self.export3d["message"] = f"saved {os.path.basename(out)}"
+        except Exception as e:  # noqa: BLE001
+            self.export3d["message"] = f"export failed: {e}"
+        finally:
+            self.export3d.update(busy="", files=slam3d.list_exports())
+
+    async def export_file(self, req):
+        name = os.path.basename(req.match_info["name"])
+        path = os.path.join(slam3d.EXPORT_DIR, name)
+        if not os.path.isfile(path):
+            raise web.HTTPNotFound()
+        return web.FileResponse(path, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
     async def maps(self, req):
         names = sorted(f[:-3] for f in os.listdir(MAPS_DIR) if f.endswith(".db"))
         return web.json_response({"maps": names, "current": self.map_name})
@@ -581,6 +664,7 @@ class App:
                 st["map_name"] = self.map_name
                 st["viz_layers"] = {"nvblox": self.viz_layers}
                 st["head_hold"] = self.head_hold
+                st["export3d"] = {**self.export3d, "files": self.export3d["files"][:6]}
                 st["system"] = self.sysstats.snapshot()
                 st["ros"] = self.ros_network()
                 await ws.send_str(json.dumps(st))
@@ -624,6 +708,13 @@ class App:
                 return web.json_response({"ok": False, "error": "no network given" if not ssid else self.wifi.busy})
             threading.Thread(target=self.wifi.connect, args=(ssid, str(body.get("password", ""))),
                              daemon=True).start()
+        elif action == "export3d":       # {"kind": "cloud" | "mesh"}: files land in ~/maps/exports
+            kind = body.get("kind", "cloud")
+            if kind not in ("cloud", "mesh") or self.export3d["busy"]:
+                return web.json_response({"ok": False, "error": self.export3d["busy"] or f"bad kind {kind}"})
+            if not os.path.exists(self._db_path()):
+                return web.json_response({"ok": False, "error": f"no map database '{self.map_name}'"})
+            threading.Thread(target=self._export3d_job, args=(kind,), daemon=True).start()
         elif action == "viz_layers":     # {"nvblox": [...]} -> rerun_bridge parameter, saved for restarts
             layers = [k for k in NVBLOX_LAYERS if k in body.get("nvblox", [])]
             self.viz_layers = layers
@@ -714,6 +805,7 @@ class App:
         app.router.add_get("/vendor/rerun/{name}", self.vendor)
         app.router.add_post("/api/{action}", self.api)
         app.router.add_static("/static", self.static_dir)
+        app.router.add_get("/exports/{name}", self.export_file)
         threading.Thread(target=self.fetch_viewer, daemon=True).start()
         self.load_waypoints()
 

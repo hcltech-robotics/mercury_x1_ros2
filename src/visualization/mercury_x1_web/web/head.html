@@ -111,6 +111,10 @@
   #kbd button.wide { max-width: 200px; flex: 2; font-size: 17px; }
   #kbd button.space { max-width: 520px; flex: 6; }
 
+  #estop { display: none; position: fixed; left: 0; right: 0; top: 64px; z-index: 5; padding: 14px 22px;
+    background: var(--bad); color: #fff; font-size: 22px; font-weight: 700; }
+  #estop.show { display: block; }
+  #estop span { font-weight: 400; font-size: 17px; margin-left: 12px; }
   #toast { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); background: #000c; border: 1px solid var(--line);
     padding: 14px 22px; border-radius: 12px; opacity: 0; transition: opacity .3s; pointer-events: none; max-width: 80%; }
   #toast.show { opacity: 1; }
@@ -136,6 +140,7 @@
     <span><span id="batt-pct">--</span> <span class="sub" id="batt-v"></span></span>
   </span>
 </div>
+<div id="estop">E-STOP<span>Base and arm power are cut. Release the button, then switch the arms back on (Settings → Arms).</span></div>
 <div id="tabs">
   <button data-tab="status" class="active">Status</button>
   <button data-tab="settings">Settings</button>
@@ -234,6 +239,7 @@ function render() {
   $("#time").textContent = S.time;
   const slam = S.procs.slam, nav = S.procs.nav;
   $("#state").textContent = [slam.running ? `${slam.mode} · ${slam.map}` : "SLAM off", nav.running ? `Nav ${S.nav}` : "Nav off"].join("  ·  ");
+  $("#estop").classList.toggle("show", !!S.estop);
   renderBattery(); renderWifiChip(); renderSystem(); renderNodes(); renderArms(); renderWifi(); renderRemote();
 }
 

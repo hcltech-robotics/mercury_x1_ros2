@@ -62,10 +62,15 @@ if [ "$NAV" = true ]; then
   if pgrep -x bt_navigator >/dev/null; then
     echo "Nav2 already running"
   else
-    # Nav2's costmaps need map -> odom: start it once RTAB-Map publishes its first map
-    wait_for 120 "the first SLAM map" sh -c "curl -s -m 2 '$PAGE/map.json' | grep -q width"
-    echo "Nav2"
-    api nav
+    # Nav2's costmaps need map -> odom: start it once RTAB-Map publishes its first map. That can take
+    # long (no odometry while the E-stop is pressed), so wait in the background: the unit must not
+    # fail on it (systemd would stop the whole stack)
+    (
+      if wait_for 7200 "the first SLAM map" sh -c "curl -s -m 2 '$PAGE/map.json' | grep -q width"; then
+        pgrep -x bt_navigator >/dev/null || { echo "Nav2"; api nav; }
+      fi
+    ) &
+    echo "Nav2 starts once SLAM has a map"
   fi
 fi
 echo "stack up: http://$(hostname -I | awk '{print $1}'):8080  (logs /tmp/mx1_*.log, ~/.ros/mercury_x1_web/)"

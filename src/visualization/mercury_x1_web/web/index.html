@@ -17,6 +17,7 @@
   header { height: 46px; display: flex; align-items: center; gap: 14px; padding: 0 14px;
     background: var(--panel); border-bottom: 1px solid var(--line); }
   header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  #c-estop { background: var(--bad); color: #fff; font-weight: 700; letter-spacing: .06em; }
   .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px;
     background: var(--panel2); color: var(--muted); font-size: 12px; white-space: nowrap; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
@@ -123,6 +124,7 @@
 <header>
   <h1>Mercury X1</h1>
   <span class="chip"><span class="dot" id="d-conn"></span><span id="t-conn">connecting</span></span>
+  <span class="chip hidden" id="c-estop" title="Physical E-stop pressed: base MCU and arm servo power are cut. Release the button, then switch the arms back on.">E-STOP</span>
   <span class="chip" id="c-batt"><span class="batt"><i id="batt-fill"></i></span><span id="t-batt">-- %</span></span>
   <span class="chip"><span class="dot" id="d-slam"></span><span id="t-slam">SLAM off</span></span>
   <span class="chip"><span class="dot" id="d-nav"></span><span id="t-nav">Nav off</span></span>
@@ -185,6 +187,15 @@
           <label class="switch" data-layer="occupancy" title="nvblox 2D occupancy grid from the depth camera"><input type="checkbox"><span class="track"></span>Occupancy</label>
         </div>
         <div class="muted" style="font-size:11px">Layers that are off are not streamed (no CPU / GPU cost). Local map: ~6 m around the robot.</div>
+        <h2 style="margin-top:12px">SLAM 3D map</h2>
+        <div class="row" id="slam-layers">
+          <label class="switch" data-layer="slam3d" title="The whole RTAB-Map map as a coloured 3D cloud, rebuilt from the stored RGB-D frames every 20 s (loop-closure corrected)"><input type="checkbox"><span class="track"></span>Whole map (3D)</label>
+          <span class="spacer"></span>
+          <button class="b" id="b-exp-cloud" title="Coloured point cloud of the whole map (.ply, a few seconds)">Export cloud</button>
+          <button class="b" id="b-exp-mesh" title="Textured mesh of the whole map (.obj + texture, zipped; about a minute)">Export mesh</button>
+        </div>
+        <div class="muted" style="font-size:11px" id="exp3d-msg"></div>
+        <div id="exp3d-files" style="font-size:12px"></div>
       </section>
       <section>
         <h2>Waypoints</h2>
@@ -372,8 +383,16 @@ function onStatus() {
   setFreeSwitch(armsList.some((a) => a.freedrive));
   setHoldSwitch(s.head_hold !== false);
   if (s.viz_layers && Date.now() > layersUntil) {
-    for (const el of document.querySelectorAll("#nvblox-layers [data-layer]"))
+    for (const el of document.querySelectorAll("#nvblox-layers [data-layer], #slam-layers [data-layer]"))
       el.querySelector("input").checked = s.viz_layers.nvblox.includes(el.dataset.layer);
+  }
+  $("#c-estop").classList.toggle("hidden", !s.estop);
+  if (s.export3d) {
+    const e = s.export3d;
+    $("#b-exp-cloud").disabled = $("#b-exp-mesh").disabled = !!e.busy;
+    $("#exp3d-msg").textContent = e.busy ? `${e.busy}…` : e.message;
+    const h = e.files.map((f) => `<div><a href="/exports/${encodeURIComponent(f.name)}" download>${f.name}</a> <span class="muted">${f.size_mb} MB · ${f.time}</span></div>`).join("");
+    if (h !== $("#exp3d-files")._h) { $("#exp3d-files").innerHTML = h; $("#exp3d-files")._h = h; }
   }
   if (s.ros) {
     setLanSwitch(s.ros.network === "lan");
@@ -646,6 +665,8 @@ refreshMaps();
 $("#b-mapping").onclick = async () => { toast("starting mapping…"); await api("slam", { mode: "mapping", map: $("#mapname").value, fresh: $("#fresh").checked }); view.fitted = false; refreshMaps(); };
 $("#b-localize").onclick = async () => { toast("starting localization…"); await api("slam", { mode: "localization", map: $("#mapname").value }); view.fitted = false; };
 $("#b-slamstop").onclick = async () => { toast("stopping SLAM (saving map)…"); await api("slam_stop"); toast("SLAM stopped, map saved"); refreshMaps(); };
+$("#b-exp-cloud").onclick = () => api("export3d", { kind: "cloud" });
+$("#b-exp-mesh").onclick = () => api("export3d", { kind: "mesh" });
 $("#b-export").onclick = async () => { const j = await api("export_map"); if (j && j.ok) toast(`saved ${j.file}`); };
 $("#b-nav").onclick = async () => { toast("starting Nav2…"); await api("nav"); };
 $("#b-navstop").onclick = async () => { await api("nav_stop"); toast("Nav2 stopped"); };
@@ -746,10 +767,10 @@ const setFreeSwitch = bindSwitch("#sw-free", (on) => {
 const setHoldSwitch = bindSwitch("#sw-hold", (on) => { api("head_hold", { on }); });
 // nvblox layers in the 3D view: the bridge subscribes only to the layers that are on
 let layersUntil = 0;
-for (const el of document.querySelectorAll("#nvblox-layers [data-layer]")) {
+for (const el of document.querySelectorAll("#nvblox-layers [data-layer], #slam-layers [data-layer]")) {
   el.querySelector("input").addEventListener("change", () => {
     layersUntil = Date.now() + 1500;           // keep the click until the status reports it back
-    const on = [...document.querySelectorAll("#nvblox-layers [data-layer]")]
+    const on = [...document.querySelectorAll("#nvblox-layers [data-layer], #slam-layers [data-layer]")]
       .filter((e) => e.querySelector("input").checked).map((e) => e.dataset.layer);
     api("viz_layers", { nvblox: on });
   });

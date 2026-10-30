@@ -59,6 +59,8 @@ NVBLOX_LAYERS = {
     "tsdf": (Marker, "/nvblox_node/tsdf_layer_marker", RELIABLE_1, 1.0),
     "color": (Marker, "/nvblox_node/color_layer_marker", RELIABLE_1, 1.0),
     "occupancy": (OccupancyGrid, "/nvblox_node/static_occupancy_grid", RELIABLE_1, 2.0),
+    # not nvblox: the whole RTAB-Map map as a coloured cloud (web_server re-exports it every 20 s while subscribed)
+    "slam3d": (PointCloud2, "/slam/cloud3d", LATCHED, 0.0),
 }
 DEPTH_MAX_POINTS = 40000   # the back-projected depth cloud has ~180k points
 
@@ -189,7 +191,8 @@ class RerunBridge(Node):
         # distance slice, the back-projected depth, TSDF / colour voxels, the occupancy grid
         self.nvblox_handlers = {"mesh": self._on_mesh_tile, "esdf": self._on_esdf, "depth": self._on_nvblox_depth,
                                 "tsdf": lambda m: self._on_voxels(m, "tsdf"),
-                                "color": lambda m: self._on_voxels(m, "color"), "occupancy": self._on_nvblox_occupancy}
+                                "color": lambda m: self._on_voxels(m, "color"), "occupancy": self._on_nvblox_occupancy,
+                                "slam3d": self._on_slam3d}
         self.nvblox_subs: dict = {}
         self.thr_nvblox = {k: Throttle(v[3]) for k, v in NVBLOX_LAYERS.items()}
         self.mesh_tiles: set[str] = set()          # tile ids logged, blanked when the mesh layer goes off
@@ -267,6 +270,9 @@ class RerunBridge(Node):
         self.get_logger().info(f"nvblox layers: {sorted(self.nvblox_subs) or 'none'}")
 
     def _clear_layer(self, key: str) -> None:
+        if key == "slam3d":  # static: replace with an empty cloud (re-sent, latched, on resubscribe)
+            self._log("world/slam3d", rr.Points3D(np.zeros((0, 3), np.float32)), static=True)
+            return
         if key == "mesh":   # static tiles: overwrite each with an empty mesh (the tiler resends all on resubscribe)
             for tid in self.mesh_tiles:
                 self._log(f"world/nvblox/mesh/{tid}", rr.Mesh3D(vertex_positions=np.zeros((0, 3), np.float32)),
@@ -309,6 +315,21 @@ class RerunBridge(Node):
         self._set_time(_stamp(msg))
         self._log(f"world/nvblox/{key}", rr.CoordinateFrame(msg.header.frame_id),
                rr.Boxes3D(centers=centers, half_sizes=[[h, h, h]], colors=colors, fill_mode="solid"))
+
+    def _on_slam3d(self, msg: PointCloud2) -> None:
+        """whole-map coloured cloud (map frame); static, so the viewer keeps only the latest one"""
+        offs = {f.name: f.offset for f in msg.fields}
+        n = msg.width * msg.height
+        if n == 0 or not all(k in offs for k in ("x", "y", "z")):
+            return
+        buf = np.frombuffer(msg.data, dtype=np.uint8).reshape(n, msg.point_step)
+        xyz = np.stack([buf[:, offs[k]:offs[k] + 4].copy().view(np.float32)[:, 0] for k in "xyz"], 1)
+        colors = None
+        if "rgb" in offs:
+            packed = buf[:, offs["rgb"]:offs["rgb"] + 4].copy().view(np.uint32)[:, 0]
+            colors = np.stack([(packed >> 16) & 255, (packed >> 8) & 255, packed & 255], 1).astype(np.uint8)
+        self._log("world/slam3d", rr.CoordinateFrame(msg.header.frame_id or "map"),
+                  rr.Points3D(xyz, radii=0.015, colors=colors), static=True)
 
     def _on_nvblox_occupancy(self, msg: OccupancyGrid) -> None:
         """nvblox' own 2D occupancy (from the depth camera), drawn just above the floor"""
