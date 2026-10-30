@@ -19,8 +19,8 @@
   /* header groups: Robot / Navigation / System, each chip = state-coloured icon + text */
   .grp { display: flex; align-items: center; gap: 4px; padding: 3px 6px 3px 8px; border: 1px solid var(--line);
     border-radius: 10px; background: #191c21; }
-  .glbl { font-size: 9px; font-weight: 700; letter-spacing: .9px; text-transform: uppercase; color: #6c7380;
-    margin-right: 2px; writing-mode: vertical-rl; transform: rotate(180deg); line-height: 1; }
+  .glbl { font-size: 10px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; color: #6c7380;
+    margin: 0 3px 0 1px; line-height: 1; }
   .ic { display: inline-flex; color: var(--muted); }
   .ic svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .ic.ok { color: var(--ok); } .ic.warn { color: var(--warn); } .ic.bad { color: var(--bad); }
@@ -30,6 +30,7 @@
   #live.bad { color: var(--bad); border-color: #7a2b36; }
   #live .ic { color: inherit; } #live .ic svg { transition: transform .12s; } #live.beat .ic svg { transform: scale(1.35); }
   header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  header h1, #live, #drive, #estop, .grp, .chip { white-space: nowrap; flex-shrink: 0; }
   #c-estop { background: var(--bad); color: #fff; font-weight: 700; letter-spacing: .06em; }
   .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px;
     background: var(--panel2); color: var(--text); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
