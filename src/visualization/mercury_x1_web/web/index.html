@@ -345,6 +345,8 @@ function onStatus() {
   renderBattery(s);
   renderSys(s.system);
   const slam = s.procs.slam, nav = s.procs.nav;
+  const headLocked = slam.running && slam.mode === "mapping";   // head is held level while mapping
+  for (const id of ["neck", "jaw"]) { $("#" + id).disabled = headLocked; $("#" + id).title = headLocked ? "held level while mapping" : ""; }
   setDot("slam", slam.running ? "ok" : "", slam.running ? `${slam.mode} · ${slam.map}` : "SLAM off");
   setDot("nav", nav.running ? (s.nav.state === "navigating" ? "warn" : "ok") : "", nav.running ? `Nav ${s.nav.state}` : "Nav off");
   const arms = Object.values(s.arms || {});

@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Mercury X1 head</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231d2026'/%3E%3Cline x1='32' y1='7' x2='32' y2='16' stroke='%234cc2ff' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='32' cy='7' r='4' fill='%234cc2ff'/%3E%3Crect x='11' y='16' width='42' height='30' rx='9' fill='%234cc2ff'/%3E%3Ccircle cx='23.5' cy='31' r='5' fill='%231d2026'/%3E%3Ccircle cx='40.5' cy='31' r='5' fill='%231d2026'/%3E%3Crect x='19' y='51' width='26' height='6' rx='3' fill='%233ddc84'/%3E%3C/svg%3E">
+<!-- Head display (1280x720 touch panel, kiosk browser). Served by web_server on :8081; status arrives
+     once a second over /ws, actions go to the same /api as the control page. No external resources.
+     The kiosk renders on the CPU: no CSS transitions / shadows on things that update every second. -->
+<style>
+  :root {
+    --bg: #101216; --panel: #1a1d23; --panel2: #242830; --line: #323743; --text: #eef0f3; --muted: #959cab;
+    --accent: #4cc2ff; --ok: #3ddc84; --warn: #ffb020; --bad: #ff5468; --off: #3a3f4b;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
+    font: 18px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; user-select: none; -webkit-user-select: none; }
+  button { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 12px;
+    min-height: 56px; padding: 0 22px; cursor: pointer; }
+  button:active { filter: brightness(1.3); }
+  button:disabled { opacity: .4; }
+  button.primary { background: #134a66; border-color: var(--accent); }
+  button.on { background: #1f5a3a; border-color: var(--ok); }
+
+  /* status bar */
+  #bar { height: 64px; display: flex; align-items: center; gap: 22px; padding: 0 22px; background: var(--panel);
+    border-bottom: 1px solid var(--line); }
+  #bar .name { font-weight: 700; font-size: 22px; }
+  #bar .time { color: var(--muted); font-variant-numeric: tabular-nums; }
+  #bar .spacer { flex: 1; }
+  .chip { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+  .chip .sub { color: var(--muted); font-size: 15px; }
+  #conn-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--bad); }
+  #conn-dot.ok { background: var(--ok); }
+
+  /* tabs */
+  #tabs { display: flex; gap: 0; height: 64px; border-bottom: 1px solid var(--line); }
+  #tabs button { flex: 1; border: 0; border-radius: 0; background: transparent; color: var(--muted); font-size: 20px;
+    min-height: 64px; border-bottom: 3px solid transparent; }
+  #tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+  .page { display: none; height: calc(100% - 128px); padding: 18px 22px; overflow-y: auto; }
+  .page.active { display: grid; }
+  #status { grid-template-columns: 420px 1fr; gap: 18px; align-content: start; }
+  #settings { grid-template-columns: 1fr 1fr; gap: 18px; align-content: start; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px 18px; }
+  .card h2 { margin: 0 0 12px; font-size: 14px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0; }
+  .muted { color: var(--muted); }
+  .small { font-size: 15px; }
+
+  /* system */
+  .meter { display: grid; grid-template-columns: 56px 1fr 118px; align-items: center; gap: 12px; margin: 10px 0; }
+  .meter .lbl { color: var(--muted); }
+  .meter .val { text-align: right; font-variant-numeric: tabular-nums; }
+  .bar { height: 14px; background: var(--panel2); border-radius: 7px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--ok); }
+  #cores { display: flex; gap: 10px; align-items: flex-end; height: 92px; margin: 6px 0 4px 68px; }
+  .core { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); }
+  .core .col { width: 30px; height: 64px; background: var(--panel2); border-radius: 6px; display: flex; align-items: flex-end; overflow: hidden; }
+  .core .col i { display: block; width: 100%; background: var(--ok); }
+  .temps { display: flex; gap: 22px; margin-top: 14px; font-variant-numeric: tabular-nums; }
+  .temps b { font-weight: 600; }
+
+  /* node bubbles */
+  .group { margin: 2px 0 10px; }
+  .group .gname { color: var(--muted); font-size: 14px; margin-bottom: 6px; }
+  .bubbles { display: flex; flex-wrap: wrap; gap: 6px; }
+  .bubble { display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: 999px; font-size: 14px;
+    background: var(--panel2); border: 1px solid var(--line); color: var(--muted); }
+  .bubble::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--off); }
+  .bubble.up { color: var(--text); border-color: #2d6b48; background: #17301f; }
+  .bubble.up::before { background: var(--ok); }
+  .bubble.down { border-style: dashed; }
+  .bubble.down.need { color: #ffb3bd; border-color: #6b2d36; }
+  .bubble.down.need::before { background: var(--bad); }
+
+  /* switches */
+  .switch { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 64px; }
+  .switch .track { width: 76px; height: 42px; border-radius: 21px; background: var(--off); position: relative; transition: background .2s; flex: none; }
+  .switch .track::after { content: ""; position: absolute; top: 4px; left: 4px; width: 34px; height: 34px; border-radius: 50%;
+    background: #cfd3da; transition: left .2s; }
+  .switch.checked .track { background: #2f8f5a; }
+  .switch.checked.warn .track { background: #a8720f; }
+  .switch.checked .track::after { left: 38px; background: #fff; }
+  .switch.busy { opacity: .5; }
+
+  /* led */
+  #swatches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+  #swatches button { height: 64px; border-radius: 14px; border: 2px solid transparent; }
+  #swatches button.sel { border-color: #fff; }
+
+  /* lists (wifi networks, remotes) */
+  .list { display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto; margin-top: 10px; }
+  .item { display: flex; align-items: center; gap: 14px; min-height: 60px; padding: 0 16px; border-radius: 12px;
+    background: var(--panel2); border: 1px solid var(--line); }
+  .item.active { border-color: var(--ok); }
+  .item .grow { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tag { font-size: 13px; color: var(--muted); }
+
+  /* password dialog + on-screen keyboard */
+  #dlg { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; align-items: flex-end; justify-content: center; }
+  #dlg.show { display: flex; }
+  #dlg .box { width: 100%; background: var(--panel); border-top: 1px solid var(--line); padding: 16px 22px 18px; }
+  #pw { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  #pw-field { flex: 1; min-height: 56px; display: flex; align-items: center; padding: 0 16px; border-radius: 12px;
+    background: var(--bg); border: 1px solid var(--accent); font-size: 22px; letter-spacing: .04em; overflow: hidden; }
+  #kbd { display: flex; flex-direction: column; gap: 8px; }
+  #kbd .krow { display: flex; gap: 8px; justify-content: center; }
+  #kbd button { min-width: 0; flex: 1; max-width: 104px; min-height: 58px; padding: 0; font-size: 22px; }
+  #kbd button.wide { max-width: 200px; flex: 2; font-size: 17px; }
+  #kbd button.space { max-width: 520px; flex: 6; }
+
+  #toast { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); background: #000c; border: 1px solid var(--line);
+    padding: 14px 22px; border-radius: 12px; opacity: 0; transition: opacity .3s; pointer-events: none; max-width: 80%; }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <span class="name">Mercury X1</span>
+  <span class="time" id="time">--:--</span>
+  <span class="chip"><span id="conn-dot" title="link to the robot"></span><span class="sub" id="state">connecting…</span></span>
+  <span class="spacer"></span>
+  <span class="chip" id="wifi-chip">
+    <svg width="30" height="24" viewBox="0 0 30 24" id="wifi-icon"></svg>
+    <span><span id="wifi-ssid">—</span> <span class="sub" id="wifi-sub"></span></span>
+  </span>
+  <span class="chip" id="batt-chip">
+    <svg width="46" height="24" viewBox="0 0 46 24">
+      <rect x="1" y="2" width="38" height="20" rx="4" fill="none" stroke="#cfd3da" stroke-width="2"/>
+      <rect x="40" y="8" width="4" height="8" rx="1" fill="#cfd3da"/>
+      <rect id="batt-fill" x="4" y="5" width="0" height="14" rx="2" fill="#3ddc84"/>
+      <path id="batt-bolt" d="M22 3 L14 13 H19 L16 21 L25 10 H20 Z" fill="#ffd400" stroke="#101216" stroke-width="1" visibility="hidden"/>
+    </svg>
+    <span><span id="batt-pct">--</span> <span class="sub" id="batt-v"></span></span>
+  </span>
+</div>
+<div id="tabs">
+  <button data-tab="status" class="active">Status</button>
+  <button data-tab="settings">Settings</button>
+</div>
+
+<div class="page active" id="status">
+  <div class="card">
+    <h2>System</h2>
+    <div class="meter"><span class="lbl">CPU</span><div class="bar"><i id="cpu-bar"></i></div><span class="val" id="cpu-val">—</span></div>
+    <div id="cores"></div>
+    <div class="meter"><span class="lbl">GPU</span><div class="bar"><i id="gpu-bar"></i></div><span class="val" id="gpu-val">—</span></div>
+    <div class="meter"><span class="lbl">RAM</span><div class="bar"><i id="ram-bar"></i></div><span class="val" id="ram-val">—</span></div>
+    <div class="temps"><span>CPU <b id="t-cpu">—</b></span><span>GPU <b id="t-gpu">—</b></span><span>Junction <b id="t-tj">—</b></span></div>
+    <div class="row small muted" id="sys-extra" style="margin-top:14px"></div>
+  </div>
+  <div class="card">
+    <h2>ROS 2 nodes <span id="node-count" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
+    <div id="nodes"></div>
+  </div>
+</div>
+
+<div class="page" id="settings">
+  <div class="card">
+    <h2>Wi-Fi</h2>
+    <div class="row"><span class="grow" id="w-current">—</span></div>
+    <div class="row"><button id="w-scan" class="primary">Scan</button><span class="muted small" id="w-msg"></span></div>
+    <div class="list" id="w-list"></div>
+  </div>
+  <div class="card">
+    <h2>Arms</h2>
+    <div class="switch" id="sw-arms"><span>Arm power</span><span class="track"></span></div>
+    <div class="switch warn" id="sw-free"><span>Freedrive <span class="muted small">(move the arms by hand)</span></span><span class="track"></span></div>
+    <div class="muted small" id="arms-info"></div>
+  </div>
+  <div class="card">
+    <h2>LED</h2>
+    <div id="swatches"></div>
+  </div>
+  <div class="card">
+    <h2>Unitree remote</h2>
+    <div class="row"><span id="r-state" class="grow">—</span></div>
+    <div class="row">
+      <button id="r-scan" class="primary">Scan</button>
+      <button id="r-disconnect">Disconnect</button>
+      <button id="r-auto">Autoconnect</button>
+    </div>
+    <div class="list" id="r-list"></div>
+  </div>
+</div>
+
+<div id="dlg">
+  <div class="box">
+    <div class="row" style="margin-top:0"><b id="dlg-title">Password</b><span class="muted small" id="dlg-sub"></span></div>
+    <div id="pw"><div id="pw-field"></div>
+      <button id="pw-show">Show</button><button id="pw-cancel">Cancel</button><button id="pw-ok" class="primary">Connect</button></div>
+    <div id="kbd"></div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const esc = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+let S = null;
+const toast = (t) => { const e = $("#toast"); e.textContent = t; e.classList.add("show"); clearTimeout(e._t); e._t = setTimeout(() => e.classList.remove("show"), 3000); };
+async function api(action, body = {}) {
+  try {
+    const r = await fetch(`/api/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!j.ok) toast(j.error || `${action} failed`);
+    return j;
+  } catch (e) { toast(`${action}: ${e}`); }
+}
+document.addEventListener("contextmenu", (e) => e.preventDefault());
+
+// ---- tabs
+for (const b of document.querySelectorAll("#tabs button")) b.onclick = () => {
+  document.querySelectorAll("#tabs button").forEach((x) => x.classList.toggle("active", x === b));
+  document.querySelectorAll(".page").forEach((p) => p.classList.toggle("active", p.id === b.dataset.tab));
+};
+
+// ---- status socket (1 Hz), reconnects forever
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onmessage = (m) => { S = JSON.parse(m.data); $("#conn-dot").classList.add("ok"); render(); };
+  ws.onclose = () => { $("#conn-dot").classList.remove("ok"); $("#state").textContent = "no link to the robot"; setTimeout(connect, 2000); };
+}
+connect();
+
+const loadColor = (p) => p > 85 ? "var(--bad)" : p > 60 ? "var(--warn)" : "var(--ok)";
+const tempColor = (t) => t >= 90 ? "var(--bad)" : t >= 75 ? "var(--warn)" : "var(--text)";
+function setBar(id, pct) { const e = $(id); e.style.width = `${Math.max(0, Math.min(100, pct || 0))}%`; e.style.background = loadColor(pct || 0); }
+
+function render() {
+  $("#time").textContent = S.time;
+  const slam = S.procs.slam, nav = S.procs.nav;
+  $("#state").textContent = [slam.running ? `${slam.mode} · ${slam.map}` : "SLAM off", nav.running ? `Nav ${S.nav}` : "Nav off"].join("  ·  ");
+  renderBattery(); renderWifiChip(); renderSystem(); renderNodes(); renderArms(); renderWifi(); renderRemote();
+}
+
+function renderBattery() {
+  const p = S.battery_pct;
+  const w = p == null ? 0 : Math.max(0, Math.min(100, p)) / 100 * 32;
+  $("#batt-fill").setAttribute("width", w.toFixed(1));
+  $("#batt-fill").setAttribute("fill", p == null ? "#959cab" : p > 30 ? "#3ddc84" : p > 15 ? "#ffb020" : "#ff5468");
+  $("#batt-bolt").setAttribute("visibility", S.charge === "charging" ? "visible" : "hidden");
+  $("#batt-pct").textContent = p == null ? "--" : `${Math.round(p)} %`;
+  $("#batt-v").textContent = S.battery == null ? "" : `${S.battery.toFixed(1)} V`;
+}
+
+function wifiBars(signal, connected) {
+  const n = !connected ? 0 : signal >= 75 ? 4 : signal >= 50 ? 3 : signal >= 25 ? 2 : 1;
+  return [0, 1, 2, 3].map((i) => `<rect x="${2 + i * 7}" y="${18 - i * 5}" width="5" height="${4 + i * 5}" rx="1" fill="${i < n ? "#eef0f3" : "#3a3f4b"}"/>`).join("");
+}
+function renderWifiChip() {
+  const w = S.wifi;
+  $("#wifi-icon").innerHTML = wifiBars(w.signal || 0, w.connected);
+  $("#wifi-ssid").textContent = w.connected ? w.ssid : "Wi-Fi off";
+  $("#wifi-sub").textContent = w.connected ? `${w.signal} %${w.ip ? " · " + w.ip : ""}` : "";
+}
+
+function renderSystem() {
+  const y = S.system || {};
+  if (y.cpu == null) return;
+  setBar("#cpu-bar", y.cpu); $("#cpu-val").textContent = `${y.cpu.toFixed(0)} %`;
+  setBar("#gpu-bar", y.gpu); $("#gpu-val").textContent = y.gpu == null ? "—" : `${y.gpu.toFixed(0)} %`;
+  const ram = y.ram_total_mb ? 100 * y.ram_used_mb / y.ram_total_mb : 0;
+  setBar("#ram-bar", ram); $("#ram-val").textContent = y.ram_total_mb ? `${(y.ram_used_mb / 1024).toFixed(1)} / ${(y.ram_total_mb / 1024).toFixed(1)} G` : "—";
+  const cores = $("#cores");
+  if (cores.children.length !== y.cores.length) {
+    cores.innerHTML = y.cores.map((_, i) => `<div class="core"><div class="col"><i></i></div><span>${i}</span></div>`).join("");
+  }
+  y.cores.forEach((c, i) => { const bar = cores.children[i].querySelector("i"); bar.style.height = `${c || 0}%`; bar.style.background = loadColor(c || 0); });
+  const t = y.temp || {};
+  for (const [k, id] of [["cpu", "#t-cpu"], ["gpu", "#t-gpu"], ["tj", "#t-tj"]]) {
+    $(id).textContent = t[k] == null ? "—" : `${t[k].toFixed(0)} °C`; $(id).style.color = tempColor(t[k] || 0);
+  }
+  $("#sys-extra").textContent = [y.core_mhz && y.core_mhz[0] ? `CPU ${y.core_mhz[0]} MHz` : "", y.gpu_mhz ? `GPU ${y.gpu_mhz} MHz` : "",
+    S.ros ? `ROS domain ${S.ros.domain} · ${S.ros.network === "lan" ? "LAN" : "robot only"}` : ""].filter(Boolean).join("  ·  ");
+}
+
+// node groups: which nodes belong where, and which group must run for what
+const GROUPS = [
+  ["Drivers & sensors", ["mercury_base", "mercury_upper_body", "robot_state_publisher", "lslidar_driver_node", "camera", "camera_container",
+                         "bellybutton_camera", "unitree_remote"], () => true],
+  ["Perception (GPU)", ["nvblox_node", "nvblox_mesh_tiler", "cuvslam_rgbd"], () => S.procs.slam.running],
+  ["SLAM", ["rtabmap", "icp_odometry", "rgbd_sync"], () => S.procs.slam.running],
+  ["Navigation", ["controller_server", "planner_server", "bt_navigator", "behavior_server", "smoother_server", "velocity_smoother",
+                  "waypoint_follower", "lifecycle_manager_navigation", "local_costmap", "global_costmap"], () => S.procs.nav.running],
+  ["Web & viewer", ["mercury_web", "rerun_bridge", "preview_orbbec", "preview_bellybutton"], () => true],
+];
+function renderNodes() {
+  const up = new Set(S.nodes), known = new Set(GROUPS.flatMap((g) => g[1]));
+  const html = GROUPS.map(([name, list, needed]) => {
+    const need = needed();
+    return `<div class="group"><div class="gname">${esc(name)}</div><div class="bubbles">` +
+      list.map((n) => `<span class="bubble ${up.has(n) ? "up" : "down" + (need ? " need" : "")}">${esc(n)}</span>`).join("") + "</div></div>";
+  });
+  const other = S.nodes.filter((n) => !known.has(n));
+  if (other.length) html.push(`<div class="group"><div class="gname">Other</div><div class="bubbles">` +
+    other.map((n) => `<span class="bubble up">${esc(n)}</span>`).join("") + "</div></div>");
+  const h = html.join("");
+  if (h !== $("#nodes")._h) { $("#nodes").innerHTML = h; $("#nodes")._h = h; }
+  const missing = GROUPS.filter((g) => g[2]()).flatMap((g) => g[1]).filter((n) => !up.has(n)).length;
+  $("#node-count").textContent = `· ${S.nodes.length} running` + (missing ? ` · ${missing} missing` : "");
+}
+
+// ---- switches: show the robot's state; a tap asks for a change and waits up to 8 s for it to show
+function bindSwitch(el, onTap) {
+  el.addEventListener("click", async () => {
+    if (el.classList.contains("busy")) return;
+    const want = !el.classList.contains("checked");
+    if (await onTap(want) === false) return;
+    el.classList.add("busy"); el._until = Date.now() + 8000; el._want = want;
+  });
+  return (state) => {
+    if (el._until && Date.now() < el._until && state !== el._want) return;
+    el._until = 0; el.classList.remove("busy"); el.classList.toggle("checked", !!state);
+  };
+}
+const setArms = bindSwitch($("#sw-arms"), (on) => {
+  if (!on && !confirm("Power the arms off? They go limp - make sure they are supported.")) return false;
+  api("arms_power", { on });
+});
+const setFree = bindSwitch($("#sw-free"), (on) => {
+  if (on && !confirm("Freedrive: the arms can be moved by hand and may sink. Hold the arms. Continue?")) return false;
+  api("freedrive", { on });
+});
+function renderArms() {
+  const arms = Object.entries(S.arms || {});
+  setArms(arms.length > 0 && arms.every(([, a]) => a.powered));
+  setFree(arms.some(([, a]) => a.freedrive));
+  $("#arms-info").textContent = arms.length ? arms.map(([s, a]) => `${s}: ${a.connected ? (a.powered ? "powered" : "off") : "no link"}`).join("  ·  ") : "arm driver not running";
+}
+
+// ---- LED
+const COLORS = [["#ffffff", "white"], ["#ff2020", "red"], ["#ff8800", "orange"], ["#ffd400", "yellow"], ["#20e060", "green"],
+                ["#00c8ff", "cyan"], ["#2050ff", "blue"], ["#a040ff", "purple"], ["#ff40a0", "pink"], ["#000000", "off"]];
+$("#swatches").innerHTML = COLORS.map(([c, n]) => `<button data-c="${c}" title="${n}" style="background:${c === "#000000" ? "var(--panel2)" : c}">${n === "off" ? "Off" : ""}</button>`).join("");
+for (const b of document.querySelectorAll("#swatches button")) b.onclick = () => {
+  const c = b.dataset.c, rgb = [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16) / 255);
+  api("led", { r: rgb[0], g: rgb[1], b: rgb[2] });
+  document.querySelectorAll("#swatches button").forEach((x) => x.classList.toggle("sel", x === b));
+};
+
+// ---- Wi-Fi
+$("#w-scan").onclick = () => api("wifi_scan");
+function renderWifi() {
+  const w = S.wifi;
+  $("#w-current").innerHTML = w.connected ? `Connected to <b>${esc(w.ssid)}</b> <span class="muted small">· ${w.signal} % · ch ${esc(w.channel)}${w.ip ? " · " + esc(w.ip) : ""}</span>` : `<span class="muted">not connected</span>`;
+  $("#w-scan").disabled = !!w.busy;
+  $("#w-msg").textContent = w.busy ? `${w.busy}…` : w.message || (w.networks.length ? "" : "tap Scan to list networks");
+  const key = JSON.stringify([w.networks, w.ssid, w.busy]);
+  if (key === $("#w-list")._k) return;
+  $("#w-list")._k = key;
+  $("#w-list").innerHTML = w.networks.map((n, i) =>
+    `<div class="item ${n.active ? "active" : ""}" data-i="${i}">
+       <svg width="30" height="24" viewBox="0 0 30 24">${wifiBars(n.signal, true)}</svg>
+       <span class="grow">${esc(n.ssid)}</span>
+       <span class="tag">${n.active ? "connected" : n.saved ? "saved" : n.secure ? "🔒" : "open"}</span>
+     </div>`).join("");
+  for (const it of $("#w-list").querySelectorAll(".item")) it.onclick = () => {
+    const n = w.networks[+it.dataset.i];
+    if (n.active || w.busy) return;
+    if (n.secure && !n.saved) askPassword(n.ssid);
+    else if (confirm(`Connect to ${n.ssid}?\nThe robot leaves its current network; the control page moves with it.`)) api("wifi_connect", { ssid: n.ssid });
+  };
+}
+
+// password entry with an on-screen keyboard
+let pw = "", pwShow = false, kbdMode = "lower", pwSsid = "";
+const KEYS = {
+  lower: ["1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm"],
+  upper: ["1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"],
+  sym: ["!@#$%^&*()", "-_=+[]{};:", "'\"\\|,.<>/?", "`~ "],
+};
+function drawKbd() {
+  const rows = KEYS[kbdMode].map((r, i) => {
+    let keys = [...r].map((k) => `<button data-k="${esc(k)}">${k === " " ? "␣" : esc(k)}</button>`).join("");
+    if (i === 3) keys = `<button class="wide" data-a="shift">${kbdMode === "upper" ? "abc" : "⇧ ABC"}</button>` + keys + `<button class="wide" data-a="bs">⌫</button>`;
+    return `<div class="krow">${keys}</div>`;
+  });
+  rows.push(`<div class="krow"><button class="wide" data-a="sym">${kbdMode === "sym" ? "abc" : "#+="}</button><button class="space" data-k=" ">space</button><button class="wide" data-a="clear">Clear</button></div>`);
+  $("#kbd").innerHTML = rows.join("");
+}
+function drawPw() { $("#pw-field").textContent = pwShow ? pw : "•".repeat(pw.length); $("#pw-ok").disabled = pw.length < 8; }
+$("#kbd").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.k !== undefined) pw += b.dataset.k;
+  else if (b.dataset.a === "bs") pw = pw.slice(0, -1);
+  else if (b.dataset.a === "clear") pw = "";
+  else if (b.dataset.a === "shift") { kbdMode = kbdMode === "upper" ? "lower" : "upper"; drawKbd(); }
+  else if (b.dataset.a === "sym") { kbdMode = kbdMode === "sym" ? "lower" : "sym"; drawKbd(); }
+  drawPw();
+});
+function askPassword(ssid) {
+  pw = ""; pwShow = false; kbdMode = "lower"; pwSsid = ssid;
+  $("#dlg-title").textContent = `Password for ${ssid}`;
+  $("#dlg-sub").textContent = "  (the robot leaves its current network; if this one fails it goes back)";
+  $("#pw-show").textContent = "Show";
+  drawKbd(); drawPw(); $("#dlg").classList.add("show");
+}
+$("#pw-show").onclick = () => { pwShow = !pwShow; $("#pw-show").textContent = pwShow ? "Hide" : "Show"; drawPw(); };
+$("#pw-cancel").onclick = () => { $("#dlg").classList.remove("show"); pw = ""; };
+$("#pw-ok").onclick = () => { api("wifi_connect", { ssid: pwSsid, password: pw }); $("#dlg").classList.remove("show"); pw = ""; };
+
+// ---- Unitree remote
+$("#r-scan").onclick = () => api("remote", { op: "scan" });
+$("#r-disconnect").onclick = () => api("remote", { op: "disconnect" });
+$("#r-auto").onclick = () => {
+  const r = S.remote || {}, on = !r.autoconnect;
+  api("remote", { op: "autoconnect", enabled: on, ...(on && r.saved ? { address: r.saved.address, name: r.saved.name } : {}) });
+};
+function renderRemote() {
+  const r = S.remote;
+  for (const id of ["#r-scan", "#r-disconnect", "#r-auto"]) $(id).disabled = !r;
+  if (!r) { $("#r-state").textContent = "remote node not running"; $("#r-list").innerHTML = ""; return; }
+  const busy = r.state === "scanning" || r.state === "connecting";
+  const conn = r.state === "connected" ? r.connected : null;
+  $("#r-scan").disabled = busy;
+  $("#r-disconnect").disabled = !conn && !r.autoconnect;
+  $("#r-auto").classList.toggle("on", !!r.autoconnect);
+  $("#r-auto").textContent = r.autoconnect ? "Autoconnect ✓" : "Autoconnect";
+  $("#r-state").innerHTML = conn
+    ? `<b>${esc(conn.name)}</b> <span class="muted small">· battery ${r.battery ?? "?"} % · ${r.rssi ?? "?"} dBm · ${r.drive_enabled ? (r.driving ? "DRIVING" : "drive unlocked") : "locked (Start unlocks)"}</span>`
+    : `<span class="muted">${esc(r.state)}${r.message ? " · " + esc(r.message) : ""}</span>`;
+  const devs = [...(r.devices || [])];
+  for (const d of [conn, r.saved]) if (d && d.address && !devs.find((x) => x.address === d.address)) devs.push({ address: d.address, name: d.name, rssi: null });
+  const key = JSON.stringify([devs, conn && conn.address, busy]);
+  if (key === $("#r-list")._k) return;
+  $("#r-list")._k = key;
+  $("#r-list").innerHTML = devs.length ? devs.map((d, i) =>
+    `<div class="item ${conn && conn.address === d.address ? "active" : ""}" data-i="${i}">
+       <span class="grow">${esc(d.name || "Unitree")} <span class="tag">${esc(d.address)}</span></span>
+       <span class="tag">${conn && conn.address === d.address ? "connected" : d.rssi != null ? d.rssi + " dBm" : "saved"}</span>
+     </div>`).join("") : `<div class="muted small">switch the remote on and tap Scan</div>`;
+  for (const it of $("#r-list").querySelectorAll(".item")) it.onclick = () => {
+    const d = devs[+it.dataset.i];
+    if (busy || (conn && conn.address === d.address)) return;
+    api("remote", { op: "connect", address: d.address, name: d.name || null });
+  };
+}
+</script>
+</body>
+</html>

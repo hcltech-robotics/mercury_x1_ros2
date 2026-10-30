@@ -27,8 +27,23 @@ Robot-side pip deps (user site): `rerun-sdk==0.39.0 aiohttp "pandas>=2.2,<3"` (t
 Rerun 0.39 is the newest release that supports Python 3.10 (Humble's rclpy); 0.40+ needs Python 3.11. The page
 serves the matching `@rerun-io/web-viewer` (`VIEWER_VERSION` in `web_server.py`, fetched once from jsDelivr).
 
+### Head display (:8081)
+The head panel (1280x720 HDMI + USB touch) shows a lightweight touch UI served by `web_server` on
+`http://<robot>:8081` (also usable from any browser): status bar (battery % / V / ⚡, Wi-Fi network,
+signal, IP), **Status** (CPU per core, GPU, RAM, temperatures, ROS nodes as bubbles grouped by
+subsystem, red when a needed one is missing) and **Settings** (Wi-Fi scan + connect with an on-screen
+keyboard, arm power / freedrive, LED colour, Unitree remote). Status is pushed at 1 Hz; no Rerun.
+The kiosk is `mercury-x1-head.service`: bare Xorg on tty1 + matchbox (kiosk WM) + surf (WebKitGTK),
+`scripts/head_kiosk.sh`; ~4 % of one core, ~390 MB. Needs `sudo apt install surf matchbox-window-manager`.
+Wi-Fi changes run `sudo -n nmcli` (NetworkManager falls back to the previous network if the new one fails).
+
+### Mapping
+Starting **mapping** levels the head first (neck 0°, jaw −5.7° = camera horizontal) and the page refuses
+head moves while mapping runs; RTAB-Map's 2D grid uses the lidar **and** the depth camera
+(`Grid/Sensor 2`), so tables / overhangs between 6 cm and 1.4 m end up in the saved map.
+
 ### nvblox layers in the 3D view
-Page → "3D layers · nvblox": Mesh (default), ESDF slice (distance to obstacles at the costmap slice height,
+Page → "3D layers · nvblox": Mesh + Depth points (default), ESDF slice (distance to obstacles at the costmap slice height,
 what Nav2 uses), Depth points (back-projected depth, downsampled to 40k), TSDF voxels, Colour voxels,
 Occupancy. The choice is the `nvblox_layers` parameter of `rerun_bridge`, saved in
 `~/.config/mercury_x1/viz_layers.json`; layers that are off are not subscribed at all.

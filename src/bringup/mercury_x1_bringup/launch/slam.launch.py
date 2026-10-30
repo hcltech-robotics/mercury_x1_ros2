@@ -8,9 +8,11 @@ Fusion:
     odometry (guess_frame_id) -> TF odom -> odom_wheel.
   * graph: lidar ICP for registration and neighbour refinement, RGB visual words for
     loop closure and relocalization.
-  * 2D grid (/map): lidar only when nvblox runs (nvblox:=true, default) -- nvblox then handles
-    obstacles above/below the lidar plane on the GPU and feeds them to Nav2 directly. With
-    nvblox:=false the grid is built on the CPU from BOTH the lidar and the depth cloud (Grid/Sensor=2).
+  * 2D grid (/map): lidar + depth camera (Grid/Sensor=2) whenever the camera is fused, so the saved
+    map also holds what the lidar plane misses (tables, overhangs; 0.06..1.4 m). Built per map node from
+    a 4x decimated depth image, i.e. cheap. Mapping levels the head first (web_server: neck 0, camera
+    horizontal), so the depth sees the room rather than the floor. nvblox additionally feeds live 3D
+    obstacles to Nav2.
   * nvblox (mercury_x1_perception): CUDA TSDF/ESDF from the Orbbec depth+colour, posed by the
     odom TF published here; gives Nav2 its 3D-aware costmap slice and Rerun a mesh.
   * cuVSLAM (cuvslam:=true): GPU RGB-D visual odometry on /vslam/odom, aligned to odom for comparison
@@ -85,8 +87,8 @@ def _nodes(context):
         "Mem/NotLinkedNodesKept": "false", "Mem/STMSize": "30",
         "Kp/MaxFeatures": "400", "Vis/MinInliers": "15", "Vis/MaxDepth": "4.0",
         "Optimizer/Strategy": "2",        # g2o
-        # occupancy grid: lidar (+ depth on the CPU when nvblox is off)
-        "Grid/Sensor": "2" if (use_camera and not use_nvblox) else "0",
+        # occupancy grid: lidar + depth camera
+        "Grid/Sensor": "2" if use_camera else "0",
         "Grid/CellSize": "0.05", "Grid/RangeMax": "5.0", "Grid/RayTracing": "true",
         "Grid/3D": "false", "Grid/NormalsSegmentation": "false",
         "Grid/MaxGroundHeight": "0.06", "Grid/MaxObstacleHeight": "1.4",

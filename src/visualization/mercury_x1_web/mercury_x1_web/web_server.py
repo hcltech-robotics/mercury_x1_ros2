@@ -42,6 +42,7 @@ from tf2_msgs.msg import TFMessage
 
 from .pose_chain import PoseChain
 from .sysstats import SysStats
+from .wifi import Wifi
 from std_msgs.msg import ColorRGBA, String
 from std_srvs.srv import SetBool, Trigger
 
@@ -54,6 +55,9 @@ CONF_DIR = os.path.expanduser("~/.config/mercury_x1")
 ROS_NETWORK_FILE = os.path.join(CONF_DIR, "ros_network")   # read by scripts/ros_env.sh at stack start
 VIZ_LAYERS_FILE = os.path.join(CONF_DIR, "viz_layers.json")  # read by rerun_bridge at start
 NVBLOX_LAYERS = ("mesh", "esdf", "depth", "tsdf", "color", "occupancy")   # = rerun_bridge.NVBLOX_LAYERS
+DEFAULT_VIZ_LAYERS = ["mesh", "depth"]
+# head pose while mapping: neck straight, Orbbec level (its pitch = -jaw - 5.7 deg, see the URDF notes)
+MAPPING_HEAD = {"head": 0.0, "eye": -5.7}
 VIEWER_CACHE = os.path.expanduser(f"~/.cache/mercury_x1_web/rerun-web-viewer/{VIEWER_VERSION}")
 
 
@@ -163,6 +167,17 @@ class WebNode(Node):
             "bridge_params": self.create_client(SetParameters, "/rerun_bridge/set_parameters"),
         }
         self.create_timer(0.05, self._run_jobs)
+        self.node_names: list[str] = []
+        self.create_timer(2.0, self._refresh_nodes)
+
+    def _refresh_nodes(self) -> None:
+        """running ROS nodes for the head display (helper nodes of tf listeners / launch filtered out)"""
+        names = set()
+        for name, ns in self.get_node_names_and_namespaces():
+            if name.startswith(("transform_listener_impl", "launch_ros_", "_ros2cli")) or name.endswith("_rclcpp_node"):
+                continue
+            names.add(name)
+        self.node_names = sorted(names)
 
     # -- run a callable on the ROS thread ------------------------------------------------------
     def post(self, fn) -> None:
@@ -396,7 +411,7 @@ class WebNode(Node):
 
 # ---------------------------------------------------------------------------------------------
 class App:
-    def __init__(self, node: WebNode, port: int, grpc_port: int, viewer_port: int):
+    def __init__(self, node: WebNode, port: int, grpc_port: int, viewer_port: int, head_port: int = 8081):
         self.node, self.port = node, port
         self.grpc_port, self.viewer_port = grpc_port, viewer_port
         self.sup = Supervisor(os.path.expanduser("~/.ros/mercury_x1_web"))
@@ -405,6 +420,8 @@ class App:
         self.static_dir = os.path.join(get_package_share_directory("mercury_x1_web"), "web")
         self.viewer_ready = all(os.path.exists(os.path.join(VIEWER_CACHE, f)) for f in VIEWER_FILES)
         self.viz_layers = self.load_viz_layers()
+        self.wifi = Wifi()
+        self.head_port = head_port
         self.sysstats = SysStats()           # CPU / GPU load and temperatures for the status page
         node.waypoints_changed = self.save_waypoints
         os.makedirs(MAPS_DIR, exist_ok=True)
@@ -462,6 +479,29 @@ class App:
     async def index(self, req):
         return web.FileResponse(os.path.join(self.static_dir, "index.html"))
 
+    # -- head display (:8081): lightweight touch UI, no 3D -------------------------------------
+    async def head_index(self, req):
+        return web.FileResponse(os.path.join(self.static_dir, "head.html"))
+
+    def head_status(self) -> dict:
+        st = self.node.status()
+        return {"battery": st["battery"], "battery_pct": st["battery_pct"], "charge": st["charge"],
+                "base": st["base"], "arms": st["arms"], "remote": st["remote"], "nav": st["nav"]["state"],
+                "procs": self.sup.status(), "map_name": self.map_name, "system": self.sysstats.snapshot(),
+                "nodes": self.node.node_names, "wifi": self.wifi.snapshot(), "ros": self.ros_network(),
+                "time": time.strftime("%H:%M")}
+
+    async def head_ws(self, req):
+        ws = web.WebSocketResponse(heartbeat=10)
+        await ws.prepare(req)
+        try:
+            while not ws.closed:
+                await ws.send_str(json.dumps(self.head_status()))
+                await asyncio.sleep(1.0)      # 1 Hz: the panel only shows slow-changing state
+        except (ConnectionResetError, asyncio.CancelledError):
+            pass
+        return ws
+
     async def config(self, req):
         return web.json_response({"grpc_port": self.grpc_port, "viewer_port": self.viewer_port,
                                   "viewer_local": self.viewer_ready, "viewer_version": VIEWER_VERSION})
@@ -487,7 +527,16 @@ class App:
             with open(VIZ_LAYERS_FILE) as f:
                 return [k for k in json.load(f).get("nvblox", []) if k in NVBLOX_LAYERS]
         except (OSError, ValueError, AttributeError):
-            return ["mesh"]
+            return list(DEFAULT_VIZ_LAYERS)
+
+    def mapping(self) -> bool:
+        st = self.sup.status()["slam"]
+        return st["running"] and st.get("mode") == "mapping"
+
+    def level_head(self) -> None:
+        jc = JointCommand(name=list(MAPPING_HEAD), position=[math.radians(v) for v in MAPPING_HEAD.values()],
+                          speed=30)
+        self.node.post(lambda: self.node.pub_joint.publish(jc))
 
     def ros_network(self) -> dict:
         """network = what this stack runs with, configured = what the next (re)start uses"""
@@ -562,6 +611,14 @@ class App:
             n.post(lambda: n.run_waypoints(bool(body.get("loop", False))))
         elif action == "initialpose":
             n.post(lambda: n.set_initial_pose(body["x"], body["y"], body.get("yaw", 0.0)))
+        elif action == "wifi_scan":       # results arrive in the head status (wifi.networks)
+            threading.Thread(target=self.wifi.scan, daemon=True).start()
+        elif action == "wifi_connect":    # {"ssid", "password"?}; progress / result in wifi.busy / wifi.message
+            ssid = str(body.get("ssid", "")).strip()
+            if not ssid or self.wifi.busy:
+                return web.json_response({"ok": False, "error": "no network given" if not ssid else self.wifi.busy})
+            threading.Thread(target=self.wifi.connect, args=(ssid, str(body.get("password", ""))),
+                             daemon=True).start()
         elif action == "viz_layers":     # {"nvblox": [...]} -> rerun_bridge parameter, saved for restarts
             layers = [k for k in NVBLOX_LAYERS if k in body.get("nvblox", [])]
             self.viz_layers = layers
@@ -586,6 +643,8 @@ class App:
             c = ColorRGBA(r=float(body.get("r", 0)), g=float(body.get("g", 0)), b=float(body.get("b", 0)), a=1.0)
             n.post(lambda: n.pub_led.publish(c))
         elif action == "head":
+            if self.mapping():
+                return web.json_response({"ok": False, "error": "head is held level while mapping"})
             jc = JointCommand()
             for k in ("eye", "head"):
                 if k in body:
@@ -609,6 +668,8 @@ class App:
                 return web.json_response({"ok": False, "error": f"no map '{name}' - build it in mapping mode first"})
             self.map_name = name
             self.load_waypoints()
+            if mode == "mapping":   # the depth camera feeds the map: look straight ahead, level
+                self.level_head()
             cmd = ["ros2", "launch", "mercury_x1_bringup", "slam.launch.py", f"mode:={mode}", f"map:={name}",
                    f"fresh:={'true' if fresh else 'false'}"]
             await loop.run_in_executor(None, lambda: self.sup.start("slam", cmd, {"mode": mode, "map": name}))
@@ -647,12 +708,19 @@ class App:
         threading.Thread(target=self.fetch_viewer, daemon=True).start()
         self.load_waypoints()
 
+        head = web.Application()          # head display: same API, its own page and a 1 Hz status
+        head.router.add_get("/", self.head_index)
+        head.router.add_get("/ws", self.head_ws)
+        head.router.add_post("/api/{action}", self.api)
+        head.router.add_static("/static", self.static_dir)
+
         async def serve() -> None:
             runners = []
-            runner = web.AppRunner(app)
-            await runner.setup()
-            await web.TCPSite(runner, port=self.port).start()
-            runners.append(runner)
+            for application, port in ((app, self.port), (head, self.head_port)):
+                runner = web.AppRunner(application)
+                await runner.setup()
+                await web.TCPSite(runner, port=port).start()
+                runners.append(runner)
             stop = asyncio.Event()
             loop = asyncio.get_running_loop()
             for sig in (signal.SIGINT, signal.SIGTERM):
@@ -672,12 +740,13 @@ def main(args=None) -> None:
     port = int(node.declare_parameter("port", 8080).value)
     grpc_port = int(node.declare_parameter("grpc_port", 9876).value)
     viewer_port = int(node.declare_parameter("viewer_port", 9090).value)
+    head_port = int(node.declare_parameter("head_port", 8081).value)
     ex = rclpy.executors.SingleThreadedExecutor()   # rclpy multi-threaded spinning is CPU-heavy
     ex.add_node(node)
     threading.Thread(target=ex.spin, daemon=True).start()
-    node.get_logger().info(f"control page on http://0.0.0.0:{port}")
+    node.get_logger().info(f"control page on http://0.0.0.0:{port}, head display on :{head_port}")
     try:
-        App(node, port, grpc_port, viewer_port).run()
+        App(node, port, grpc_port, viewer_port, head_port).run()
     finally:
         ex.shutdown()
         node.destroy_node()

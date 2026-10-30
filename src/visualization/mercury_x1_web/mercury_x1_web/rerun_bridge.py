@@ -239,7 +239,7 @@ class RerunBridge(Node):
                 layers = [k for k in json.load(f).get("nvblox", []) if k in NVBLOX_LAYERS]
             return layers or [""]           # rclpy cannot infer the type of an empty list
         except (OSError, ValueError, AttributeError):
-            return ["mesh"]
+            return ["mesh", "depth"]
 
     def _on_params(self, params) -> SetParametersResult:
         for prm in params:

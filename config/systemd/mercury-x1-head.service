@@ -1,0 +1,25 @@
+# Mercury X1 head display: the head UI (http://127.0.0.1:8081, served by the stack's web_server) full screen
+# on the head panel (HDMI 1280x720 + USB touch). Bare Xorg on tty1 + surf, no desktop.
+# Install / remove with scripts/install_autostart.sh. Logs: journalctl -u mercury-x1-head
+[Unit]
+Description=Mercury X1 head display (kiosk)
+After=systemd-user-sessions.service getty@tty1.service mercury-x1.service
+Conflicts=getty@tty1.service
+
+[Service]
+User=elephant
+# a logind session on seat0 / tty1, so Xorg may open the console and the input devices
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+UtmpIdentifier=tty1
+ExecStart=/usr/bin/xinit /home/elephant/mercury_x1_ros2/scripts/head_kiosk.sh -- :0 vt1 -keeptty -nocursor -nolisten tcp
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
