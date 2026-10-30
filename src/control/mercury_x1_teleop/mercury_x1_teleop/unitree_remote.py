@@ -60,6 +60,7 @@ class UnitreeRemote(Node):
         self.message = ""
         self.devices: list[dict] = []
         self.ble_devices: dict = {}
+        self.scan_time = 0.0
         self.client: BleakClient | None = None
         self.conn = {"address": None, "name": None}
         self.rs: RemoteState | None = None
@@ -182,7 +183,7 @@ class UnitreeRemote(Node):
                 devs.append({"address": dev.address.upper(), "name": name, "rssi": adv.rssi})
                 ble[dev.address.upper()] = dev
         devs.sort(key=lambda d: -d["rssi"])
-        self.devices, self.ble_devices = devs, ble
+        self.devices, self.ble_devices, self.scan_time = devs, ble, time.monotonic()
         return devs
 
     async def _manual_scan(self) -> None:
@@ -212,8 +213,10 @@ class UnitreeRemote(Node):
         self._set("connecting", f"connecting to {name or address}")
         client = None
         try:
-            dev = self.ble_devices.get(address) or await BleakScanner.find_device_by_address(
-                address, timeout=8.0, adapter=self.adapter)
+            # a scan result is only good while BlueZ still has the device object (it drops / we remove it)
+            dev = self.ble_devices.get(address) if time.monotonic() - self.scan_time < 10.0 else None
+            if dev is None:
+                dev = await BleakScanner.find_device_by_address(address, timeout=8.0, adapter=self.adapter)
             if dev is None:
                 raise RuntimeError("not advertising - is the remote on and not paired to another robot?")
             name = name or dev.name or address
@@ -235,7 +238,10 @@ class UnitreeRemote(Node):
             return True
         except Exception as e:
             self.failures += 1
-            self._set("idle", f"connect to {address} failed: {e}")
+            self.ble_devices.pop(address, None)
+            hint = (" - the adapter must be LE-only (ControllerMode = le in /etc/bluetooth/main.conf)"
+                    if "br-connection" in str(e) else "")
+            self._set("idle", f"connect to {address} failed: {e}{hint}")
             if client is not None:
                 try:
                     await client.disconnect()
