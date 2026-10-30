@@ -39,7 +39,7 @@ from sensor_msgs.msg import BatteryState
 from tf2_msgs.msg import TFMessage
 
 from .pose_chain import PoseChain
-from std_msgs.msg import ColorRGBA
+from std_msgs.msg import ColorRGBA, String
 from std_srvs.srv import SetBool, Trigger
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
@@ -125,6 +125,7 @@ class WebNode(Node):
         self.click_mode = "waypoint"          # waypoint | goto | pose | off
         self.last_click: dict | None = None
         self.waypoints_changed = None         # set by App: persist + republish
+        self.remote: dict | None = None       # Unitree BLE remote (mercury_x1_teleop/unitree_remote)
 
         self.chain = PoseChain()
         self.create_subscription(TFMessage, "/tf", self.chain.update, 50)
@@ -140,6 +141,9 @@ class WebNode(Node):
         self.pub_wps = self.create_publisher(PoseArray, "/web/waypoints", LATCHED)
         self.pub_led = self.create_publisher(ColorRGBA, "/base/led", 10)
         self.pub_joint = self.create_publisher(JointCommand, "/upper_body/joint_command", 10)
+        self.pub_remote = self.create_publisher(String, "/remote/cmd", 10)
+        self.create_subscription(String, "/remote/status", self._on_remote, LATCHED)
+        self.create_subscription(String, "/remote/button", self._on_remote_button, 10)
         self.ac_wps = ActionClient(self, FollowWaypoints, "/follow_waypoints")
         self.ac_goal = ActionClient(self, NavigateToPose, "/navigate_to_pose")
         self.srv = {
@@ -176,6 +180,20 @@ class WebNode(Node):
     def _on_battery(self, msg: BatteryState) -> None:
         self.battery = msg.voltage
         self.battery_pct = msg.percentage * 100 if math.isfinite(msg.percentage) else float("nan")
+
+    def _on_remote(self, msg: String) -> None:
+        try:
+            st = json.loads(msg.data)
+        except ValueError:
+            return
+        was_driving = bool(self.remote and self.remote.get("driving"))
+        self.remote = st
+        if st.get("driving") and not was_driving and self.nav["state"] == "navigating":
+            self.cancel(stop_base=False)        # driving with the remote overrides navigation
+
+    def _on_remote_button(self, msg: String) -> None:
+        if msg.data == "B":                     # B on the remote = STOP (cancel navigation, stop the base)
+            self.cancel()
 
     def _on_plan(self, msg: Path) -> None:
         self.plan = [[round(p.pose.position.x, 3), round(p.pose.position.y, 3)] for p in msg.poses[::3]]
@@ -341,6 +359,7 @@ class WebNode(Node):
             "waypoints": self.waypoints,
             "click_mode": self.click_mode,
             "last_click": self.last_click,
+            "remote": self.remote,
         }
 
 
@@ -507,6 +526,10 @@ class App:
             n.post(lambda: n.run_waypoints(bool(body.get("loop", False))))
         elif action == "initialpose":
             n.post(lambda: n.set_initial_pose(body["x"], body["y"], body.get("yaw", 0.0)))
+        elif action == "remote":      # {"op": scan|connect|disconnect|autoconnect|forget, ...} -> unitree_remote
+            if body.get("op") not in ("scan", "connect", "disconnect", "autoconnect", "forget"):
+                return web.json_response({"ok": False, "error": "bad remote op"})
+            n.post(lambda: n.pub_remote.publish(String(data=json.dumps(body))))
         elif action == "led":
             c = ColorRGBA(r=float(body.get("r", 0)), g=float(body.get("g", 0)), b=float(body.get("b", 0)), a=1.0)
             n.post(lambda: n.pub_led.publish(c))

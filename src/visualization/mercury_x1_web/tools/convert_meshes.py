@@ -5,6 +5,7 @@ Each GLB is expressed in its link frame (visual origin baked in) and simplified 
 the robot model light enough to stream to a browser.
 
   python convert_meshes.py <urdf> <mesh_dir_for_package://mercury_robot_urdf> <out_dir> [--faces 15000]
+  python convert_meshes.py --recolor <out_dir> [--color 222,225,230]   # repaint existing GLBs only
 Needs: trimesh pycollada fast-simplification lxml networkx (run it off-robot, outputs are committed).
 """
 import argparse
@@ -19,18 +20,28 @@ import trimesh
 import trimesh.transformations as tf
 
 
-# The vendor COLLADA files carry no usable materials; give the model a readable palette.
-PALETTE = {"base_link": [70, 74, 82], "link_body": [214, 217, 222], "link_head": [236, 238, 241],
-           "link_eye": [40, 42, 46]}
-ARM = [[200, 204, 210], [120, 126, 134]]
+# The vendor COLLADA files carry no usable materials: paint the whole robot one body colour
+# (per-link palettes made the base, torso and arm links look like separate objects).
+BODY_COLOR = [222, 225, 230]
 
 
-def link_color(name, fallback):
-    if name in PALETTE:
-        return PALETTE[name]
-    if name.startswith("link") and name[4:5].isdigit():
-        return ARM[int(name[4]) % 2]
-    return fallback or [200, 200, 200]
+def recolor(out_dir: str, color: list[int]) -> None:
+    """Repaint the GLBs in out_dir (geometry and normals untouched) and update index.json."""
+    rgba = np.array(color + [255], dtype=np.uint8)
+    with open(os.path.join(out_dir, "index.json")) as f:
+        index = json.load(f)
+    for name, info in index.items():
+        for fname in info.get("files") or [info["file"]]:
+            path = os.path.join(out_dir, fname)
+            mesh = trimesh.load(path, force="mesh", process=False)
+            normals = np.asarray(mesh.vertex_normals)
+            part = trimesh.Trimesh(vertices=mesh.vertices, faces=mesh.faces, vertex_normals=normals, process=False)
+            part.visual = trimesh.visual.ColorVisuals(part, vertex_colors=np.tile(rgba, (len(part.vertices), 1)))
+            part.export(path, include_normals=True)
+        info["color"] = color
+        print(f"{name:12s} -> {color}")
+    with open(os.path.join(out_dir, "index.json"), "w") as f:
+        json.dump(index, f, indent=1)
 
 
 def rpy_matrix(rpy):
@@ -40,14 +51,22 @@ def rpy_matrix(rpy):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("urdf")
-    ap.add_argument("package_root", help="directory that package://mercury_robot_urdf maps to")
-    ap.add_argument("out")
+    ap.add_argument("--recolor", metavar="OUT_DIR", help="only repaint the GLBs already in OUT_DIR")
+    ap.add_argument("--color", default=",".join(map(str, BODY_COLOR)), help="body colour r,g,b")
+    ap.add_argument("urdf", nargs="?")
+    ap.add_argument("package_root", nargs="?", help="directory that package://mercury_robot_urdf maps to")
+    ap.add_argument("out", nargs="?")
     ap.add_argument("--faces", type=int, default=150000, help="max faces per link")
     ap.add_argument("--crease", type=float, default=30.0, help="normals are smooth across edges flatter than this [deg]")
     ap.add_argument("--chunk", type=int, default=40000,
                     help="max faces per GLB: Rerun 0.32's gRPC server blocks forever on single messages of a few MB")
     a = ap.parse_args()
+    body = [int(v) for v in a.color.split(",")]
+    if a.recolor:
+        recolor(a.recolor, body)
+        return
+    if not (a.urdf and a.package_root and a.out):
+        ap.error("urdf, package_root and out are required unless --recolor is given")
     os.makedirs(a.out, exist_ok=True)
     for old in os.listdir(a.out):
         if old.endswith(".glb"):
@@ -68,12 +87,6 @@ def main():
         rpy = [float(v) for v in (org.get("rpy", "0 0 0").split() if org is not None else [0, 0, 0])]
         scene = trimesh.load(fn, force="scene")
         mesh = scene.to_geometry() if hasattr(scene, "to_geometry") else scene.dump(concatenate=True)
-        color = None
-        try:
-            vc = mesh.visual.to_color().vertex_colors
-            color = np.median(vc[:, :3], axis=0).astype(int).tolist()
-        except Exception:
-            pass
         # trimesh ignores COLLADA <unit>; the vendor files are in millimetres
         m = re.search(r'<unit[^>]*meter="([0-9.eE+-]+)"', open(fn, errors="ignore").read(4096))
         mesh.apply_scale(float(m.group(1)) if m else 1.0)
@@ -89,7 +102,7 @@ def main():
         T = rpy_matrix(rpy)
         T[:3, 3] = xyz
         mesh.apply_transform(T)
-        color = link_color(name, color)
+        color = body
         rgba = np.array(color + [255], dtype=np.uint8)
         mesh.visual = trimesh.visual.ColorVisuals(mesh, vertex_colors=np.tile(rgba, (len(mesh.vertices), 1)))
         normals = np.asarray(mesh.vertex_normals)

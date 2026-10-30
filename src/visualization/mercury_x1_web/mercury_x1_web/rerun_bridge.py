@@ -83,8 +83,10 @@ class RerunBridge(Node):
         self.joint_tf_hz = float(p("joint_tf_rate", 5.0).value)  # robot links (joint states)
 
         rr.init("mercury_x1", recording_id="mercury_x1_live")
+        self.mesh_dir = os.path.join(get_package_share_directory("mercury_x1_web"), "meshes")
+        self.robot_parts = self._robot_parts()
         uri = rr.serve_grpc(grpc_port=grpc_port, server_memory_limit=mem,
-                            cors_allow_origin=["*"], default_blueprint=self._blueprint())
+                            cors_allow_origin=["*"], default_blueprint=self._blueprint(self.robot_parts))
         rr.serve_web_viewer(web_port=web_port, open_browser=False, connect_to=uri)
         self.get_logger().info(f"rerun gRPC {uri}, viewer http://<robot>:{web_port}")
 
@@ -135,12 +137,28 @@ class RerunBridge(Node):
         self.create_timer(0.5, self._trail_tick)
 
     # ---- setup -----------------------------------------------------------------
+    def _robot_parts(self) -> dict[str, list[str]]:
+        """link -> GLB files (one entity per file under world/robot/<link>/part<k>)."""
+        try:
+            with open(os.path.join(self.mesh_dir, "index.json")) as f:
+                index = json.load(f)
+        except OSError:
+            return {}
+        return {link: info.get("files") or [info["file"]] for link, info in index.items()}
+
     @staticmethod
-    def _blueprint():
+    def _blueprint(parts: dict[str, list[str]]):
+        # The robot is many mesh entities (one per link chunk). Make them non-pickable and let the
+        # transparent hit box on world/robot take the click: selecting world/robot highlights the
+        # whole robot as one body instead of a single link.
+        solid = rrb.EntityBehavior(interactive=False)
+        overrides = {f"world/robot/{link}/part{k}": solid for link, files in parts.items() for k in range(len(files))}
+        overrides["world/robot/base_axes"] = solid
         return rrb.Blueprint(
             rrb.Horizontal(
                 rrb.Spatial3DView(name="World", origin="/",
                                   contents=["+ /**", "- /cams/**", "- /stats/**"],
+                                  overrides=overrides,
                                   eye_controls=rrb.EyeControls3D(position=[-1.9, -1.5, 1.7],
                                                                  look_target=[0.3, 0.0, 0.5],
                                                                  eye_up=[0.0, 0.0, 1.0])),
@@ -156,18 +174,18 @@ class RerunBridge(Node):
         )
 
     def _log_robot_model(self) -> None:
-        mesh_dir = os.path.join(get_package_share_directory("mercury_x1_web"), "meshes")
-        try:
-            with open(os.path.join(mesh_dir, "index.json")) as f:
-                index = json.load(f)
-        except OSError:
+        if not self.robot_parts:
             self.get_logger().warn("no robot meshes installed")
             return
-        for link, info in index.items():
-            for k, fname in enumerate(info.get("files") or [info["file"]]):
+        for link, files in self.robot_parts.items():
+            for k, fname in enumerate(files):
                 # one GLB per message, each well under a few MB (see tools/convert_meshes.py --chunk)
-                rr.log(f"world/robot/{link}/part{k}", rr.Asset3D(path=os.path.join(mesh_dir, fname)),
+                rr.log(f"world/robot/{link}/part{k}", rr.Asset3D(path=os.path.join(self.mesh_dir, fname)),
                        rr.CoordinateFrame(link), static=True)
+        # invisible pick target for the whole robot (floor to ~1.3 m around the base, axle frame)
+        rr.log("world/robot", rr.CoordinateFrame("base_footprint"),
+               rr.Capsules3D(lengths=[0.72], radii=[0.3], translations=[[-0.15, 0.0, 0.3]],
+                             colors=[[255, 255, 255, 0]]), static=True)
         rr.log("world/robot/base_axes", rr.TransformAxes3D(axis_length=0.3), rr.CoordinateFrame("base_footprint"),
                static=True)
 

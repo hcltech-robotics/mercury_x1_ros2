@@ -25,6 +25,8 @@ def generate_launch_description():
         DeclareLaunchArgument("cameras", default_value="true"),
         DeclareLaunchArgument("upper_body", default_value="true"),
         DeclareLaunchArgument("depth_cloud", default_value="false", description="CPU depth cloud /camera/cloud"),
+        DeclareLaunchArgument("remote", default_value="true",
+                              description="Unitree BLE remote over the built-in Bluetooth (connect from the web page)"),
 
         Node(package="mercury_x1_driver", executable="base_node", name="mercury_base",
              parameters=[drv_params, robot_params], remappings=[("odom", "wheel/odom")],
@@ -56,6 +58,11 @@ def generate_launch_description():
                          ("cloud", "/camera/cloud")],
              condition=IfCondition(PythonExpression(
                  ["'", LC("cameras"), "' == 'true' and '", LC("depth_cloud"), "' == 'true'"]))),
+
+        # Unitree BLE handheld remote -> /joy, /cmd_vel (hold L1); scan / connect / autoconnect from the web page
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(os.path.join(share("mercury_x1_teleop"), "launch", "remote.launch.py")),
+            condition=IfCondition(LC("remote"))),
 
         # bellybutton RGB camera
         Node(package="usb_cam", executable="usb_cam_node_exe", name="bellybutton_camera",

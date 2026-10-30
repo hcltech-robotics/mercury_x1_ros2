@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mercury X1 Control</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231d2026'/%3E%3Cline x1='32' y1='7' x2='32' y2='16' stroke='%234cc2ff' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='32' cy='7' r='4' fill='%234cc2ff'/%3E%3Crect x='11' y='16' width='42' height='30' rx='9' fill='%234cc2ff'/%3E%3Ccircle cx='23.5' cy='31' r='5' fill='%231d2026'/%3E%3Ccircle cx='40.5' cy='31' r='5' fill='%231d2026'/%3E%3Crect x='19' y='51' width='26' height='6' rx='3' fill='%233ddc84'/%3E%3C/svg%3E">
 <style>
   :root {
     --bg: #15171b; --panel: #1d2026; --panel2: #252931; --line: #343944; --text: #e6e8ec;
@@ -100,6 +101,7 @@
   <span class="chip"><span class="dot" id="d-slam"></span><span id="t-slam">SLAM off</span></span>
   <span class="chip"><span class="dot" id="d-nav"></span><span id="t-nav">Nav off</span></span>
   <span class="chip"><span class="dot" id="d-arms"></span><span id="t-arms">arms</span></span>
+  <span class="chip" title="Unitree BLE remote (Robot tab)"><span class="dot" id="d-remote"></span><span id="t-remote">remote</span></span>
   <span class="chip hidden" id="c-dimos" title="native dimos-viewer clients connected to ws://&lt;robot&gt;:3030/ws"><span class="dot ok"></span><span id="t-dimos">dimos-viewer</span></span>
   <span class="spacer"></span>
   <button id="drive" title="Engage keyboard driving: W/A/S/D or arrows, Shift = fast, Space = stop, Esc = release">⌨ Drive</button>
@@ -159,6 +161,20 @@
     </div>
 
     <div data-pane="robot" class="hidden">
+      <section>
+        <h2>Unitree remote · Bluetooth</h2>
+        <div class="row">
+          <select id="r-dev" style="flex:1"><option value="">press Scan (switch the remote on)</option></select>
+          <button class="b" id="r-scan">Scan</button>
+        </div>
+        <div class="row">
+          <button class="b primary" id="r-connect">Connect</button>
+          <button class="b danger" id="r-disconnect">Disconnect</button>
+          <button class="b" id="r-auto" title="Keep looking for the selected / saved remote and reconnect whenever it drops or is switched on">Autoconnect</button>
+        </div>
+        <div id="r-state" class="muted" style="min-height:18px"></div>
+        <div class="muted" style="font-size:11px">Hold <b>L1</b> + left stick = drive, right stick = turn · <b>B</b> = stop. Driving cancels navigation.</div>
+      </section>
       <section>
         <h2>Drive</h2>
         <div class="pad">
@@ -279,8 +295,67 @@ function onStatus() {
   $("#navstate").style.color = n.state === "error" || n.state === "aborted" ? "var(--bad)" : n.state === "navigating" ? "var(--warn)" : "var(--muted)";
   renderTable(true);
   renderKV();
+  renderRemote();
   drawMap();
 }
+
+// ---------------- Unitree BLE remote ----------------
+function renderRemote() {
+  const r = ST.remote, sel = $("#r-dev");
+  const btns = ["#r-scan", "#r-connect", "#r-disconnect", "#r-auto"];
+  if (!r) {
+    setDot("remote", "", "remote");
+    $("#r-state").textContent = "remote node not running (mercury_x1_teleop/unitree_remote)";
+    btns.forEach((b) => ($(b).disabled = true));
+    return;
+  }
+  const busy = r.state === "scanning" || r.state === "connecting";
+  const conn = r.state === "connected" ? r.connected : null;
+  // device list: scan results + the saved / connected remote
+  const devs = [...(r.devices || [])];
+  for (const d of [conn, r.saved]) {
+    if (d && d.address && !devs.find((x) => x.address === d.address)) devs.push({ address: d.address, name: d.name, rssi: null });
+  }
+  const key = JSON.stringify(devs.map((d) => [d.address, d.name, d.rssi]));
+  if (key !== sel._key && document.activeElement !== sel) {
+    const keep = sel.value || (conn && conn.address) || (r.saved && r.saved.address) || (devs[0] && devs[0].address) || "";
+    sel.innerHTML = devs.length
+      ? devs.map((d) => `<option value="${d.address}" data-name="${d.name || ""}">${d.name || "Unitree"} · ${d.address}` +
+          (d.rssi != null ? ` · ${d.rssi} dBm` : r.saved && d.address === r.saved.address ? " · saved" : "") + "</option>").join("")
+      : `<option value="">press Scan (switch the remote on)</option>`;
+    if (devs.find((d) => d.address === keep)) sel.value = keep;
+    sel._key = key;
+  }
+  $("#r-scan").disabled = busy;
+  $("#r-connect").disabled = busy || !sel.value || (conn && conn.address === sel.value);
+  $("#r-disconnect").disabled = !conn && !r.autoconnect;
+  $("#r-auto").disabled = false;
+  $("#r-auto").classList.toggle("on", !!r.autoconnect);
+  $("#r-auto").textContent = r.autoconnect ? "Autoconnect ✓" : "Autoconnect";
+  let text;
+  if (conn) {
+    text = `connected · ${conn.name} · battery ${r.battery ?? "?"} % · ${r.rssi ?? "?"} dBm`;
+    if (r.driving) text += " · DRIVING";
+    else if (r.pressed && r.pressed.length) text += ` · ${r.pressed.join(" ")}`;
+  } else {
+    text = r.state + (r.message ? ` · ${r.message}` : "");
+  }
+  $("#r-state").textContent = text;
+  $("#r-state").style.color = conn ? (r.driving ? "var(--ok)" : "var(--text)") : r.message.includes("fail") ? "var(--bad)" : "var(--muted)";
+  if (conn) setDot("remote", r.battery != null && r.battery < 20 ? "warn" : "ok", r.driving ? "remote · driving" : `remote ${r.battery ?? ""}%`);
+  else setDot("remote", busy ? "warn" : "", r.autoconnect ? (busy ? `remote ${r.state}` : "remote · waiting") : "remote off");
+}
+const selectedRemote = () => {
+  const o = $("#r-dev").selectedOptions[0];
+  return o && o.value ? { address: o.value, name: o.dataset.name || null } : null;
+};
+$("#r-scan").onclick = () => api("remote", { op: "scan" });
+$("#r-connect").onclick = () => { const d = selectedRemote(); if (d) api("remote", { op: "connect", ...d }); };
+$("#r-disconnect").onclick = () => api("remote", { op: "disconnect" });
+$("#r-auto").onclick = () => {
+  const on = !(ST.remote && ST.remote.autoconnect);
+  api("remote", { op: "autoconnect", enabled: on, ...(on ? selectedRemote() || {} : {}) });
+};
 
 function renderKV() {
   const s = ST, b = s.base || {};
