@@ -5,6 +5,8 @@ set -e
 export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-175}
 source /opt/ros/humble/setup.bash
 source "$HOME/mercury_x1_ros2/install/setup.bash"
+# 16 MB Fast-DDS shared-memory segments: 640x480 images exceed the 512 KB default and were half dropped
+export FASTRTPS_DEFAULT_PROFILES_FILE="$HOME/mercury_x1_ros2/config/fastdds_shm.xml"
 if pgrep -f "mercury_x1_driver/lib/mercury_x1_driver/(base|upper_body)_node" >/dev/null; then
   echo "drivers already running - run scripts/mx1_stop.sh first"; exit 1
 fi

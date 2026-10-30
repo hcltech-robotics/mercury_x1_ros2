@@ -13,6 +13,8 @@ Fusion:
     nvblox:=false the grid is built on the CPU from BOTH the lidar and the depth cloud (Grid/Sensor=2).
   * nvblox (mercury_x1_perception): CUDA TSDF/ESDF from the Orbbec depth+colour, posed by the
     odom TF published here; gives Nav2 its 3D-aware costmap slice and Rerun a mesh.
+  * cuVSLAM (cuvslam:=true): GPU RGB-D visual odometry on /vslam/odom, aligned to odom for comparison
+    with the lidar odometry (not fused yet).
 Maps live in ~/maps/<map>.db.
 """
 import os
@@ -31,6 +33,7 @@ def _nodes(context):
     fresh = LC("fresh").perform(context).lower() == "true"
     use_camera = LC("camera").perform(context).lower() == "true"
     use_nvblox = use_camera and LC("nvblox").perform(context).lower() == "true"
+    use_cuvslam = use_camera and LC("cuvslam").perform(context).lower() == "true"
     maps_dir = os.path.expanduser("~/maps")
     os.makedirs(maps_dir, exist_ok=True)
     db = os.path.join(maps_dir, f"{name}.db")
@@ -106,6 +109,9 @@ def _nodes(context):
     if use_nvblox:
         nodes.append(IncludeLaunchDescription(PythonLaunchDescriptionSource(
             os.path.join(share("mercury_x1_perception"), "launch", "nvblox.launch.py"))))
+    if use_cuvslam:
+        nodes.append(IncludeLaunchDescription(PythonLaunchDescriptionSource(
+            os.path.join(share("mercury_x1_perception"), "launch", "cuvslam.launch.py"))))
     return nodes
 
 
@@ -116,5 +122,7 @@ def generate_launch_description():
         DeclareLaunchArgument("fresh", default_value="false", description="mapping: delete the db first"),
         DeclareLaunchArgument("camera", default_value="true", description="fuse the RGB-D camera"),
         DeclareLaunchArgument("nvblox", default_value="true", description="GPU 3D mapping (Isaac ROS nvblox)"),
+        DeclareLaunchArgument("cuvslam", default_value="true",
+                              description="cuVSLAM RGB-D visual odometry on the GPU (/vslam/odom, comparison only)"),
         OpaqueFunction(function=_nodes),
     ])
