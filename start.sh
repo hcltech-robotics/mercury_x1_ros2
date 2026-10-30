@@ -6,8 +6,8 @@
 #   ./start.sh [--map NAME] [--mode mapping|localization] [--fresh] [--no-slam] [--no-nav]
 #
 # Defaults come from ~/.config/mercury_x1/autostart.env (MX1_MAP, MX1_MODE, MX1_SLAM, MX1_NAV);
-# without MX1_MAP the most recently saved map in ~/maps is used. mapping continues that map (adds to
-# it, never deletes it unless --fresh). A restart from the page (ROS network switch) leaves resume.env,
+# without MX1_MAP the most recently saved map in ~/maps is used, in localization mode (mapping only
+# when that map does not exist yet; --mode mapping continues it, --fresh starts it over). A restart from the page (ROS network switch) leaves resume.env,
 # so SLAM / Nav2 come back as they were. ROS domain / network: scripts/ros_env.sh.
 # Stop everything: scripts/mx1_stop.sh (or sudo systemctl stop mercury-x1).
 set -e
@@ -15,7 +15,14 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF_DIR="$HOME/.config/mercury_x1"
 [ -f "$CONF_DIR/autostart.env" ] && source "$CONF_DIR/autostart.env"
 if [ -f "$CONF_DIR/resume.env" ]; then source "$CONF_DIR/resume.env"; rm -f "$CONF_DIR/resume.env"; fi
-MAP="${MX1_MAP:-}"; MODE="${MX1_MODE:-mapping}"; SLAM="${MX1_SLAM:-true}"; NAV="${MX1_NAV:-true}"; FRESH=false
+# boot history: why the module last reset (SYS_RESET_N = external reset from the carrier, e.g. a supply
+# dip; watchdog / software resets show up differently). Logged once per boot.
+BOOT_LOG="$HOME/.ros/mercury_boot.log"; BOOT_ID=$(cat /proc/sys/kernel/random/boot_id)
+if ! grep -qs "$BOOT_ID" "$BOOT_LOG"; then
+  mkdir -p "$(dirname "$BOOT_LOG")"
+  echo "$(uptime -s) boot $BOOT_ID reset_reason=$(cat /sys/devices/platform/bus@0/c360000.pmc/reset_reason 2>/dev/null || echo ?)" >> "$BOOT_LOG"
+fi
+MAP="${MX1_MAP:-}"; MODE="${MX1_MODE:-}"; SLAM="${MX1_SLAM:-true}"; NAV="${MX1_NAV:-true}"; FRESH=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --map) MAP="$2"; shift ;;
@@ -31,6 +38,11 @@ done
 if [ -z "$MAP" ]; then
   MAP=$(ls -t "$HOME"/maps/*.db 2>/dev/null | head -1 | xargs -r basename | sed 's/\.db$//')
   MAP="${MAP:-default}"
+fi
+# localize on an existing map (mapping at every boot added a new, often unlinked session to the
+# database each time); map only when there is no map yet. Mapping / extending: from the page.
+if [ -z "$MODE" ]; then
+  if [ -f "$HOME/maps/$MAP.db" ] && [ "$FRESH" != true ]; then MODE=localization; else MODE=mapping; fi
 fi
 PAGE="http://127.0.0.1:8080"
 api() {   # api <action> [json body]

@@ -189,7 +189,7 @@
         <div class="muted" style="font-size:11px">Layers that are off are not streamed (no CPU / GPU cost). Local map: ~6 m around the robot.</div>
         <h2 style="margin-top:12px">SLAM 3D map</h2>
         <div class="row" id="slam-layers">
-          <label class="switch" data-layer="slam3d" title="The whole RTAB-Map map as a coloured 3D cloud, rebuilt from the stored RGB-D frames every 20 s (loop-closure corrected)"><input type="checkbox"><span class="track"></span>Whole map (3D)</label>
+          <label class="switch" data-layer="slam3d" title="The whole RTAB-Map map as a coloured 3D cloud from its stored RGB-D frames, aligned to the live map (refreshed every 20 s while on)"><input type="checkbox"><span class="track"></span>Whole map (3D)</label>
           <span class="spacer"></span>
           <button class="b" id="b-exp-cloud" title="Coloured point cloud of the whole map (.ply, a few seconds)">Export cloud</button>
           <button class="b" id="b-exp-mesh" title="Textured mesh of the whole map (.obj + texture, zipped; about a minute)">Export mesh</button>
@@ -390,7 +390,7 @@ function onStatus() {
   if (s.export3d) {
     const e = s.export3d;
     $("#b-exp-cloud").disabled = $("#b-exp-mesh").disabled = !!e.busy;
-    $("#exp3d-msg").textContent = e.busy ? `${e.busy}…` : e.message;
+    $("#exp3d-msg").textContent = [e.busy ? `${e.busy}…` : e.message, s.viz_layers && s.viz_layers.nvblox.includes("slam3d") ? e.live : ""].filter(Boolean).join(" · ");
     const h = e.files.map((f) => `<div><a href="/exports/${encodeURIComponent(f.name)}" download>${f.name}</a> <span class="muted">${f.size_mb} MB · ${f.time}</span></div>`).join("");
     if (h !== $("#exp3d-files")._h) { $("#exp3d-files").innerHTML = h; $("#exp3d-files")._h = h; }
   }

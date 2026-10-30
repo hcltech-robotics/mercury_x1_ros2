@@ -37,6 +37,7 @@ from rclpy.node import Node
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import SetParameters
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rtabmap_msgs.srv import GetMap
 from sensor_msgs.msg import BatteryState, PointCloud2, PointField
 from tf2_msgs.msg import TFMessage
 
@@ -170,8 +171,9 @@ class WebNode(Node):
         self.pub_led = self.create_publisher(ColorRGBA, "/base/led", 10)
         self.pub_joint = self.create_publisher(JointCommand, "/upper_body/joint_command", 10)
         self.pub_remote = self.create_publisher(String, "/remote/cmd", 10)
-        # whole-map coloured cloud from the RTAB-Map database (App._live3d_loop), only while someone listens
+        # whole map as a coloured 3D cloud (App._live3d_loop), built only while someone subscribes
         self.pub_cloud3d = self.create_publisher(PointCloud2, "/slam/cloud3d", LATCHED)
+        self.cli_map_data = self.create_client(GetMap, "/rtabmap/get_map_data")
         # The physical E-stop cuts the base MCU's power (its USB serial device disappears) and the arm
         # servos' power (the arm controllers report powered=false, and their link may drop out too);
         # nothing reports the button itself. Base link lost while no arm reports power = E-stop.
@@ -402,6 +404,19 @@ class WebNode(Node):
         val = ParameterValue(type=ParameterType.PARAMETER_STRING_ARRAY, string_array_value=layers or [""])
         self.call("bridge_params", SetParameters.Request(parameters=[Parameter(name="nvblox_layers", value=val)]))
 
+    def live_graph(self, timeout: float = 15.0) -> dict[int, tuple[float, float, float]] | None:
+        """node id -> optimized position in the map frame, from rtabmap (graph only, no sensor data).
+        Called from a worker thread; the executor thread completes the future."""
+        if not self.cli_map_data.wait_for_service(timeout_sec=2.0):
+            return None
+        fut = self.cli_map_data.call_async(GetMap.Request(global_map=True, optimized=True, graph_only=True))
+        done = threading.Event()
+        fut.add_done_callback(lambda _: done.set())
+        if not done.wait(timeout) or fut.result() is None:
+            return None
+        g = fut.result().data.graph
+        return {int(i): (p.position.x, p.position.y, p.position.z) for i, p in zip(g.poses_id, g.poses)}
+
     def call(self, key: str, req) -> None:
         cli = self.srv[key]
         if cli.wait_for_service(timeout_sec=0.5):
@@ -461,7 +476,7 @@ class App:
         self.viz_layers = self.load_viz_layers()
         self.head_hold = True        # hold the head level while mapping (switch on the page)
         self.wifi = Wifi()
-        self.export3d = {"busy": "", "message": "", "files": slam3d.list_exports()}
+        self.export3d = {"busy": "", "message": "", "files": slam3d.list_exports(), "live": ""}
         threading.Thread(target=self._live3d_loop, daemon=True, name="live3d").start()
         self.head_port = head_port
         self.sysstats = SysStats()           # CPU / GPU load and temperatures for the status page
@@ -613,7 +628,11 @@ class App:
         return os.path.join(MAPS_DIR, f"{self.map_name}.db")
 
     def _live3d_loop(self) -> None:
-        """re-export the whole map as a coloured cloud every 20 s while the viewer's SLAM 3D layer is on"""
+        """While the viewer's 'Whole map (3D)' layer is on: every 20 s export the map database as a coloured
+        cloud plus node poses, fit the export's frame to rtabmap's live map frame on the nodes both share,
+        and publish the aligned cloud. rtabmap-export optimises the graph on its own (another origin), and
+        in a multi-session database it may pick a different connected piece than the live map: then there
+        is nothing to align and the layer says so instead of drawing the cloud in the wrong place."""
         n = self.node
         while True:
             time.sleep(20.0)
@@ -623,13 +642,29 @@ class App:
             if not os.path.exists(db):
                 continue
             try:
-                ply = slam3d.export_cloud(db, os.path.join(slam3d.SNAP_DIR, "live"), "live", voxel=0.03)
+                out_dir = os.path.join(slam3d.SNAP_DIR, "live")
+                ply = slam3d.export_cloud(db, out_dir, "live", voxel=0.03, poses=True)
+                exp = slam3d.read_poses(os.path.join(out_dir, "live_poses.txt"))
+                live = n.live_graph()
+                if live is None:
+                    self.export3d["live"] = "3D layer: rtabmap did not return its graph"
+                    continue
+                ids = sorted(set(exp) & set(live))
+                if len(ids) < 3:
+                    self.export3d["live"] = (f"3D layer: the export ({len(exp)} nodes) and the live map ({len(live)} nodes) "
+                                             f"share {len(ids)} nodes - the database has disconnected sessions; re-map")
+                    continue
+                r, t, err = slam3d.fit_rigid(np.array([exp[i] for i in ids]), np.array([live[i] for i in ids]))
+                if err > 0.25:
+                    self.export3d["live"] = f"3D layer: export and live map disagree ({err:.2f} m mean on {len(ids)} nodes)"
+                    continue
                 xyz, rgb = slam3d.read_ply(ply)
+                msg = cloud_msg((xyz @ r.T + t).astype(np.float32), rgb, "map", n.get_clock().now().to_msg())
+                n.post(lambda m=msg: n.pub_cloud3d.publish(m))
+                self.export3d["live"] = (f"3D layer: {len(xyz)} points from {len(exp)} nodes "
+                                         f"({len(ids)} shared with the live map, fit {err * 100:.0f} cm)")
             except Exception as e:  # noqa: BLE001 - keep the loop alive
-                n.get_logger().warn(f"live 3D map: {e}", throttle_duration_sec=60.0)
-                continue
-            msg = cloud_msg(xyz, rgb, "map", n.get_clock().now().to_msg())
-            n.post(lambda m=msg: n.pub_cloud3d.publish(m))
+                self.export3d["live"] = f"3D layer: {e}"
 
     def _export3d_job(self, kind: str) -> None:
         name = f"{self.map_name}_{time.strftime('%Y%m%d-%H%M%S')}"

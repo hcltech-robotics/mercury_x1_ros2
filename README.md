@@ -41,6 +41,16 @@ Wi-Fi changes run `sudo -n nmcli` (NetworkManager falls back to the previous net
 Starting **mapping** levels the head first (neck 0°, jaw −5.7° = camera horizontal) and the page refuses
 head moves while mapping runs; RTAB-Map's 2D grid uses the lidar **and** the depth camera
 (`Grid/Sensor 2`), so tables / overhangs between 6 cm and 1.4 m end up in the saved map.
+The page's **SLAM 3D map → Whole map (3D)** layer is the whole map as a coloured cloud from the stored
+RGB-D frames (`rtabmap-export` every 20 s while on), fitted to the live map frame on the nodes both share
+(`Grid/3D` stays off: a database reprocessed with it gave a 2D map of a single scan fan);
+**Export cloud / Export mesh** write a .ply / zipped textured .obj via `rtabmap-export` to
+`~/maps/exports` (downloads on the page). Exports copy the database byte-wise: never open the live
+`.db` with SQLite while rtabmap runs (rtabmap aborts on "database is locked").
+
+**Boot = localization** on the latest map (`./start.sh`); mapping only when the map does not exist.
+Each mapping start opens a new session in the database, and sessions that never get linked by a loop
+closure split the map (`office` had 24 sessions in 4 disconnected pieces). Map a place in one go.
 
 ### nvblox layers in the 3D view
 Page → "3D layers · nvblox": Mesh + Depth points (default), ESDF slice (distance to obstacles at the costmap slice height,

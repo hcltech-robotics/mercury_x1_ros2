@@ -90,6 +90,8 @@ def _nodes(context):
         # occupancy grid: lidar + depth camera
         "Grid/Sensor": "2" if use_camera else "0",
         "Grid/CellSize": "0.05", "Grid/RangeMax": "5.0", "Grid/RayTracing": "true",
+        # 2D local grids: a database reprocessed with Grid/3D=true gave a 2D /map of a single scan fan
+        # (2026-10-30), so the 3D map comes from the stored RGB-D frames instead (web_server / slam3d)
         "Grid/3D": "false", "Grid/NormalsSegmentation": "false",
         "Grid/MaxGroundHeight": "0.06", "Grid/MaxObstacleHeight": "1.4",
         "Grid/DepthDecimation": "4", "Grid/ClusterRadius": "0.1", "Grid/MinClusterSize": "8",

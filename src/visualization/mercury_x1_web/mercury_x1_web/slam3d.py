@@ -56,10 +56,32 @@ def _export(db: str, out_dir: str, name: str, args: list[str], timeout: float) -
         raise RuntimeError(f"rtabmap-export failed: {tail[0][:200]}")
 
 
-def export_cloud(db_path: str, out_dir: str, name: str, voxel: float = 0.02) -> str:
-    """coloured point cloud (PLY) -> path"""
-    _export(snapshot(db_path), out_dir, name, ["--cloud", "--voxel", str(voxel)], timeout=300)
+def export_cloud(db_path: str, out_dir: str, name: str, voxel: float = 0.02, poses: bool = False) -> str:
+    """coloured point cloud (PLY) -> path; poses=True also writes <name>_poses.txt (see read_poses)"""
+    _export(snapshot(db_path), out_dir, name, ["--cloud", "--voxel", str(voxel)] + (["--poses"] if poses else []),
+            timeout=300)
     return os.path.join(out_dir, f"{name}_cloud.ply")
+
+
+def read_poses(path: str) -> dict[int, tuple[float, float, float]]:
+    """rtabmap-export --poses (format 11: stamp x y z qx qy qz qw id) -> node id -> position"""
+    out = {}
+    with open(path) as f:
+        for line in f:
+            w = line.split()
+            if len(w) >= 9 and not w[0].startswith("#"):
+                out[int(w[8])] = (float(w[1]), float(w[2]), float(w[3]))
+    return out
+
+
+def fit_rigid(src: np.ndarray, dst: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+    """least-squares R, t with dst ~ R @ src + t (Kabsch), and the mean residual"""
+    cs, cd = src.mean(0), dst.mean(0)
+    u, _, vt = np.linalg.svd((src - cs).T @ (dst - cd))
+    d = np.diag([1.0, 1.0, np.sign(np.linalg.det(vt.T @ u.T))])
+    r = vt.T @ d @ u.T
+    t = cd - r @ cs
+    return r, t, float(np.linalg.norm(src @ r.T + t - dst, axis=1).mean())
 
 
 def export_mesh(db_path: str, out_dir: str, name: str) -> str:

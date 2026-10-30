@@ -59,8 +59,9 @@ NVBLOX_LAYERS = {
     "tsdf": (Marker, "/nvblox_node/tsdf_layer_marker", RELIABLE_1, 1.0),
     "color": (Marker, "/nvblox_node/color_layer_marker", RELIABLE_1, 1.0),
     "occupancy": (OccupancyGrid, "/nvblox_node/static_occupancy_grid", RELIABLE_1, 2.0),
-    # not nvblox: the whole RTAB-Map map as a coloured cloud (web_server re-exports it every 20 s while subscribed)
-    "slam3d": (PointCloud2, "/slam/cloud3d", LATCHED, 0.0),
+    # not nvblox: the whole RTAB-Map map as a coloured 3D cloud from its stored RGB-D frames, aligned to
+    # the map frame (web_server re-exports it every 20 s while this is subscribed)
+    "slam3d": (PointCloud2, "/slam/cloud3d", LATCHED, 0.2),
 }
 DEPTH_MAX_POINTS = 40000   # the back-projected depth cloud has ~180k points
 
@@ -318,6 +319,8 @@ class RerunBridge(Node):
 
     def _on_slam3d(self, msg: PointCloud2) -> None:
         """whole-map coloured cloud (map frame); static, so the viewer keeps only the latest one"""
+        if not self.thr_nvblox["slam3d"]():
+            return
         offs = {f.name: f.offset for f in msg.fields}
         n = msg.width * msg.height
         if n == 0 or not all(k in offs for k in ("x", "y", "z")):
