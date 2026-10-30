@@ -69,7 +69,7 @@ the outline and those points (+4 cm); MPPI (`consider_footprint`) and the behavi
 it. Published only on change (a new footprint makes the costmaps re-inflate). Arms hanging: outline.
 
 ### 3D view layers
-Page → "3D view": **Cameras in 3D** (frustums of the jaw and bellybutton cameras with the live image, 2 Hz; default on),
+Page → "3D view": **Voxel map** (the whole RTAB-Map map as solid 5 cm cubes, tiled, only changed tiles re-sent), **Cameras in 3D** (frustums of the jaw and bellybutton cameras with the live image, 2 Hz; default on),
 nvblox: Mesh + Depth points (default; shown as 5 cm voxels, mapping uses the full depth), ESDF slice (distance to obstacles at the costmap slice height,
 what Nav2 uses), Depth points (back-projected depth, downsampled to 40k), TSDF voxels, Colour voxels,
 Occupancy. The choice is the `nvblox_layers` parameter of `rerun_bridge`, saved in

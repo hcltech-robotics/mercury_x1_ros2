@@ -223,11 +223,12 @@
           <label class="switch" data-layer="camera" title="Camera frustums in the 3D view with the live image on them (jaw Orbbec + bellybutton, 2 Hz)"><input type="checkbox"><span class="track"></span>Cameras in 3D</label>
         </div>
         <div class="muted" style="font-size:11px;margin-bottom:8px">To look through the jaw camera: the "Orbbec (jaw)" panel on the right of the viewer; the depth points / mesh below show what it sees in 3D.</div>
-        <h2>nvblox · local 3D</h2>
+        <h2>3D layers</h2>
         <div class="row" id="nvblox-layers">
           <label class="switch" data-layer="mesh" title="Surface mesh (TSDF marching cubes), coloured by the camera"><input type="checkbox"><span class="track"></span>Mesh</label>
           <label class="switch" data-layer="esdf" title="ESDF slice: distance to the nearest obstacle at the costmap slice height (red = touching, blue = 1.5 m+) - what Nav2 sees"><input type="checkbox"><span class="track"></span>ESDF slice</label>
-          <label class="switch" data-layer="depth" title="Depth image back-projected to 3D points (what nvblox integrates; ~40k of 180k points)"><input type="checkbox"><span class="track"></span>Depth points</label>
+          <label class="switch" data-layer="depth" title="Live depth image back-projected to 3D, shown as 5 cm voxels (mapping uses the full depth)"><input type="checkbox"><span class="track"></span>Depth points</label>
+          <label class="switch" data-layer="voxmap" title="The whole RTAB-Map map as solid 5 cm cubes in its camera colours (re-sent only where the map changed)"><input type="checkbox"><span class="track"></span>Voxel map</label>
           <label class="switch" data-layer="tsdf" title="TSDF voxels near the surface (5 cm cubes)"><input type="checkbox"><span class="track"></span>TSDF voxels</label>
           <label class="switch" data-layer="color" title="Colour voxels (5 cm cubes)"><input type="checkbox"><span class="track"></span>Colour voxels</label>
           <label class="switch" data-layer="occupancy" title="nvblox 2D occupancy grid from the depth camera"><input type="checkbox"><span class="track"></span>Occupancy</label>
@@ -235,7 +236,7 @@
         <div class="muted" style="font-size:11px">Layers that are off are not streamed (no CPU / GPU cost). Local map: ~6 m around the robot.</div>
         <h2 style="margin-top:12px">SLAM 3D map</h2>
         <div class="row" id="slam-layers">
-          <label class="switch" data-layer="slam3d" title="The whole RTAB-Map map as a coloured 3D cloud from its stored RGB-D frames, aligned to the live map (refreshed every 20 s while on)"><input type="checkbox"><span class="track"></span>Whole map (3D)</label>
+          <label class="switch" data-layer="slam3d" title="The whole RTAB-Map map as coloured 5 cm points (lighter than the Voxel map cubes), aligned to the live map"><input type="checkbox"><span class="track"></span>Whole map (points)</label>
           <span class="spacer"></span>
           <button class="b" id="b-exp-cloud" title="Coloured point cloud of the whole map (.ply, a few seconds)">Export cloud</button>
           <button class="b" id="b-exp-mesh" title="Textured mesh of the whole map (.obj + texture, zipped; about a minute)">Export mesh</button>
@@ -448,7 +449,7 @@ function onStatus() {
   if (s.export3d) {
     const e = s.export3d;
     $("#b-exp-cloud").disabled = $("#b-exp-mesh").disabled = !!e.busy;
-    $("#exp3d-msg").textContent = [e.busy ? `${e.busy}…` : e.message, s.viz_layers && s.viz_layers.nvblox.includes("slam3d") ? e.live : ""].filter(Boolean).join(" · ");
+    $("#exp3d-msg").textContent = [e.busy ? `${e.busy}…` : e.message, s.viz_layers && ["slam3d", "voxmap"].some((k) => s.viz_layers.nvblox.includes(k)) ? e.live : ""].filter(Boolean).join(" · ");
     const h = e.files.map((f) => `<div><a href="/exports/${encodeURIComponent(f.name)}" download>${f.name}</a> <span class="muted">${f.size_mb} MB · ${f.time}</span></div>`).join("");
     if (h !== $("#exp3d-files")._h) { $("#exp3d-files").innerHTML = h; $("#exp3d-files")._h = h; }
   }

@@ -63,6 +63,7 @@ NVBLOX_LAYERS = {
     # not nvblox: the whole RTAB-Map map as a coloured 3D cloud from its stored RGB-D frames, aligned to
     # the map frame (web_server re-exports it every 20 s while this is subscribed)
     "slam3d": (PointCloud2, "/slam/cloud3d", LATCHED, 0.2),
+    "voxmap": (PointCloud2, "/slam/cloud3d", LATCHED, 0.2),   # the same voxels drawn as solid cubes
 }
 VIEW_LAYERS = ("camera",)   # switchable like the nvblox layers, but no subscription: camera frustums + image
 # The viewer gets voxel grids, not raw clouds (mapping still uses the full-resolution depth):
@@ -198,11 +199,13 @@ class RerunBridge(Node):
         self.nvblox_handlers = {"mesh": self._on_mesh_tile, "esdf": self._on_esdf, "depth": self._on_nvblox_depth,
                                 "tsdf": lambda m: self._on_voxels(m, "tsdf"),
                                 "color": lambda m: self._on_voxels(m, "color"), "occupancy": self._on_nvblox_occupancy,
-                                "slam3d": self._on_slam3d}
+                                "slam3d": lambda m: self._on_slam3d(m, "slam3d"),
+                                "voxmap": lambda m: self._on_slam3d(m, "voxmap")}
         self.nvblox_subs: dict = {}
         self.thr_nvblox = {k: Throttle(v[3]) for k, v in NVBLOX_LAYERS.items()}
         self.mesh_tiles: set[str] = set()          # tile ids logged, blanked when the mesh layer goes off
-        self.slam3d_tiles: dict[str, int] = {}     # whole-map tile -> hash of what the viewer has
+        # whole-map tiles per layer (points / cubes): tile -> hash of what the viewer has
+        self.slam3d_tiles: dict[str, dict[str, int]] = {"slam3d": {}, "voxmap": {}}
         self.layers_wanted: list[str] | None = None
         self.show_camera = True                    # "camera" layer: frustums with the live image
         p("nvblox_layers", self._saved_layers())
@@ -287,10 +290,10 @@ class RerunBridge(Node):
         self.get_logger().info(f"nvblox layers: {sorted(self.nvblox_subs) or 'none'}, camera {'on' if camera else 'off'}")
 
     def _clear_layer(self, key: str) -> None:
-        if key == "slam3d":  # static tiles: blank each (the latched cloud is re-sent on resubscribe)
-            for tid in self.slam3d_tiles:
-                self._log(f"world/slam3d/{tid}", rr.Points3D(np.zeros((0, 3), np.float32)), static=True)
-            self.slam3d_tiles.clear()
+        if key in self.slam3d_tiles:  # static tiles: blank each (the latched cloud is re-sent on resubscribe)
+            for tid in self.slam3d_tiles[key]:
+                self._log(f"world/{key}/{tid}", self._empty_tile(key), static=True)
+            self.slam3d_tiles[key].clear()
             return
         if key == "mesh":   # static tiles: overwrite each with an empty mesh (the tiler resends all on resubscribe)
             for tid in self.mesh_tiles:
@@ -333,9 +336,15 @@ class RerunBridge(Node):
         self._log(f"world/nvblox/{key}", rr.CoordinateFrame(msg.header.frame_id),
                rr.Boxes3D(centers=centers, half_sizes=[[h, h, h]], colors=colors, fill_mode="solid"))
 
-    def _on_slam3d(self, msg: PointCloud2) -> None:
-        """whole-map coloured cloud (map frame); static, so the viewer keeps only the latest one"""
-        if not self.thr_nvblox["slam3d"]():
+    @staticmethod
+    def _empty_tile(key: str):
+        """static data cannot be cleared: overwrite a tile with an empty shape of its kind"""
+        empty = np.zeros((0, 3), np.float32)
+        return rr.Boxes3D(centers=empty, half_sizes=empty) if key == "voxmap" else rr.Points3D(empty)
+
+    def _on_slam3d(self, msg: PointCloud2, key: str) -> None:
+        """whole-map voxels (map frame) as points (slam3d) or solid cubes (voxmap); static tiles"""
+        if not self.thr_nvblox[key]():
             return
         offs = {f.name: f.offset for f in msg.fields}
         n = msg.width * msg.height
@@ -357,21 +366,26 @@ class RerunBridge(Node):
         order = np.lexsort((ty, tx))
         xyz, colors, tx, ty = xyz[order], colors[order], tx[order], ty[order]
         cuts = np.flatnonzero((np.diff(tx) != 0) | (np.diff(ty) != 0)) + 1
+        tiles, h_vox = self.slam3d_tiles[key], SLAM3D_VOXEL * 0.5
         seen, sent = set(), 0
         for a, b in zip(np.r_[0, cuts], np.r_[cuts, len(xyz)]):
             tid = f"{tx[a]}_{ty[a]}"
             seen.add(tid)
             h = hash((xyz[a:b].tobytes(), colors[a:b].tobytes()))
-            if self.slam3d_tiles.get(tid) == h:
+            if tiles.get(tid) == h:
                 continue
-            self.slam3d_tiles[tid] = h
-            self._log(f"world/slam3d/{tid}", rr.CoordinateFrame(frame),
-                      rr.Points3D(xyz[a:b], radii=SLAM3D_VOXEL * 0.5, colors=colors[a:b]), static=True)
+            tiles[tid] = h
+            if key == "voxmap":
+                shape = rr.Boxes3D(centers=xyz[a:b], half_sizes=[[h_vox, h_vox, h_vox]], colors=colors[a:b],
+                                   fill_mode="solid")
+            else:
+                shape = rr.Points3D(xyz[a:b], radii=h_vox, colors=colors[a:b])
+            self._log(f"world/{key}/{tid}", rr.CoordinateFrame(frame), shape, static=True)
             sent += b - a
-        for tid in [t for t in self.slam3d_tiles if t not in seen]:
-            del self.slam3d_tiles[tid]
-            self._log(f"world/slam3d/{tid}", rr.Points3D(np.zeros((0, 3), np.float32)), static=True)
-        self.get_logger().info(f"whole-map 3D: {len(xyz)} voxels in {len(seen)} tiles, sent {sent}")
+        for tid in [t for t in tiles if t not in seen]:
+            del tiles[tid]
+            self._log(f"world/{key}/{tid}", self._empty_tile(key), static=True)
+        self.get_logger().info(f"whole-map 3D ({key}): {len(xyz)} voxels in {len(seen)} tiles, sent {sent}")
 
     def _on_nvblox_occupancy(self, msg: OccupancyGrid) -> None:
         """nvblox' own 2D occupancy (from the depth camera), drawn just above the floor"""
