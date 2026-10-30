@@ -362,7 +362,7 @@ class WebNode(Node):
             "battery_pct": None if math.isnan(self.battery_pct) else round(self.battery_pct),
             "base": None if base is None else {
                 "connected": base.connected, "fw": base.firmware_version,
-                "ultrasonic": [round(v, 2) for v in base.ultrasonic_range[:3]],
+                "ultrasonic": {n: round(v, 2) for n, v in zip(base.ultrasonic_names, base.ultrasonic_range) if n},
                 "obstacle_hold": base.obstacle_hold, "cmd_timeout": base.cmd_timeout},
             "arms": arms,
             "nav": dict(self.nav),

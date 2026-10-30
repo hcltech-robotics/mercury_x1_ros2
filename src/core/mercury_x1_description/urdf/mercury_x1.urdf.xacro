@@ -65,8 +65,8 @@
     <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
   </joint>
 
-  <!-- ultrasonic rangers, same height as the lidar: one on each side and one at the back
-       (MCU channel 0 = left, 1 = back, 2 = right; left/right assignment still to be verified).
+  <!-- ultrasonic rangers, same height as the lidar: one on each side and one at the back.
+       MCU channel 0 = back, 1 = right, 2 = left (verified by hand on the robot, 2026-10-29).
        Base outline in this frame: x -0.36..0.04, y +-0.153. -->
   <xacro:macro name="ultrasonic" params="name x y yaw">
     <link name="ultrasonic_${name}"/>

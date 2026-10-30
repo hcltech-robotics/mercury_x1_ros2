@@ -468,7 +468,8 @@ function renderKV() {
   const s = ST, b = s.base || {};
   const p = s.pose ? `${s.pose.x.toFixed(2)}, ${s.pose.y.toFixed(2)}, ${(s.pose.yaw * 180 / Math.PI).toFixed(0)}° (${s.pose.frame})` : "—";
   const rows = [["pose", p], ["base", b.connected ? `ok · fw ${b.fw}` : "no link"],
-    ["sonar L / back / R", b.ultrasonic ? b.ultrasonic.map((v) => v >= 2.9 ? "—" : v.toFixed(2)).join(" / ") + " m" : "—"],
+    ["sonar L / back / R", b.ultrasonic ? ["left", "back", "right"].map((n) => {
+      const v = b.ultrasonic[n]; return v == null ? "?" : v >= 2.9 ? "—" : v.toFixed(2); }).join(" / ") + " m" : "—"],
     ["rear guard", b.obstacle_hold ? "HOLDING (obstacle behind)" : "clear"]];
   for (const [side, a] of Object.entries(s.arms || {})) rows.push([`${side} arm`, `${a.powered ? "powered" : "off"} · ${a.rate} Hz${a.moving ? " · moving" : ""}`]);
   $("#kv").innerHTML = rows.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");

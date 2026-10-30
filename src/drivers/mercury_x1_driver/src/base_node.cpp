@@ -55,13 +55,22 @@ public:
     lin_scale_ = declare_parameter("linear_scale", 1.0);
     ang_scale_ = declare_parameter("angular_scale", 1.0);
     yaw_from_gyro_ = declare_parameter("yaw_source", "gyro") == "gyro";
+    // MCU channel -> mounting position (verified on the robot: ch0 back, ch1 right, ch2 left)
     us_names_ = declare_parameter("ultrasonic_names",
-        std::vector<std::string>{"left", "back", "right"});
+        std::vector<std::string>{"back", "right", "left"});
     us_max_ = declare_parameter("ultrasonic_max_range", 2.9);
     us_min_ = declare_parameter("ultrasonic_min_range", 0.03);
     us_fov_ = declare_parameter("ultrasonic_fov", 0.5);
     guard_dist_ = declare_parameter("ultrasonic_guard_distance", 0.0);
-    guard_ch_ = declare_parameter("ultrasonic_guard_channels", std::vector<int64_t>{1});  // rear
+    // reversing guard: by sensor name, so a channel remap cannot silently guard the wrong side
+    for (const auto & g : declare_parameter("ultrasonic_guard_names", std::vector<std::string>{"back"})) {
+      const auto it = std::find(us_names_.begin(), us_names_.end(), g);
+      if (it == us_names_.end()) {
+        RCLCPP_WARN(get_logger(), "ultrasonic_guard_names: no sensor named '%s'", g.c_str());
+      } else {
+        guard_ch_.push_back(it - us_names_.begin());
+      }
+    }
     // Mercury X1 pack: 7S LiFePO4 (rests at 23.7 V when full = 3.38 V/cell; factory test read 20.8 V)
     battery_cells_ = declare_parameter("battery_cells", 7);
     battery_lfp_ = declare_parameter("battery_chemistry", std::string("lifepo4")) != "li-ion";
@@ -345,7 +354,10 @@ private:
       st.firmware_version = firmware_;
       st.stop_flag = stop_flag_;
       st.voltage = static_cast<float>(voltage_);
-      for (double v : us_m_) {st.ultrasonic_range.push_back(static_cast<float>(v));}
+      for (size_t i = 0; i < us_m_.size(); ++i) {
+        st.ultrasonic_range.push_back(static_cast<float>(us_m_[i]));
+        st.ultrasonic_names.push_back(i < us_names_.size() ? us_names_[i] : "");
+      }
       st.measured = measured_;
       st.commanded.linear.x = sent_[0];
       st.commanded.linear.y = sent_[1];
