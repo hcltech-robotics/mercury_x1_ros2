@@ -226,6 +226,7 @@
       </section>
       <section>
         <h2>Head</h2>
+        <div class="row"><label class="switch" id="sw-hold" title="While mapping, keep the neck straight and the camera level (the depth camera feeds the map). Off: move the head freely."><input type="checkbox"><span class="track"></span>Hold level while mapping</label></div>
         <div class="row"><label style="width:70px">neck</label><input type="range" id="neck" min="-60" max="60" step="1" value="0"><span id="neck-t" style="width:45px">0°</span></div>
         <div class="row"><label style="width:70px">jaw (cam)</label><input type="range" id="jaw" min="-55" max="0" step="1" value="0"><span id="jaw-t" style="width:45px">0°</span></div>
       </section>
@@ -345,7 +346,7 @@ function onStatus() {
   renderBattery(s);
   renderSys(s.system);
   const slam = s.procs.slam, nav = s.procs.nav;
-  const headLocked = slam.running && slam.mode === "mapping";   // head is held level while mapping
+  const headLocked = s.head_hold !== false && slam.running && slam.mode === "mapping";   // head held level while mapping
   for (const id of ["neck", "jaw"]) { $("#" + id).disabled = headLocked; $("#" + id).title = headLocked ? "held level while mapping" : ""; }
   setDot("slam", slam.running ? "ok" : "", slam.running ? `${slam.mode} · ${slam.map}` : "SLAM off");
   setDot("nav", nav.running ? (s.nav.state === "navigating" ? "warn" : "ok") : "", nav.running ? `Nav ${s.nav.state}` : "Nav off");
@@ -369,6 +370,7 @@ function onStatus() {
   const armsList = Object.values(s.arms || {});
   setArmsSwitch(armsList.length > 0 && armsList.every((a) => a.powered));
   setFreeSwitch(armsList.some((a) => a.freedrive));
+  setHoldSwitch(s.head_hold !== false);
   if (s.viz_layers && Date.now() > layersUntil) {
     for (const el of document.querySelectorAll("#nvblox-layers [data-layer]"))
       el.querySelector("input").checked = s.viz_layers.nvblox.includes(el.dataset.layer);
@@ -741,6 +743,7 @@ const setFreeSwitch = bindSwitch("#sw-free", (on) => {
   if (on && !confirm("Freedrive: the arms can be moved by hand. Hold the arms - they may sink. Continue?")) return false;
   api("freedrive", { on }); toast(on ? "freedrive on (remote: Select toggles)" : "freedrive off - arms hold");
 });
+const setHoldSwitch = bindSwitch("#sw-hold", (on) => { api("head_hold", { on }); });
 // nvblox layers in the 3D view: the bridge subscribes only to the layers that are on
 let layersUntil = 0;
 for (const el of document.querySelectorAll("#nvblox-layers [data-layer]")) {

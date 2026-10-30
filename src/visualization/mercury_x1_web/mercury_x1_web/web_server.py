@@ -420,6 +420,7 @@ class App:
         self.static_dir = os.path.join(get_package_share_directory("mercury_x1_web"), "web")
         self.viewer_ready = all(os.path.exists(os.path.join(VIEWER_CACHE, f)) for f in VIEWER_FILES)
         self.viz_layers = self.load_viz_layers()
+        self.head_hold = True        # hold the head level while mapping (switch on the page)
         self.wifi = Wifi()
         self.head_port = head_port
         self.sysstats = SysStats()           # CPU / GPU load and temperatures for the status page
@@ -533,6 +534,9 @@ class App:
         st = self.sup.status()["slam"]
         return st["running"] and st.get("mode") == "mapping"
 
+    def head_locked(self) -> bool:
+        return self.head_hold and self.mapping()
+
     def level_head(self) -> None:
         jc = JointCommand(name=list(MAPPING_HEAD), position=[math.radians(v) for v in MAPPING_HEAD.values()],
                           speed=30)
@@ -576,6 +580,7 @@ class App:
                 st["procs"] = self.sup.status()
                 st["map_name"] = self.map_name
                 st["viz_layers"] = {"nvblox": self.viz_layers}
+                st["head_hold"] = self.head_hold
                 st["system"] = self.sysstats.snapshot()
                 st["ros"] = self.ros_network()
                 await ws.send_str(json.dumps(st))
@@ -642,9 +647,13 @@ class App:
         elif action == "led":
             c = ColorRGBA(r=float(body.get("r", 0)), g=float(body.get("g", 0)), b=float(body.get("b", 0)), a=1.0)
             n.post(lambda: n.pub_led.publish(c))
+        elif action == "head_hold":     # {"on": bool}; turning it on while mapping levels the head again
+            self.head_hold = bool(body.get("on", True))
+            if self.head_locked():
+                self.level_head()
         elif action == "head":
-            if self.mapping():
-                return web.json_response({"ok": False, "error": "head is held level while mapping"})
+            if self.head_locked():
+                return web.json_response({"ok": False, "error": "head is held level while mapping (switch off 'Hold level while mapping')"})
             jc = JointCommand()
             for k in ("eye", "head"):
                 if k in body:
@@ -668,7 +677,7 @@ class App:
                 return web.json_response({"ok": False, "error": f"no map '{name}' - build it in mapping mode first"})
             self.map_name = name
             self.load_waypoints()
-            if mode == "mapping":   # the depth camera feeds the map: look straight ahead, level
+            if mode == "mapping" and self.head_hold:   # the depth camera feeds the map: look straight ahead, level
                 self.level_head()
             cmd = ["ros2", "launch", "mercury_x1_bringup", "slam.launch.py", f"mode:={mode}", f"map:={name}",
                    f"fresh:={'true' if fresh else 'false'}"]
