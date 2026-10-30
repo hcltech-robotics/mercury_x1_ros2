@@ -4,6 +4,13 @@ Mirrors /tf into Rerun named frames (Transform3D parent_frame/child_frame) and l
 data entity with CoordinateFrame(<ros frame_id>), so the viewer resolves poses the way tf2
 does. Serves the data over gRPC (default :9876) and a stand-alone web viewer (:9090); the
 control page served by web_server embeds the same stream.
+
+All rr.log calls go through one worker thread and a bounded queue: the gRPC server feeds every
+viewer in lockstep, so one slow or stale viewer (e.g. a tab still running an older viewer) blocks
+rr.log. Without the queue that froze this node's ROS callbacks (TF, parameters); now frames are dropped.
+
+nvblox outputs are optional layers (parameter `nvblox_layers`, switched from the control page):
+a layer that is off is not subscribed, so it costs neither this bridge nor nvblox anything.
 """
 
 from __future__ import annotations
@@ -11,6 +18,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import queue
 import socket
 import threading
 import time
@@ -26,8 +34,10 @@ from mercury_x1_msgs.msg import MeshTile
 from nav_msgs.msg import OccupancyGrid, Path
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from rcl_interfaces.msg import SetParametersResult
 from sensor_msgs.msg import CameraInfo, CompressedImage, LaserScan, PointCloud2, Range
 from tf2_msgs.msg import TFMessage
+from visualization_msgs.msg import Marker
 
 from .pose_chain import PoseChain
 
@@ -37,6 +47,31 @@ LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
 # depth 1 one sample would overwrite the other, so keep plenty like tf2's StaticListenerQoS.
 TF_STATIC = QoSProfile(depth=100, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                        reliability=ReliabilityPolicy.RELIABLE)
+
+
+RELIABLE_1 = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE)
+VIZ_LAYERS_FILE = os.path.expanduser("~/.config/mercury_x1/viz_layers.json")   # written by web_server
+# key -> (message type, topic, QoS, max rate [Hz]); entities live under world/nvblox/<key>
+NVBLOX_LAYERS = {
+    "mesh": (MeshTile, "/nvblox/mesh_tiles", QoSProfile(depth=64, reliability=ReliabilityPolicy.RELIABLE), 0.0),
+    "esdf": (PointCloud2, "/nvblox_node/static_esdf_pointcloud", RELIABLE_1, 2.0),
+    "depth": (PointCloud2, "/nvblox_node/back_projected_depth/camera_color_optical_frame", RELIABLE_1, 2.0),
+    "tsdf": (Marker, "/nvblox_node/tsdf_layer_marker", RELIABLE_1, 1.0),
+    "color": (Marker, "/nvblox_node/color_layer_marker", RELIABLE_1, 1.0),
+    "occupancy": (OccupancyGrid, "/nvblox_node/static_occupancy_grid", RELIABLE_1, 2.0),
+}
+DEPTH_MAX_POINTS = 40000   # the back-projected depth cloud has ~180k points
+
+
+def _turbo(t: np.ndarray) -> np.ndarray:
+    """Turbo colormap (polynomial fit), t in [0, 1] -> uint8 RGB."""
+    t = np.clip(t, 0.0, 1.0)[:, None]
+    c = np.hstack([
+        0.13572138 + t * (4.61539260 + t * (-42.66032258 + t * (132.13108234 + t * (-152.94239396 + t * 59.28637943)))),
+        0.09140261 + t * (2.19418839 + t * (4.84296658 + t * (-14.18503333 + t * (4.27729857 + t * 2.82956604)))),
+        0.10667330 + t * (12.64194608 + t * (-60.58204836 + t * (110.36276771 + t * (-89.90310912 + t * 27.34824973)))),
+    ])
+    return (np.clip(c, 0, 1) * 255).astype(np.uint8)
 
 
 def _stamp(msg) -> float:
@@ -57,15 +92,19 @@ class Throttle:
         return True
 
 
-def cloud_xyz(msg: PointCloud2) -> np.ndarray:
-    """Fast x/y/z extraction from a float32 PointCloud2."""
+def cloud_fields(msg: PointCloud2, names: str = "xyz") -> np.ndarray:
+    """Fast extraction of float32 fields (columns in `names` order) from a PointCloud2; non-finite rows dropped."""
     offs = {f.name: f.offset for f in msg.fields}
-    if not all(k in offs for k in "xyz"):
-        return np.zeros((0, 3), np.float32)
+    if not all(k in offs for k in names):
+        return np.zeros((0, len(names)), np.float32)
     n = msg.width * msg.height
     buf = np.frombuffer(msg.data, dtype=np.uint8).reshape(n, msg.point_step)
-    xyz = np.stack([buf[:, offs[k]:offs[k] + 4].copy().view(np.float32)[:, 0] for k in "xyz"], 1)
-    return xyz[np.isfinite(xyz).all(1)]
+    out = np.stack([buf[:, offs[k]:offs[k] + 4].copy().view(np.float32)[:, 0] for k in names], 1)
+    return out[np.isfinite(out).all(1)]
+
+
+def cloud_xyz(msg: PointCloud2) -> np.ndarray:
+    return cloud_fields(msg, "xyz")
 
 
 class RerunBridge(Node):
@@ -84,6 +123,10 @@ class RerunBridge(Node):
         self.joint_tf_hz = float(p("joint_tf_rate", 5.0).value)  # robot links (joint states)
 
         rr.init("mercury_x1", recording_id="mercury_x1_live")
+        self.log_q: queue.Queue = queue.Queue(maxsize=int(p("log_queue", 300).value))
+        self.log_t: float | None = None      # "ros" timestamp for the next _log (set by _set_time)
+        self.log_dropped = 0
+        threading.Thread(target=self._log_worker, daemon=True, name="rerun_log").start()
         self.mesh_dir = os.path.join(get_package_share_directory("mercury_x1_web"), "meshes")
         self.robot_parts = self._robot_parts()
         uri = rr.serve_grpc(grpc_port=grpc_port, server_memory_limit=mem,
@@ -101,7 +144,7 @@ class RerunBridge(Node):
         self.get_logger().info(f"rerun gRPC {uri}, viewer http://<robot>:{web_port}")
 
         # the 3D view's root: tie the ROS "map" frame to the view origin
-        rr.log("tf/map", rr.Transform3D(parent_frame="tf#/", child_frame="map"), static=True)
+        self._log("tf/map", rr.Transform3D(parent_frame="tf#/", child_frame="map"), static=True)
         self._log_robot_model()
 
         self.thr_tf = Throttle(self.tf_hz)
@@ -124,9 +167,6 @@ class RerunBridge(Node):
         sub(OccupancyGrid, "/local_costmap/costmap", self._on_costmap, 1)
         sub(LaserScan, "/scan", self._on_scan, qos_profile_sensor_data)
         sub(PointCloud2, "/camera/cloud", self._on_cloud, 2)
-        # nvblox GPU reconstruction, pre-tiled in C++ (mercury_x1_perception/nvblox_mesh_tiler)
-        sub(MeshTile, "/nvblox/mesh_tiles", self._on_mesh_tile,
-            QoSProfile(depth=64, reliability=ReliabilityPolicy.RELIABLE))
         # JPEG previews produced in C++ by mercury_x1_driver/image_preview_node (4 Hz)
         sub(CompressedImage, "/preview/orbbec", lambda m: self._on_image(m, "orbbec"), qos_profile_sensor_data)
         sub(CompressedImage, "/preview/bellybutton", lambda m: self._on_image(m, "bellybutton"),
@@ -144,6 +184,139 @@ class RerunBridge(Node):
         sub(PolygonStamped, "/local_costmap/published_footprint", self._on_footprint, 1)
         self.chain = PoseChain()
         self.create_timer(0.5, self._trail_tick)
+
+        # nvblox layers: the mesh (pre-tiled in C++, mercury_x1_perception/nvblox_mesh_tiler), the ESDF
+        # distance slice, the back-projected depth, TSDF / colour voxels, the occupancy grid
+        self.nvblox_handlers = {"mesh": self._on_mesh_tile, "esdf": self._on_esdf, "depth": self._on_nvblox_depth,
+                                "tsdf": lambda m: self._on_voxels(m, "tsdf"),
+                                "color": lambda m: self._on_voxels(m, "color"), "occupancy": self._on_nvblox_occupancy}
+        self.nvblox_subs: dict = {}
+        self.thr_nvblox = {k: Throttle(v[3]) for k, v in NVBLOX_LAYERS.items()}
+        self.mesh_tiles: set[str] = set()          # tile ids logged, blanked when the mesh layer goes off
+        self.layers_wanted: list[str] | None = None
+        p("nvblox_layers", self._saved_layers())
+        self.add_on_set_parameters_callback(self._on_params)
+        self._apply_layers(list(self.get_parameter("nvblox_layers").value))
+        self.create_timer(0.2, self._layers_tick)
+
+    # ---- logging through the worker thread ---------------------------------------------
+    def _set_time(self, t: float) -> None:
+        self.log_t = t
+
+    def _log(self, *args, **kwargs) -> None:
+        item = (self.log_t, args, kwargs)
+        try:
+            self.log_q.put_nowait(item)
+        except queue.Full:
+            if kwargs.get("static"):            # meshes / robot model / map tiles: wait rather than lose them
+                try:
+                    self.log_q.put(item, timeout=2.0)
+                    return
+                except queue.Full:
+                    pass
+            self.log_dropped += 1
+
+    def _log_worker(self) -> None:
+        last_report = time.monotonic()
+        while True:
+            t, args, kwargs = self.log_q.get()
+            try:
+                if t is not None and not kwargs.get("static"):
+                    rr.set_time("ros", timestamp=t)
+                rr.log(*args, **kwargs)
+            except Exception as e:  # noqa: BLE001 - one bad message must not stop the stream
+                self.get_logger().warn(f"rerun log {args[0] if args else '?'}: {e}", throttle_duration_sec=10.0)
+            if self.log_dropped and time.monotonic() - last_report > 10.0:
+                self.get_logger().warn(f"viewer stream backed up: dropped {self.log_dropped} updates "
+                                       f"(a slow or stale viewer is connected)")
+                self.log_dropped, last_report = 0, time.monotonic()
+
+    # ---- nvblox layers -------------------------------------------------------------
+    @staticmethod
+    def _saved_layers() -> list[str]:
+        try:
+            with open(VIZ_LAYERS_FILE) as f:
+                layers = [k for k in json.load(f).get("nvblox", []) if k in NVBLOX_LAYERS]
+            return layers or [""]           # rclpy cannot infer the type of an empty list
+        except (OSError, ValueError, AttributeError):
+            return ["mesh"]
+
+    def _on_params(self, params) -> SetParametersResult:
+        for prm in params:
+            if prm.name == "nvblox_layers":
+                bad = [k for k in prm.value if k and k not in NVBLOX_LAYERS]
+                if bad:
+                    return SetParametersResult(successful=False, reason=f"unknown layers {bad}")
+                self.layers_wanted = [k for k in prm.value if k]   # applied by the timer, outside the callback
+        return SetParametersResult(successful=True)
+
+    def _layers_tick(self) -> None:
+        if self.layers_wanted is not None:
+            wanted, self.layers_wanted = self.layers_wanted, None
+            self._apply_layers(wanted)
+
+    def _apply_layers(self, wanted: list[str]) -> None:
+        wanted = [k for k in wanted if k in NVBLOX_LAYERS]
+        for key in [k for k in self.nvblox_subs if k not in wanted]:
+            self.destroy_subscription(self.nvblox_subs.pop(key))
+            self._clear_layer(key)
+        for key in wanted:
+            if key not in self.nvblox_subs:
+                ty, topic, qos, _ = NVBLOX_LAYERS[key]
+                self.nvblox_subs[key] = self.create_subscription(ty, topic, self.nvblox_handlers[key], qos)
+        self.get_logger().info(f"nvblox layers: {sorted(self.nvblox_subs) or 'none'}")
+
+    def _clear_layer(self, key: str) -> None:
+        if key == "mesh":   # static tiles: overwrite each with an empty mesh (the tiler resends all on resubscribe)
+            for tid in self.mesh_tiles:
+                self._log(f"world/nvblox/mesh/{tid}", rr.Mesh3D(vertex_positions=np.zeros((0, 3), np.float32)),
+                       static=True)
+            self.mesh_tiles.clear()
+            return
+        self._set_time(time.time())
+        self._log(f"world/nvblox/{key}", rr.Clear(recursive=True))
+
+    def _on_esdf(self, msg: PointCloud2) -> None:
+        """ESDF slice: distance to the nearest obstacle at the slice height, red = touching, blue >= 1.5 m"""
+        if not self.thr_nvblox["esdf"]():
+            return
+        pts = cloud_fields(msg, ("x", "y", "z", "intensity"))
+        self._set_time(_stamp(msg))
+        self._log("world/nvblox/esdf", rr.CoordinateFrame(msg.header.frame_id),
+               rr.Points3D(pts[:, :3], radii=0.022, colors=_turbo(1.0 - pts[:, 3] / 1.5)))
+
+    def _on_nvblox_depth(self, msg: PointCloud2) -> None:
+        """the depth image nvblox integrates, back-projected to 3D (camera frame), coloured by range"""
+        if not self.thr_nvblox["depth"]():
+            return
+        xyz = cloud_xyz(msg)
+        if len(xyz) > DEPTH_MAX_POINTS:
+            xyz = xyz[:: int(math.ceil(len(xyz) / DEPTH_MAX_POINTS))]
+        self._set_time(_stamp(msg))
+        self._log("world/nvblox/depth", rr.CoordinateFrame(msg.header.frame_id),
+               rr.Points3D(xyz, radii=0.008, colors=_turbo(np.linalg.norm(xyz, axis=1) / 4.0)))
+
+    def _on_voxels(self, msg: Marker, key: str) -> None:
+        """TSDF / colour layer as voxel cubes (nvblox publishes CUBE_LIST markers with per-voxel colours)"""
+        if not self.thr_nvblox[key]() or not msg.points:
+            return
+        centers = np.array([(q.x, q.y, q.z) for q in msg.points], np.float32)
+        if len(msg.colors) == len(msg.points):
+            colors = (np.array([(c.r, c.g, c.b) for c in msg.colors], np.float32) * 255).astype(np.uint8)
+        else:
+            colors = [[180, 180, 180]]
+        h = 0.5 * float(msg.scale.x or 0.05)
+        self._set_time(_stamp(msg))
+        self._log(f"world/nvblox/{key}", rr.CoordinateFrame(msg.header.frame_id),
+               rr.Boxes3D(centers=centers, half_sizes=[[h, h, h]], colors=colors, fill_mode="solid"))
+
+    def _on_nvblox_occupancy(self, msg: OccupancyGrid) -> None:
+        """nvblox' own 2D occupancy (from the depth camera), drawn just above the floor"""
+        if not self.thr_nvblox["occupancy"]():
+            return
+        self._set_time(_stamp(msg))
+        self._log("world/nvblox/occupancy", rr.CoordinateFrame(msg.header.frame_id),
+               self._grid(msg, 0.6, rr.components.Colormap.RvizMap, 0.03))
 
     # ---- setup -----------------------------------------------------------------
     def _robot_parts(self) -> dict[str, list[str]]:
@@ -188,13 +361,13 @@ class RerunBridge(Node):
         for link, files in self.robot_parts.items():
             for k, fname in enumerate(files):
                 # one GLB per message, each well under a few MB (see tools/convert_meshes.py --chunk)
-                rr.log(f"world/robot/{link}/part{k}", rr.Asset3D(path=os.path.join(self.mesh_dir, fname)),
+                self._log(f"world/robot/{link}/part{k}", rr.Asset3D(path=os.path.join(self.mesh_dir, fname)),
                        rr.CoordinateFrame(link), static=True)
         # invisible pick target for the whole robot (floor to ~1.3 m around the base, axle frame)
-        rr.log("world/robot", rr.CoordinateFrame("base_footprint"),
+        self._log("world/robot", rr.CoordinateFrame("base_footprint"),
                rr.Capsules3D(lengths=[0.72], radii=[0.3], translations=[[-0.15, 0.0, 0.3]],
                              colors=[[255, 255, 255, 0]], fill_mode="solid"), static=True)
-        rr.log("world/robot/base_axes", rr.TransformAxes3D(axis_length=0.3), rr.CoordinateFrame("base_footprint"),
+        self._log("world/robot/base_axes", rr.TransformAxes3D(axis_length=0.3), rr.CoordinateFrame("base_footprint"),
                static=True)
 
     # ---- callbacks -----------------------------------------------------------------
@@ -208,8 +381,8 @@ class RerunBridge(Node):
                 continue
             tr, q = t.transform.translation, t.transform.rotation
             if not static:
-                rr.set_time("ros", timestamp=_stamp(t))
-            rr.log(f"tf/{child}", rr.Transform3D(translation=[tr.x, tr.y, tr.z], quaternion=[q.x, q.y, q.z, q.w],
+                self._set_time(_stamp(t))
+            self._log(f"tf/{child}", rr.Transform3D(translation=[tr.x, tr.y, tr.z], quaternion=[q.x, q.y, q.z, q.w],
                                                  parent_frame=t.header.frame_id.lstrip("/"), child_frame=child),
                    static=static)
 
@@ -256,16 +429,16 @@ class RerunBridge(Node):
                          albedo_texture=tex)
 
     def _on_map(self, msg: OccupancyGrid) -> None:
-        rr.set_time("ros", timestamp=_stamp(msg))
+        self._set_time(_stamp(msg))
         mesh = self._map_mesh(msg)
         if mesh is not None:
-            rr.log("world/map", rr.CoordinateFrame(msg.header.frame_id or "map"), mesh)
+            self._log("world/map", rr.CoordinateFrame(msg.header.frame_id or "map"), mesh)
 
     def _on_costmap(self, msg: OccupancyGrid) -> None:
         if not self.thr_costmap():
             return
-        rr.set_time("ros", timestamp=_stamp(msg))
-        rr.log("world/local_costmap", rr.CoordinateFrame(msg.header.frame_id),
+        self._set_time(_stamp(msg))
+        self._log("world/local_costmap", rr.CoordinateFrame(msg.header.frame_id),
                self._grid(msg, 0.45, rr.components.Colormap.RvizCostmap, 0.01))
 
     def _on_scan(self, msg: LaserScan) -> None:
@@ -275,8 +448,8 @@ class RerunBridge(Node):
         a = msg.angle_min + np.arange(len(r), dtype=np.float32) * msg.angle_increment
         ok = np.isfinite(r) & (r > max(msg.range_min, 0.12)) & (r < min(msg.range_max, 25.0))
         pts = np.stack([r[ok] * np.cos(a[ok]), r[ok] * np.sin(a[ok]), np.zeros(ok.sum(), np.float32)], 1)
-        rr.set_time("ros", timestamp=_stamp(msg))
-        rr.log("world/scan", rr.CoordinateFrame(msg.header.frame_id), rr.Points3D(pts, radii=0.02, colors=[255, 60, 60]))
+        self._set_time(_stamp(msg))
+        self._log("world/scan", rr.CoordinateFrame(msg.header.frame_id), rr.Points3D(pts, radii=0.02, colors=[255, 60, 60]))
 
     def _on_cloud(self, msg: PointCloud2) -> None:
         if not self.thr_cloud():
@@ -287,15 +460,16 @@ class RerunBridge(Node):
         d = np.linalg.norm(xyz, axis=1)
         t = np.clip((d - 0.3) / 3.0, 0, 1)
         colors = (np.stack([t, 0.6 + 0.4 * (1 - t), 1 - t], 1) * 255).astype(np.uint8)
-        rr.set_time("ros", timestamp=_stamp(msg))
-        rr.log("world/depth_cloud", rr.CoordinateFrame(msg.header.frame_id),
+        self._set_time(_stamp(msg))
+        self._log("world/depth_cloud", rr.CoordinateFrame(msg.header.frame_id),
                rr.Points3D(xyz, radii=0.015, colors=colors))
 
     def _on_mesh_tile(self, msg: MeshTile) -> None:
-        path = f"world/nvblox/{msg.id}"
+        path = f"world/nvblox/mesh/{msg.id}"
+        self.mesh_tiles.add(msg.id)
         tri = np.frombuffer(msg.triangles, dtype=np.uint32)
         if len(tri) < 3:
-            rr.log(path, rr.Mesh3D(vertex_positions=np.zeros((0, 3), np.float32)), static=True)
+            self._log(path, rr.Mesh3D(vertex_positions=np.zeros((0, 3), np.float32)), static=True)
             return
         pos = np.frombuffer(msg.positions, dtype=np.float32).reshape(-1, 3)
         nrm = np.frombuffer(msg.normals, dtype=np.float32).reshape(-1, 3) if len(msg.normals) else None
@@ -306,7 +480,7 @@ class RerunBridge(Node):
             rgb = (np.array([70, 110, 200]) * (1 - t) + np.array([230, 200, 120]) * t).astype(np.uint8)
         # static: only the latest version of each tile is kept, so the memory-limited stream never
         # garbage-collects parts of the map that have not changed for a while
-        rr.log(path, rr.CoordinateFrame(msg.header.frame_id),
+        self._log(path, rr.CoordinateFrame(msg.header.frame_id),
                rr.Mesh3D(vertex_positions=pos, vertex_normals=nrm, vertex_colors=rgb,
                          triangle_indices=tri.reshape(-1, 3)), static=True)
 
@@ -314,8 +488,8 @@ class RerunBridge(Node):
         if not self.thr_img(name):
             return
         jpg = bytes(msg.data)
-        rr.set_time("ros", timestamp=_stamp(msg))
-        rr.log(f"cams/{name}", rr.EncodedImage(contents=jpg, media_type="image/jpeg"))
+        self._set_time(_stamp(msg))
+        self._log(f"cams/{name}", rr.EncodedImage(contents=jpg, media_type="image/jpeg"))
         info = self.cam_info.get(name)
         if info is not None and self.thr_frustum(name):
             # 3D frustum with the live image at 1 Hz (preview keeps the camera_info resolution)
@@ -325,7 +499,7 @@ class RerunBridge(Node):
             if K[0, 0] <= 0:   # uncalibrated: pinhole from an assumed horizontal FOV
                 f = (w / 2) / math.tan(self.belly_hfov / 2)
                 K = np.array([[f, 0, w / 2], [0, f, h / 2], [0, 0, 1]])
-            rr.log(f"world/{name}_camera",
+            self._log(f"world/{name}_camera",
                    rr.Pinhole(image_from_camera=K, resolution=[w, h],
                               camera_xyz=rr.ViewCoordinates.RDF, parent_frame=frame, child_frame=f"{name}_image",
                               image_plane_distance=0.4),
@@ -337,25 +511,25 @@ class RerunBridge(Node):
             return
         rng = msg.range if math.isfinite(msg.range) else msg.max_range
         color = [255, 170, 0] if math.isfinite(msg.range) else [90, 90, 90]
-        rr.set_time("ros", timestamp=_stamp(msg))
-        rr.log(f"world/ultrasonic/{name}", rr.CoordinateFrame(msg.header.frame_id),
+        self._set_time(_stamp(msg))
+        self._log(f"world/ultrasonic/{name}", rr.CoordinateFrame(msg.header.frame_id),
                rr.Arrows3D(vectors=[[rng, 0, 0]], colors=[color], radii=0.01,
                            labels=[f"{rng:.2f} m" if math.isfinite(msg.range) else ""]))
-        rr.set_time("ros", timestamp=_stamp(msg))
-        rr.log(f"stats/ultrasonic/{name}", rr.Scalars(rng))
+        self._set_time(_stamp(msg))
+        self._log(f"stats/ultrasonic/{name}", rr.Scalars(rng))
 
     def _on_plan(self, msg: Path) -> None:
         pts = [[p.pose.position.x, p.pose.position.y, 0.03] for p in msg.poses]
-        rr.set_time("ros", timestamp=_stamp(msg))
-        rr.log("world/plan", rr.CoordinateFrame(msg.header.frame_id or "map"),
+        self._set_time(_stamp(msg))
+        self._log("world/plan", rr.CoordinateFrame(msg.header.frame_id or "map"),
                rr.LineStrips3D([pts] if pts else [], colors=[[60, 200, 255]], radii=0.02))
 
     def _on_vslam_path(self, msg: Path) -> None:
         if not self.thr_slow("vslam"):
             return
         pts = [[p.pose.position.x, p.pose.position.y, 0.05] for p in msg.poses]
-        rr.set_time("ros", timestamp=_stamp(msg))
-        rr.log("world/vslam_path", rr.CoordinateFrame(msg.header.frame_id or "vslam_odom"),
+        self._set_time(_stamp(msg))
+        self._log("world/vslam_path", rr.CoordinateFrame(msg.header.frame_id or "vslam_odom"),
                rr.LineStrips3D([pts] if pts else [], colors=[[200, 90, 255]], radii=0.012))
 
     def _on_waypoints(self, msg: PoseArray) -> None:
@@ -366,14 +540,14 @@ class RerunBridge(Node):
             pos.append([p.position.x, p.position.y, 0.05])
             vec.append([0.35 * math.cos(yaw), 0.35 * math.sin(yaw), 0.0])
             labels.append(str(i + 1))
-        rr.log("world/waypoints", rr.CoordinateFrame(msg.header.frame_id or "map"),
+        self._log("world/waypoints", rr.CoordinateFrame(msg.header.frame_id or "map"),
                rr.Arrows3D(origins=pos, vectors=vec, colors=[[255, 220, 0]] * len(pos), radii=0.03, labels=labels))
 
     def _on_footprint(self, msg: PolygonStamped) -> None:
         pts = [[p.x, p.y, 0.02] for p in msg.polygon.points]
         if pts:
             pts.append(pts[0])
-        rr.log("world/footprint", rr.CoordinateFrame(msg.header.frame_id),
+        self._log("world/footprint", rr.CoordinateFrame(msg.header.frame_id),
                rr.LineStrips3D([pts], colors=[[0, 255, 140]], radii=0.01))
 
     def _trail_tick(self) -> None:
@@ -383,7 +557,7 @@ class RerunBridge(Node):
         p = [pose[1], pose[2], 0.02]
         if not self.trail or math.dist(p, self.trail[-1]) > 0.03:
             self.trail = (self.trail + [p])[-3000:]
-            rr.log("world/trail", rr.CoordinateFrame("map"),
+            self._log("world/trail", rr.CoordinateFrame("map"),
                    rr.LineStrips3D([self.trail], colors=[[255, 255, 255, 120]], radii=0.008))
 
 

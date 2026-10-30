@@ -19,6 +19,7 @@
 #include <string>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "geometry_msgs/msg/twist.hpp"
@@ -74,6 +75,8 @@ public:
     // Mercury X1 pack: 7S LiFePO4 (rests at 23.7 V when full = 3.38 V/cell; factory test read 20.8 V)
     battery_cells_ = declare_parameter("battery_cells", 7);
     battery_lfp_ = declare_parameter("battery_chemistry", std::string("lifepo4")) != "li-ion";
+    // per-cell voltage only a charger produces (LiFePO4 rests <= ~3.5 V/cell even freshly charged)
+    charge_cell_v_ = declare_parameter("charging_cell_voltage", battery_lfp_ ? 3.55 : 4.25);
     battery_log_ = declare_parameter("battery_log", std::string("~/.ros/mercury_battery.csv"));
     if (battery_log_.rfind("~/", 0) == 0 && std::getenv("HOME")) {battery_log_ = std::getenv("HOME") + battery_log_.substr(1);}
 
@@ -290,6 +293,7 @@ private:
     {
       std::lock_guard<std::mutex> lk(state_mtx_);
       for (int i = 0; i < 6; ++i) {us_m_[i] = f.mm[i] / 1000.0;}
+      us_aux_ = f.aux;
     }
     for (size_t i = 0; i < pub_us_.size() && i < 6; ++i) {
       sensor_msgs::msg::Range r;
@@ -330,6 +334,28 @@ private:
            interp(lion, sizeof(lion) / sizeof(lion[0]), v);
   }
 
+  // The MCU reports no charging state (fw v1.2: nothing in either frame changes), so estimate it from the
+  // slow-filtered voltage: charging when it is above what a resting LiFePO4 pack can show (charger in its
+  // constant-voltage phase), or when it rose in each of the last 3 minutes (a load drop is a single step,
+  // a charger keeps pushing it up). Unplugging shows within ~1 min as the voltage starts relaxing.
+  uint8_t chargeStatus(bool connected, double pct)
+  {
+    using BS = sensor_msgs::msg::BatteryState;
+    if (!connected || v_filt_ <= 1.0 || battery_cells_ <= 0) {return BS::POWER_SUPPLY_STATUS_UNKNOWN;}
+    if (++trend_tick_ >= 60) {
+      trend_tick_ = 0;
+      trend_.push_back(v_filt_);
+      if (trend_.size() > 4) {trend_.erase(trend_.begin());}
+    }
+    bool rising = trend_.size() == 4;
+    for (size_t i = 1; rising && i < trend_.size(); ++i) {rising = trend_[i] - trend_[i - 1] > 0.005;}
+    rising = rising && trend_.back() - trend_.front() >= 0.04;
+    if (v_filt_ / static_cast<double>(battery_cells_) >= charge_cell_v_ || rising) {
+      return BS::POWER_SUPPLY_STATUS_CHARGING;
+    }
+    return pct >= 0.99 ? BS::POWER_SUPPLY_STATUS_FULL : BS::POWER_SUPPLY_STATUS_DISCHARGING;
+  }
+
   // one line a minute: time, raw voltage, filtered voltage, percent (to find the LED's low-battery point)
   void logBattery(double v, double pct)
   {
@@ -358,6 +384,7 @@ private:
         st.ultrasonic_range.push_back(static_cast<float>(us_m_[i]));
         st.ultrasonic_names.push_back(i < us_names_.size() ? us_names_[i] : "");
       }
+      st.mcu_aux.assign(us_aux_.begin(), us_aux_.end());
       st.measured = measured_;
       st.commanded.linear.x = sent_[0];
       st.commanded.linear.y = sent_[1];
@@ -365,7 +392,6 @@ private:
       st.cmd_timeout = timed_out_;
       st.obstacle_hold = obstacle_hold_;
     }
-    pub_state_->publish(st);
 
     sensor_msgs::msg::BatteryState b;
     b.header.stamp = st.header.stamp;
@@ -380,9 +406,12 @@ private:
       std::numeric_limits<float>::quiet_NaN();
     b.cell_voltage.assign(static_cast<size_t>(std::max<int64_t>(battery_cells_, 0)),
         battery_cells_ > 0 ? st.voltage / battery_cells_ : 0.0f);
+    b.power_supply_status = chargeStatus(connected, std::isfinite(b.percentage) ? b.percentage : 0.0);
     b.power_supply_technology = battery_lfp_ ? sensor_msgs::msg::BatteryState::POWER_SUPPLY_TECHNOLOGY_LIFE :
       sensor_msgs::msg::BatteryState::POWER_SUPPLY_TECHNOLOGY_LION;
     pub_batt_->publish(b);
+    st.charge_status = b.power_supply_status;
+    pub_state_->publish(st);
     if (connected && std::isfinite(b.percentage)) {logBattery(st.voltage, b.percentage);}
     if (!connected) {RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "no frames from base MCU");}
   }
@@ -391,6 +420,7 @@ private:
   std::string port_, odom_frame_, base_frame_, imu_frame_;
   int64_t baud_, battery_cells_;
   bool battery_lfp_{true};
+  double charge_cell_v_{3.55};
   std::string battery_log_;
   int battery_log_tick_{59};
   bool publish_tf_, yaw_from_gyro_;
@@ -422,6 +452,9 @@ private:
   double voltage_{0};
   double v_filt_{0};   // slow-filtered voltage for the state-of-charge estimate (1 Hz updates)
   std::array<double, 6> us_m_{};
+  std::array<uint16_t, 2> us_aux_{};
+  std::vector<double> trend_;   // filtered voltage once a minute, last 4 (charging trend)
+  int trend_tick_{59};
   geometry_msgs::msg::Twist measured_;
   // odometry (rx thread only)
   double x_{0}, y_{0}, yaw_{0}, last_state_t_{-1}, gyro_bias_{0};

@@ -70,6 +70,7 @@ std::vector<Message> StreamParser::feed(const Bytes & chunk)
       if (f[kUltraLen - 1] == 0xFC && xorSum(f, kUltraLen - 2) == f[kUltraLen - 2]) {
         UltrasonicFrame u{};
         for (int k = 0; k < 6; ++k) {u.mm[k] = u16(f + 1 + 2 * k);}
+        for (int k = 0; k < 2; ++k) {u.aux[k] = u16(f + 13 + 2 * k);}
         out.emplace_back(u);
         i += kUltraLen;
         continue;

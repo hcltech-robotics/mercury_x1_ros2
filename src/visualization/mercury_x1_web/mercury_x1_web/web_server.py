@@ -24,7 +24,7 @@ import urllib.request
 import numpy as np
 import rclpy
 import rclpy.executors
-from aiohttp import WSMsgType, web
+from aiohttp import web
 from ament_index_python.packages import get_package_share_directory
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import Pose, PoseArray, PoseStamped, PoseWithCovarianceStamped, Twist
@@ -34,6 +34,8 @@ from nav_msgs.msg import OccupancyGrid, Path
 from PIL import Image as PILImage
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+from rcl_interfaces.srv import SetParameters
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import BatteryState
 from tf2_msgs.msg import TFMessage
@@ -45,11 +47,13 @@ from std_srvs.srv import SetBool, Trigger
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
 MAPS_DIR = os.path.expanduser("~/maps")
-VIEWER_VERSION = "0.32.0"   # must match rerun-sdk on the robot and dimos-viewer (0.32.x)
+VIEWER_VERSION = "0.39.0"   # must match rerun-sdk on the robot (newest release that still supports Python 3.10)
 VIEWER_FILES = ("index.js", "re_viewer.js", "re_viewer_bg.wasm")
 MX1_WS = os.environ.get("MX1_WS", os.path.expanduser("~/mercury_x1_ros2"))
 CONF_DIR = os.path.expanduser("~/.config/mercury_x1")
 ROS_NETWORK_FILE = os.path.join(CONF_DIR, "ros_network")   # read by scripts/ros_env.sh at stack start
+VIZ_LAYERS_FILE = os.path.join(CONF_DIR, "viz_layers.json")  # read by rerun_bridge at start
+NVBLOX_LAYERS = ("mesh", "esdf", "depth", "tsdf", "color", "occupancy")   # = rerun_bridge.NVBLOX_LAYERS
 VIEWER_CACHE = os.path.expanduser(f"~/.cache/mercury_x1_web/rerun-web-viewer/{VIEWER_VERSION}")
 
 
@@ -118,6 +122,7 @@ class WebNode(Node):
         self.plan: list[list[float]] = []
         self.battery = float("nan")
         self.battery_pct = float("nan")
+        self.charge = "unknown"
         self.base: BaseState | None = None
         self.arms: dict[str, ArmState] = {}
         self.waypoints: list[dict] = []
@@ -125,7 +130,7 @@ class WebNode(Node):
         self.wp_handle = None
         self.goal_handle = None
         self.cancel_requested = False
-        # what a click in a 3D view (browser Rerun viewer or native dimos-viewer) does
+        # what a click in the 3D view (embedded Rerun viewer) does
         self.click_mode = "waypoint"          # waypoint | goto | pose | off
         self.last_click: dict | None = None
         self.waypoints_changed = None         # set by App: persist + republish
@@ -155,6 +160,7 @@ class WebNode(Node):
             "right_power": self.create_client(SetBool, "/right_arm/power"),
             "arms_stop": self.create_client(Trigger, "/upper_body/stop"),
             "freedrive": self.create_client(SetBool, "/upper_body/freedrive"),
+            "bridge_params": self.create_client(SetParameters, "/rerun_bridge/set_parameters"),
         }
         self.create_timer(0.05, self._run_jobs)
 
@@ -185,6 +191,10 @@ class WebNode(Node):
     def _on_battery(self, msg: BatteryState) -> None:
         self.battery = msg.voltage
         self.battery_pct = msg.percentage * 100 if math.isfinite(msg.percentage) else float("nan")
+        # estimated by base_node from the voltage trend (the MCU does not report it)
+        self.charge = {BatteryState.POWER_SUPPLY_STATUS_CHARGING: "charging",
+                       BatteryState.POWER_SUPPLY_STATUS_DISCHARGING: "discharging",
+                       BatteryState.POWER_SUPPLY_STATUS_FULL: "full"}.get(msg.power_supply_status, "unknown")
 
     def _on_remote(self, msg: String) -> None:
         try:
@@ -349,6 +359,10 @@ class WebNode(Node):
         if stop_base:
             self.cmd_vel(0.0, 0.0)
 
+    def set_nvblox_layers(self, layers: list[str]) -> None:
+        val = ParameterValue(type=ParameterType.PARAMETER_STRING_ARRAY, string_array_value=layers or [""])
+        self.call("bridge_params", SetParameters.Request(parameters=[Parameter(name="nvblox_layers", value=val)]))
+
     def call(self, key: str, req) -> None:
         cli = self.srv[key]
         if cli.wait_for_service(timeout_sec=0.5):
@@ -363,10 +377,12 @@ class WebNode(Node):
             "pose": self.robot_pose(),
             "battery": None if math.isnan(self.battery) else round(self.battery, 2),
             "battery_pct": None if math.isnan(self.battery_pct) else round(self.battery_pct),
+            "charge": self.charge,
             "base": None if base is None else {
                 "connected": base.connected, "fw": base.firmware_version,
                 "ultrasonic": {n: round(v, 2) for n, v in zip(base.ultrasonic_names, base.ultrasonic_range) if n},
-                "obstacle_hold": base.obstacle_hold, "cmd_timeout": base.cmd_timeout},
+                "obstacle_hold": base.obstacle_hold, "cmd_timeout": base.cmd_timeout,
+                "flag": base.stop_flag, "aux": list(getattr(base, "mcu_aux", []))},
             "arms": arms,
             "nav": dict(self.nav),
             "map_version": self.map_version,
@@ -388,8 +404,7 @@ class App:
         self.restarting = False
         self.static_dir = os.path.join(get_package_share_directory("mercury_x1_web"), "web")
         self.viewer_ready = all(os.path.exists(os.path.join(VIEWER_CACHE, f)) for f in VIEWER_FILES)
-        self.dimos_port = 3030
-        self.dimos_clients = 0
+        self.viz_layers = self.load_viz_layers()
         self.sysstats = SysStats()           # CPU / GPU load and temperatures for the status page
         node.waypoints_changed = self.save_waypoints
         os.makedirs(MAPS_DIR, exist_ok=True)
@@ -425,37 +440,6 @@ class App:
         if (vx or wz) and n.nav["state"] == "navigating":
             n.post(lambda: n.cancel(stop_base=False))   # driving by hand overrides navigation
         n.post(lambda: n.cmd_vel(max(-0.4, min(0.4, vx)), max(-1.0, min(1.0, wz))))
-
-    # -- dimos-viewer (Dimensional's Rerun fork) interaction protocol ------------------------------
-    async def dimos_ws(self, req: web.Request) -> web.WebSocketResponse:
-        """JSON over websocket, as sent by `dimos-viewer --ws-url ws://<robot>:3030/ws`:
-        click{x,y,z,entity_path,timestamp_ms}, twist{linear_*,angular_*}, stop, heartbeat."""
-        ws = web.WebSocketResponse(heartbeat=20)
-        await ws.prepare(req)
-        n = self.node
-        n.get_logger().info(f"dimos-viewer connected from {req.remote}")
-        self.dimos_clients += 1
-        try:
-            async for msg in ws:
-                if msg.type != WSMsgType.TEXT:
-                    continue
-                try:
-                    m = json.loads(msg.data)
-                except ValueError:
-                    continue
-                kind = m.get("type")
-                if kind == "click":
-                    n.post(lambda m=m: n.handle_click(float(m["x"]), float(m["y"]), float(m.get("z", 0.0)),
-                                                      str(m.get("entity_path", "")), "dimos-viewer"))
-                elif kind == "twist":
-                    self.teleop(float(m.get("linear_x", 0.0)), float(m.get("angular_z", 0.0)))
-                elif kind == "stop":          # key release, Space (e-stop) or overlay disengage
-                    n.post(n.cancel)
-        finally:
-            self.dimos_clients -= 1
-            n.post(lambda: n.cmd_vel(0.0, 0.0))
-            n.get_logger().info("dimos-viewer disconnected")
-        return ws
 
     # -- waypoints persistence -----------------------------------------------------------------
     def wp_file(self) -> str:
@@ -497,6 +481,14 @@ class App:
                                   "resolution": i.resolution, "origin": [i.origin.position.x, i.origin.position.y],
                                   "frame": m.header.frame_id})
 
+    @staticmethod
+    def load_viz_layers() -> list[str]:
+        try:
+            with open(VIZ_LAYERS_FILE) as f:
+                return [k for k in json.load(f).get("nvblox", []) if k in NVBLOX_LAYERS]
+        except (OSError, ValueError, AttributeError):
+            return ["mesh"]
+
     def ros_network(self) -> dict:
         """network = what this stack runs with, configured = what the next (re)start uses"""
         try:
@@ -534,7 +526,7 @@ class App:
                 st = self.node.status()
                 st["procs"] = self.sup.status()
                 st["map_name"] = self.map_name
-                st["dimos_viewers"] = self.dimos_clients
+                st["viz_layers"] = {"nvblox": self.viz_layers}
                 st["system"] = self.sysstats.snapshot()
                 st["ros"] = self.ros_network()
                 await ws.send_str(json.dumps(st))
@@ -570,6 +562,13 @@ class App:
             n.post(lambda: n.run_waypoints(bool(body.get("loop", False))))
         elif action == "initialpose":
             n.post(lambda: n.set_initial_pose(body["x"], body["y"], body.get("yaw", 0.0)))
+        elif action == "viz_layers":     # {"nvblox": [...]} -> rerun_bridge parameter, saved for restarts
+            layers = [k for k in NVBLOX_LAYERS if k in body.get("nvblox", [])]
+            self.viz_layers = layers
+            os.makedirs(CONF_DIR, exist_ok=True)
+            with open(VIZ_LAYERS_FILE, "w") as f:
+                json.dump({"nvblox": layers}, f)
+            n.post(lambda: n.set_nvblox_layers(layers))
         elif action == "ros_network":   # {"network": "localhost" | "lan"} -> saved, then the stack restarts
             net = body.get("network")
             if net not in ("localhost", "lan"):
@@ -648,16 +647,12 @@ class App:
         threading.Thread(target=self.fetch_viewer, daemon=True).start()
         self.load_waypoints()
 
-        dimos = web.Application()
-        dimos.router.add_get("/ws", self.dimos_ws)
-
         async def serve() -> None:
             runners = []
-            for application, port in ((app, self.port), (dimos, self.dimos_port)):
-                runner = web.AppRunner(application)
-                await runner.setup()
-                await web.TCPSite(runner, port=port).start()
-                runners.append(runner)
+            runner = web.AppRunner(app)
+            await runner.setup()
+            await web.TCPSite(runner, port=self.port).start()
+            runners.append(runner)
             stop = asyncio.Event()
             loop = asyncio.get_running_loop()
             for sig in (signal.SIGINT, signal.SIGTERM):
@@ -680,7 +675,7 @@ def main(args=None) -> None:
     ex = rclpy.executors.SingleThreadedExecutor()   # rclpy multi-threaded spinning is CPU-heavy
     ex.add_node(node)
     threading.Thread(target=ex.spin, daemon=True).start()
-    node.get_logger().info(f"control page on http://0.0.0.0:{port}, dimos-viewer websocket on :3030/ws")
+    node.get_logger().info(f"control page on http://0.0.0.0:{port}")
     try:
         App(node, port, grpc_port, viewer_port).run()
     finally:

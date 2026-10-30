@@ -129,7 +129,6 @@
   <span class="chip"><span class="dot" id="d-arms"></span><span id="t-arms">arms</span></span>
   <span class="chip" id="c-sys" title="CPU / GPU load and hottest temperature (details: Robot tab · Status)"><span class="dot" id="d-sys"></span><span id="t-sys">CPU -- · GPU --</span></span>
   <span class="chip" title="Unitree BLE remote (Robot tab)"><span class="dot" id="d-remote"></span><span id="t-remote">remote</span></span>
-  <span class="chip hidden" id="c-dimos" title="native dimos-viewer clients connected to ws://&lt;robot&gt;:3030/ws"><span class="dot ok"></span><span id="t-dimos">dimos-viewer</span></span>
   <span class="spacer"></span>
   <button id="drive" title="Engage keyboard driving: W/A/S/D or arrows, Shift = fast, Space = stop, Esc = release">⌨ Drive</button>
   <button id="estop" title="Cancel navigation and stop the base (Space)">STOP</button>
@@ -170,10 +169,22 @@
             <button data-tool="pose" title="click/drag: tell the localizer where the robot is">Set pose</button>
             <button data-tool="off" title="clicks only select / inspect">View</button>
           </div>
-          <span class="muted" style="font-size:11px">applies to map, Rerun 3D and dimos-viewer clicks</span>
+          <span class="muted" style="font-size:11px">applies to map and 3D view clicks</span>
         </div>
         <div id="mapwrap"><canvas id="map"></canvas><div id="mapmsg">No map yet. Start mapping or localization.</div></div>
         <div class="row muted" style="margin-top:6px;font-size:11px">Wheel: zoom · right-drag / shift-drag: pan · double-click: center on robot</div>
+      </section>
+      <section>
+        <h2>3D layers · nvblox</h2>
+        <div class="row" id="nvblox-layers">
+          <label class="switch" data-layer="mesh" title="Surface mesh (TSDF marching cubes), coloured by the camera"><input type="checkbox"><span class="track"></span>Mesh</label>
+          <label class="switch" data-layer="esdf" title="ESDF slice: distance to the nearest obstacle at the costmap slice height (red = touching, blue = 1.5 m+) - what Nav2 sees"><input type="checkbox"><span class="track"></span>ESDF slice</label>
+          <label class="switch" data-layer="depth" title="Depth image back-projected to 3D points (what nvblox integrates; ~40k of 180k points)"><input type="checkbox"><span class="track"></span>Depth points</label>
+          <label class="switch" data-layer="tsdf" title="TSDF voxels near the surface (5 cm cubes)"><input type="checkbox"><span class="track"></span>TSDF voxels</label>
+          <label class="switch" data-layer="color" title="Colour voxels (5 cm cubes)"><input type="checkbox"><span class="track"></span>Colour voxels</label>
+          <label class="switch" data-layer="occupancy" title="nvblox 2D occupancy grid from the depth camera"><input type="checkbox"><span class="track"></span>Occupancy</label>
+        </div>
+        <div class="muted" style="font-size:11px">Layers that are off are not streamed (no CPU / GPU cost). Local map: ~6 m around the robot.</div>
       </section>
       <section>
         <h2>Waypoints</h2>
@@ -281,7 +292,7 @@ async function startViewer() {
       const v = new WebViewer();
       await v.start(grpcUrl, el, { hide_welcome_screen: true, width: "100%", height: "100%", theme: "dark" });
       viewer = v;
-      // same behaviour as dimos-viewer: a plain click on any 3D point is sent to the robot,
+      // a plain click on any 3D point is sent to the robot,
       // which turns it into a waypoint / goal / pose according to the current click mode
       let lastClick = 0;
       v.on("selection_change", (ev) => {
@@ -347,8 +358,6 @@ function onStatus() {
     if (lastClickT !== null) toast(`${s.last_click.source} click (${s.last_click.x}, ${s.last_click.y}): ${s.last_click.result}`);
     lastClickT = s.last_click.t;
   }
-  $("#c-dimos").classList.toggle("hidden", !s.dimos_viewers);
-  $("#t-dimos").textContent = `dimos-viewer ×${s.dimos_viewers || 0}`;
   const n = s.nav;
   $("#navstate").textContent = n.state + (n.loop ? " · cruising" : "") + (n.current != null && n.state === "navigating" ? ` · to #${n.current + 1}` : "") + (n.message ? ` · ${n.message}` : "");
   $("#navstate").style.color = n.state === "error" || n.state === "aborted" ? "var(--bad)" : n.state === "navigating" ? "var(--warn)" : "var(--muted)";
@@ -358,10 +367,14 @@ function onStatus() {
   const armsList = Object.values(s.arms || {});
   setArmsSwitch(armsList.length > 0 && armsList.every((a) => a.powered));
   setFreeSwitch(armsList.some((a) => a.freedrive));
-  if (st.ros) {
-    setLanSwitch(st.ros.network === "lan");
-    const pending = st.ros.configured !== st.ros.network ? ` → ${st.ros.configured === "lan" ? "LAN" : "robot only"} on restart` : "";
-    $("#ros-net").textContent = `domain ${st.ros.domain} · ${st.ros.network === "lan" ? "LAN" : "robot only"}${st.ros.restarting ? " · restarting…" : pending}`;
+  if (s.viz_layers && Date.now() > layersUntil) {
+    for (const el of document.querySelectorAll("#nvblox-layers [data-layer]"))
+      el.querySelector("input").checked = s.viz_layers.nvblox.includes(el.dataset.layer);
+  }
+  if (s.ros) {
+    setLanSwitch(s.ros.network === "lan");
+    const pending = s.ros.configured !== s.ros.network ? ` → ${s.ros.configured === "lan" ? "LAN" : "robot only"} on restart` : "";
+    $("#ros-net").textContent = `domain ${s.ros.domain} · ${s.ros.network === "lan" ? "LAN" : "robot only"}${s.ros.restarting ? " · restarting…" : pending}`;
   }
   drawMap();
 }
@@ -407,12 +420,12 @@ function renderBattery(s) {
     const p = Math.max(0, Math.min(100, pct));
     fill.style.width = `calc(${p}% - 2px)`;
     fill.style.background = p > 30 ? "var(--ok)" : p > 15 ? "var(--warn)" : "var(--bad)";
-    $("#t-batt").textContent = `${Math.round(p)} %` + (s.battery != null ? ` · ${s.battery.toFixed(1)} V` : "");
+    $("#t-batt").textContent = (s.charge === "charging" ? "⚡ " : "") + `${Math.round(p)} %` + (s.battery != null ? ` · ${s.battery.toFixed(1)} V` : "");
   } else {
     fill.style.width = "0";
     $("#t-batt").textContent = s.battery != null ? `${s.battery.toFixed(1)} V` : "-- %";
   }
-  $("#c-batt").title = s.battery != null ? `battery ${s.battery.toFixed(2)} V (7S LiFePO4, full ≈ 23.7 V)` : "battery: no data from the base";
+  $("#c-batt").title = s.battery != null ? `battery ${s.battery.toFixed(2)} V (7S LiFePO4, full ≈ 23.7 V) · ${s.charge} (estimated from the voltage trend)` : "battery: no data from the base";
 }
 
 // ---------------- Unitree BLE remote ----------------
@@ -482,7 +495,9 @@ function renderKV() {
   const rows = [["pose", p], ["base", b.connected ? `ok · fw ${b.fw}` : "no link"],
     ["sonar L / back / R", b.ultrasonic ? ["left", "back", "right"].map((n) => {
       const v = b.ultrasonic[n]; return v == null ? "?" : v >= 2.9 ? "—" : v.toFixed(2); }).join(" / ") + " m" : "—"],
-    ["rear guard", b.obstacle_hold ? "HOLDING (obstacle behind)" : "clear"]];
+    ["rear guard", b.obstacle_hold ? "HOLDING (obstacle behind)" : "clear"],
+    ["battery", `${s.charge || "—"} (estimated)`],
+    ["MCU flag / aux", b.connected ? `${b.flag} / ${(b.aux || []).join(", ")}` : "—"]];
   for (const [side, a] of Object.entries(s.arms || {})) rows.push([`${side} arm`, `${a.powered ? "powered" : "off"} · ${a.rate} Hz${a.moving ? " · moving" : ""}`]);
   $("#kv").innerHTML = rows.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
 }
@@ -724,6 +739,16 @@ const setFreeSwitch = bindSwitch("#sw-free", (on) => {
   if (on && !confirm("Freedrive: the arms can be moved by hand. Hold the arms - they may sink. Continue?")) return false;
   api("freedrive", { on }); toast(on ? "freedrive on (remote: Select toggles)" : "freedrive off - arms hold");
 });
+// nvblox layers in the 3D view: the bridge subscribes only to the layers that are on
+let layersUntil = 0;
+for (const el of document.querySelectorAll("#nvblox-layers [data-layer]")) {
+  el.querySelector("input").addEventListener("change", () => {
+    layersUntil = Date.now() + 1500;           // keep the click until the status reports it back
+    const on = [...document.querySelectorAll("#nvblox-layers [data-layer]")]
+      .filter((e) => e.querySelector("input").checked).map((e) => e.dataset.layer);
+    api("viz_layers", { nvblox: on });
+  });
+}
 const setLanSwitch = bindSwitch("#sw-lan", (lan) => {
   const what = lan ? "LAN: other machines can see the robot's ROS topics (DDS traffic on the WiFi)"
                    : "Robot only: ROS traffic stays on the robot";

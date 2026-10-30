@@ -4,6 +4,7 @@
 //   state      26 B: 7B flag vx vy wz ax ay az gx gy gz mV fw_major fw_minor XOR 7D
 //                    (int16 big-endian; mm/s, mrad/s)
 //   ultrasonic 19 B: FA d0..d5 u6 u7 XOR FC  (uint16 BE, mm; 3000 = no echo / not fitted)
+//                    u6 / u7: two more words, meaning unknown (read 4 / 0 on fw v1.2) -> BaseState.mcu_aux
 // host -> MCU, 11 B: 7B mode b2 b3..b8 XOR 7D
 //   mode 0: velocity, b3..b8 = vx vy wz int16 (mm/s, mrad/s). The MCU ramps acceleration and
 //           stops on its own ~1 s after the last frame.
@@ -40,6 +41,7 @@ struct StateFrame
 struct UltrasonicFrame
 {
   std::array<uint16_t, 6> mm;
+  std::array<uint16_t, 2> aux;   // u6, u7
 };
 
 using Message = std::variant<StateFrame, UltrasonicFrame>;

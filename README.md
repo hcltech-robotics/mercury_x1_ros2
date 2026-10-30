@@ -23,21 +23,22 @@ multicast on the WiFi) or **LAN** (`config/fastdds_lan.xml`, other machines can 
 (Robot tab, "ROS 2 network"); it is saved in `~/.config/mercury_x1/ros_network` and restarts the stack
 (`scripts/mx1_restart.sh`), with SLAM / Nav2 resuming as they were. The page and viewer use HTTP / gRPC, so they
 work in both modes.
-Robot-side pip deps (user site): `rerun-sdk==0.32.0 aiohttp "pandas>=2.2,<3"` (the apt pandas breaks under numpy 2).
-Rerun is pinned to 0.32 so the native **dimos-viewer** (Dimensional's Rerun fork) can connect.
+Robot-side pip deps (user site): `rerun-sdk==0.39.0 aiohttp "pandas>=2.2,<3"` (the apt pandas breaks under numpy 2).
+Rerun 0.39 is the newest release that supports Python 3.10 (Humble's rclpy); 0.40+ needs Python 3.11. The page
+serves the matching `@rerun-io/web-viewer` (`VIEWER_VERSION` in `web_server.py`, fetched once from jsDelivr).
 
-### Clicking in 3D (browser or dimos-viewer)
+### nvblox layers in the 3D view
+Page → "3D layers · nvblox": Mesh (default), ESDF slice (distance to obstacles at the costmap slice height,
+what Nav2 uses), Depth points (back-projected depth, downsampled to 40k), TSDF voxels, Colour voxels,
+Occupancy. The choice is the `nvblox_layers` parameter of `rerun_bridge`, saved in
+`~/.config/mercury_x1/viz_layers.json`; layers that are off are not subscribed at all.
+
+### Clicking in 3D
 The map is logged as a pickable floor mesh: a plain click on it is sent to the robot and becomes a
 waypoint / go-to goal / initial pose / nothing, depending on the click mode chosen on the page
 (Waypoint · Go to · Set pose · View). Clicks on the robot model and camera images are ignored.
 
-Native viewer on your PC (GPU-accelerated, click-to-nav + WASD overlay):
-```bash
-uvx --from dimos-viewer==0.32.0a3 dimos-viewer \
-    --connect rerun+http://192.168.10.176:9876/proxy --ws-url ws://192.168.10.176:3030/ws
-```
-Click the WASD overlay (bottom-right) to engage keyboard driving; Shift = fast, Space = stop. In the
-browser page the same is the **⌨ Drive** button (Esc releases).
+Keyboard driving: the **⌨ Drive** button (W/A/S/D or arrows, Shift = fast, Space = stop, Esc releases).
 
 | Package | What |
 |---|---|
