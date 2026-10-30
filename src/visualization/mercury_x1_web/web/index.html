@@ -101,6 +101,8 @@
   td.act button { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0 3px; font-size: 13px; }
   td.act button:hover { color: var(--text); }
   tr.cur td { background: rgba(255,212,0,.08); }
+  #wptable tr[data-k] { cursor: pointer; }
+  #wptable tr.sel td { background: rgba(76,194,255,.16); }
   td.act button.del { color: #ff8a99; font-size: 15px; padding: 0 6px; }
   table.maps td:first-child { color: var(--text); width: auto; font-weight: 600; }
   table.maps td.meta { color: var(--muted); font-size: 11px; }
@@ -182,7 +184,7 @@
           </div>
         </div>
         <div id="mapwrap"><canvas id="map"></canvas><div id="mapmsg">No map yet. Start mapping or localization.</div></div>
-        <div class="row muted" style="margin-top:6px;font-size:11px">Clicks in the map and in the 3D view follow the tool above · wheel: zoom · right/shift-drag: pan · double-click: center on robot</div>
+        <div class="row muted" style="margin-top:6px;font-size:11px">Clicks in the map and in the 3D view follow the tool above · select a waypoint (its row, or View + click) and press Delete · wheel: zoom · right/shift-drag: pan · double-click: center on robot</div>
         <h2 style="margin-top:12px">Waypoints <span id="wpmap" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
         <table id="wptable"></table>
         <div class="row" style="margin-top:8px">
@@ -278,6 +280,7 @@
           <span class="lbl">GPU</span><div class="bar"><i id="sys-gpu"></i></div><span class="val" id="sys-gpu-t">—</span>
           <span class="lbl">RAM</span><div class="bar"><i id="sys-ram"></i></div><span class="val" id="sys-ram-t">—</span>
         </div>
+        <div class="kv" id="power" style="margin-bottom:10px"></div>
         <div class="kv" id="kv"></div>
       </section>
     </div>
@@ -369,6 +372,7 @@ function onStatus() {
   const s = ST;
   renderBattery(s);
   renderSys(s.system);
+  renderPower(s.system && s.system.power);
   const slam = s.procs.slam, nav = s.procs.nav;
   const headLocked = s.head_hold !== false && slam.running && slam.mode === "mapping";   // head held level while mapping
   for (const id of ["neck", "jaw"]) { $("#" + id).disabled = headLocked; $("#" + id).title = headLocked ? "held level while mapping" : ""; }
@@ -451,6 +455,20 @@ function renderSys(y) {
   $("#c-sys").title = `CPU ${t.cpu ?? "?"}°C · GPU ${t.gpu ?? "?"}°C · junction ${t.tj ?? "?"}°C (throttles at 95°C)`;
 }
 
+// Jetson power mode, rail power, clock limits, fan (sysstats.power)
+function renderPower(w) {
+  if (!w) return;
+  const W = w.watts || {}, mhz = (lo, hi) => lo == null ? "—" : lo === hi ? `${hi} MHz (pinned)` : `${lo}–${hi} MHz`;
+  const rows = [
+    ["power mode", `<b>${w.mode || "?"}</b>${w.clocks_pinned ? " · jetson_clocks on" : " · jetson_clocks off"}`],
+    ["power", W.VDD_IN != null ? `<b>${W.VDD_IN.toFixed(1)} W</b> module · CPU+GPU+CV ${(W.VDD_CPU_GPU_CV ?? 0).toFixed(1)} W · SoC ${(W.VDD_SOC ?? 0).toFixed(1)} W` : "—"],
+    ["CPU clock", mhz(w.cpu_mhz_min, w.cpu_mhz_max)],
+    ["GPU clock", `${mhz(w.gpu_mhz_min, w.gpu_mhz_max)}${w.gpu_mhz_top && w.gpu_mhz_max !== w.gpu_mhz_top ? ` (chip max ${w.gpu_mhz_top})` : ""}`],
+    ["fan", w.fan_pct != null ? `${w.fan_pct} %${w.fan_rpm != null ? ` · ${w.fan_rpm} rpm` : ""}` : "—"]];
+  const h = rows.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
+  if (h !== $("#power")._h) { $("#power").innerHTML = h; $("#power")._h = h; }
+}
+
 function renderBattery(s) {
   const fill = $("#batt-fill"), pct = s.battery_pct;
   if (pct != null) {
@@ -528,11 +546,7 @@ $("#r-auto").onclick = () => {
 
 function renderKV() {
   const s = ST, b = s.base || {};
-  const p = s.pose ? `${s.pose.x.toFixed(2)}, ${s.pose.y.toFixed(2)}, ${(s.pose.yaw * 180 / Math.PI).toFixed(0)}° (${s.pose.frame})` : "—";
-  const rows = [["pose", p], ["base", b.connected ? `ok · fw ${b.fw}` : "no link"],
-    ["sonar L / back / R", b.ultrasonic ? ["left", "back", "right"].map((n) => {
-      const v = b.ultrasonic[n]; return v == null ? "?" : v >= 2.9 ? "—" : v.toFixed(2); }).join(" / ") + " m" : "—"],
-    ["rear guard", b.obstacle_hold ? "HOLDING (obstacle behind)" : "clear"],
+  const rows = [["base", b.connected ? `ok · fw ${b.fw}` : "no link"],
     ["battery", `${s.charge || "—"} (estimated)`],
     ["MCU flag / aux", b.connected ? `${b.flag} / ${(b.aux || []).join(", ")}` : "—"]];
   for (const [side, a] of Object.entries(s.arms || {})) rows.push([`${side} arm`, `${a.powered ? "powered" : "off"} · ${a.rate} Hz${a.moving ? " · moving" : ""}`]);
@@ -590,6 +604,7 @@ function drawMap() {
     const [sx, sy] = w2s(w.x, w.y);
     arrow(w.x, w.y, w.yaw, 16 * dpr, "#ffd400");
     ctx.fillStyle = k === cur ? "#ff8c00" : "#ffd400"; ctx.beginPath(); ctx.arc(sx, sy, 8 * dpr, 0, 7); ctx.fill();
+    if (k === selWp) { ctx.strokeStyle = "#4cc2ff"; ctx.lineWidth = 2.5 * dpr; ctx.beginPath(); ctx.arc(sx, sy, 12 * dpr, 0, 7); ctx.stroke(); }
     ctx.fillStyle = "#111"; ctx.font = `${10 * dpr}px system-ui`; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(k + 1, sx, sy + 0.5);
   });
   if (ST && ST.pose && ST.pose.frame === "map") {
@@ -612,7 +627,7 @@ cv.addEventListener("pointerdown", (e) => {
   if (e.button === 2 || e.shiftKey) { panning = { sx, sy, ox: view.ox, oy: view.oy }; return; }
   const [x, y] = s2w(sx, sy);
   dragging = { x, y, sx, sy };
-  if (tool === "off") { dragging = null; return; }
+  if (tool === "off") { dragging = null; selWp = nearestWaypoint(sx, sy); renderTable(); drawMap(); return; }
   if (tool === "delete") return;
   preview = { x, y, yaw: 0, color: tool === "waypoint" ? "#ffd400" : tool === "goto" ? "#4cc2ff" : "#ff5ec4" };
   drawMap();
@@ -654,28 +669,44 @@ document.querySelectorAll("#tool button").forEach((b) => b.onclick = () => setTo
 // ---------------- waypoints ----------------
 function pushWaypoints() { api("waypoints", { waypoints: WAYPOINTS }); renderTable(); drawMap(); }
 function addWaypoint(x, y, yaw) { WAYPOINTS.push({ x, y, yaw }); pushWaypoints(); }
+let selWp = null;           // selected waypoint (table row / map click with View) -> Delete key
+window.addEventListener("keydown", (e) => {
+  if (driving || selWp == null || !["Delete", "Backspace"].includes(e.key)) return;
+  if (e.target.closest && e.target.closest("input, textarea, select")) return;
+  e.preventDefault(); const k = selWp; selWp = null; deleteWaypoint(k); toast(`deleted waypoint ${k + 1}`);
+});
 function deleteWaypoint(k) {
-  WAYPOINTS.splice(k, 1); renderTable(); drawMap();
+  WAYPOINTS.splice(k, 1); if (selWp === k) selWp = null; renderTable(); drawMap();
   api("waypoint_delete", { index: k });
 }
-function deleteWaypointAt(sx, sy) {        // nearest marker within ~18 px of the click
-  let best = -1, bd = 18 * devicePixelRatio;
+function nearestWaypoint(sx, sy) {         // marker within ~18 px of a map click, or null
+  let best = null, bd = 18 * devicePixelRatio;
   WAYPOINTS.forEach((w, k) => { const [wx, wy] = w2s(w.x, w.y), d = Math.hypot(wx - sx, wy - sy); if (d < bd) { bd = d; best = k; } });
-  if (best < 0) { toast("no waypoint there"); return; }
+  return best;
+}
+function deleteWaypointAt(sx, sy) {
+  const best = nearestWaypoint(sx, sy);
+  if (best == null) { toast("no waypoint there"); return; }
   deleteWaypoint(best); toast(`deleted waypoint ${best + 1}`);
 }
 let lastTableKey = "";
 function renderTable(onlyIfChanged = false) {
   const cur = ST && ST.nav.state === "navigating" ? ST.nav.current : null;
-  const key = JSON.stringify([WAYPOINTS, cur]);
+  if (selWp != null && selWp >= WAYPOINTS.length) selWp = null;
+  const key = JSON.stringify([WAYPOINTS, cur, selWp]);
   if (onlyIfChanged && key === lastTableKey) return;
   lastTableKey = key;
-  $("#wptable").innerHTML = WAYPOINTS.length ? WAYPOINTS.map((w, k) => `<tr class="${k === cur ? "cur" : ""}"><td>${k + 1}</td><td>${w.x.toFixed(2)}, ${w.y.toFixed(2)}</td><td>${(w.yaw * 180 / Math.PI).toFixed(0)}°</td>
+  $("#wptable").innerHTML = WAYPOINTS.length ? WAYPOINTS.map((w, k) => `<tr data-k="${k}" class="${k === cur ? "cur" : ""}${k === selWp ? " sel" : ""}"><td>${k + 1}</td><td>${w.x.toFixed(2)}, ${w.y.toFixed(2)}</td><td>${(w.yaw * 180 / Math.PI).toFixed(0)}°</td>
     <td class="act"><button data-a="go" data-k="${k}" title="go here">➜</button><button data-a="up" data-k="${k}" title="move up">↑</button><button data-a="del" class="del" data-k="${k}" title="delete">✕</button></td></tr>`).join("")
     : `<tr><td></td><td class="muted" colspan="3">Click the map to add waypoints (drag to set heading).</td></tr>`;
 }
 $("#wptable").addEventListener("click", (e) => {
-  const b = e.target.closest("button"); if (!b) return; const k = +b.dataset.k;
+  const b = e.target.closest("button");
+  if (!b) {                                   // click on a row: select it (Delete key removes it)
+    const tr = e.target.closest("tr[data-k]"); if (!tr) return;
+    selWp = selWp === +tr.dataset.k ? null : +tr.dataset.k; renderTable(); drawMap(); return;
+  }
+  const k = +b.dataset.k;
   if (b.dataset.a === "del") { deleteWaypoint(k); return; }
   if (b.dataset.a === "up" && k > 0) [WAYPOINTS[k - 1], WAYPOINTS[k]] = [WAYPOINTS[k], WAYPOINTS[k - 1]];
   if (b.dataset.a === "go") { const w = WAYPOINTS[k]; api("goto", w); return; }
@@ -700,8 +731,21 @@ function renderMaps(s) {
     const act = m.active ? `<span class="badge ${m.active}">${m.active === "mapping" ? "mapping" : "in use"}</span>` : "";
     return `<tr class="${m.active ? "active" : ""}"><td>${m.name}${act}</td>
       <td class="meta">${m.time} · ${m.size_mb} MB${m.waypoints ? ` · ${m.waypoints} wp` : ""}</td>
-      <td class="act"><button data-a="loc" data-m="${m.name}" title="localize on this map">▶</button><button data-a="extend" data-m="${m.name}" title="continue mapping this map">✎</button><button data-a="del" class="del" data-m="${m.name}" title="delete this map" ${m.active ? "disabled" : ""}>✕</button></td></tr>`;
+      <td class="act"><button data-a="loc" data-m="${m.name}" title="localize on this map">▶</button><button data-a="extend" data-m="${m.name}" title="continue mapping this map">✎</button><button data-a="del" class="del" data-m="${m.name}" title="delete this map">✕</button></td></tr>`;
   }).join("") : `<tr><td class="muted" colspan="3">No saved maps yet - name one below and press New map.</td></tr>`;
+}
+async function deleteMap(m) {
+  const slam = ST.procs.slam, inUse = slam.running && slam.map === m;
+  const msg = inUse ? `'${m}' is in use (${slam.mode}). Stop SLAM${ST.procs.nav.running ? " and Nav2" : ""} and delete it with its waypoints?`
+                    : `Delete map '${m}' and its waypoints?`;
+  if (!confirm(`${msg}\n\nIt is kept in ~/maps/.trash for 7 days.`)) return;
+  if (inUse) {
+    toast("stopping SLAM (saving map)…");
+    if (ST.procs.nav.running) await api("nav_stop");
+    await api("slam_stop");
+  }
+  const j = await api("map_delete", { name: m });
+  if (j && j.ok) toast(`deleted '${m}'`);
 }
 async function startSlam(mode, map, fresh = false) {
   toast(mode === "mapping" ? `mapping '${map}'…` : `localizing on '${map}'…`);
@@ -712,8 +756,7 @@ $("#maptable").addEventListener("click", (e) => {
   const b = e.target.closest("button"); if (!b || b.disabled) return; const m = b.dataset.m;
   if (b.dataset.a === "loc") startSlam("localization", m);
   if (b.dataset.a === "extend" && confirm(`Continue mapping '${m}'?\n\nStart where the map was recorded: the new drive only joins the map once RTAB-Map recognises a known place, otherwise it becomes a separate piece.`)) startSlam("mapping", m);
-  if (b.dataset.a === "del" && confirm(`Delete map '${m}' and its waypoints?\n\nIt is kept in ~/maps/.trash for 7 days.`))
-    api("map_delete", { name: m }).then((j) => j && j.ok && toast(`deleted '${m}'`));
+  if (b.dataset.a === "del") deleteMap(m);
 });
 $("#b-newmap").onclick = () => {
   const name = $("#newmap").value.trim().replace(/[^A-Za-z0-9_-]/g, "");

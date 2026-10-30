@@ -776,6 +776,9 @@ class App:
         body = await req.json() if req.can_read_body else {}
         n = self.node
         loop = asyncio.get_running_loop()
+        if action not in ("cmd_vel", "click", "head", "led"):     # frequent ones stay out of the log
+            shown = {k: v for k, v in body.items() if k != "password"} if isinstance(body, dict) else body
+            n.get_logger().info(f"api {action} {json.dumps(shown)[:200]}")
         if action == "cmd_vel":
             self.teleop(float(body.get("vx", 0)), float(body.get("wz", 0)))
         elif action == "click":       # point picked in the embedded Rerun viewer

@@ -280,7 +280,10 @@ function renderSystem() {
   for (const [k, id] of [["cpu", "#t-cpu"], ["gpu", "#t-gpu"], ["tj", "#t-tj"]]) {
     $(id).textContent = t[k] == null ? "—" : `${t[k].toFixed(0)} °C`; $(id).style.color = tempColor(t[k] || 0);
   }
-  $("#sys-extra").textContent = [y.core_mhz && y.core_mhz[0] ? `CPU ${y.core_mhz[0]} MHz` : "", y.gpu_mhz ? `GPU ${y.gpu_mhz} MHz` : "",
+  const w = y.power || {}, W = w.watts || {};
+  $("#sys-extra").textContent = [w.mode ? `${w.mode}${w.clocks_pinned ? " · clocks pinned" : ""}` : "",
+    W.VDD_IN != null ? `${W.VDD_IN.toFixed(1)} W` : "", w.fan_pct != null ? `fan ${w.fan_pct} %` : "",
+    y.core_mhz && y.core_mhz[0] ? `CPU ${y.core_mhz[0]} MHz` : "", y.gpu_mhz ? `GPU ${y.gpu_mhz}/${w.gpu_mhz_max ?? "?"} MHz` : "",
     S.ros ? `ROS domain ${S.ros.domain} · ${S.ros.network === "lan" ? "LAN" : "robot only"}` : ""].filter(Boolean).join("  ·  ");
 }
 
