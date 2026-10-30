@@ -22,6 +22,21 @@
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
   .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
   .spacer { flex: 1; }
+  .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; color: var(--text); font-size: 12px; }
+  .switch input { display: none; }
+  .switch .track { width: 34px; height: 18px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line);
+    position: relative; transition: background .2s, border-color .2s; }
+  .switch .track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%;
+    background: var(--muted); transition: left .2s, background .2s; }
+  .switch input:checked + .track { background: #1f5a3a; border-color: var(--ok); }
+  .switch input:checked + .track::after { left: 18px; background: #fff; }
+  .switch.warn input:checked + .track { background: #5a4410; border-color: var(--warn); }
+  .switch.busy { opacity: .6; pointer-events: none; }
+  .batt { position: relative; width: 24px; height: 12px; border: 1.5px solid var(--muted); border-radius: 3px; margin-right: 3px; }
+  .batt::after { content: ""; position: absolute; right: -4.5px; top: 2.5px; width: 2.5px; height: 4px;
+    background: var(--muted); border-radius: 0 1px 1px 0; }
+  .batt i { position: absolute; left: 1px; top: 1px; bottom: 1px; width: 0; border-radius: 1px; background: var(--muted);
+    transition: width .5s, background .5s; }
   #estop { background: var(--bad); color: #fff; border: 0; font-weight: 700; padding: 8px 18px;
     border-radius: 8px; cursor: pointer; letter-spacing: .5px; }
   #estop:active { transform: translateY(1px); }
@@ -97,7 +112,7 @@
 <header>
   <h1>Mercury X1</h1>
   <span class="chip"><span class="dot" id="d-conn"></span><span id="t-conn">connecting</span></span>
-  <span class="chip"><span class="dot" id="d-batt"></span><span id="t-batt">-- %</span></span>
+  <span class="chip" id="c-batt"><span class="batt"><i id="batt-fill"></i></span><span id="t-batt">-- %</span></span>
   <span class="chip"><span class="dot" id="d-slam"></span><span id="t-slam">SLAM off</span></span>
   <span class="chip"><span class="dot" id="d-nav"></span><span id="t-nav">Nav off</span></span>
   <span class="chip"><span class="dot" id="d-arms"></span><span id="t-arms">arms</span></span>
@@ -173,7 +188,7 @@
           <button class="b" id="r-auto" title="Keep looking for the selected / saved remote and reconnect whenever it drops or is switched on">Autoconnect</button>
         </div>
         <div id="r-state" class="muted" style="min-height:18px"></div>
-        <div class="muted" style="font-size:11px">Hold <b>L1</b> + left stick = drive, right stick = turn · <b>B</b> = stop. Driving cancels navigation.</div>
+        <div class="muted" style="font-size:11px"><b>Start</b> = unlock / lock driving · left stick = drive, right stick = turn · <b>B</b> = stop (locks) · <b>Select</b> = freedrive arms. Driving cancels navigation.</div>
       </section>
       <section>
         <h2>Drive</h2>
@@ -197,8 +212,8 @@
           <input type="color" id="led" value="#00aaff" style="width:44px;height:28px;border:0;background:none">
           <button class="b" id="b-ledoff">LED off</button>
           <span class="spacer"></span>
-          <button class="b" id="b-armson">Arms on</button>
-          <button class="b danger" id="b-armsoff">Arms off</button>
+          <label class="switch" id="sw-arms" title="Arm servo power (both arms)"><input type="checkbox"><span class="track"></span>Arms</label>
+          <label class="switch warn" id="sw-free" title="Freedrive: move the arms by hand (remote: Select). Hold the arm when switching on."><input type="checkbox"><span class="track"></span>Freedrive</label>
         </div>
       </section>
       <section>
@@ -271,9 +286,7 @@ function setDot(id, cls, text) { $(`#d-${id}`).className = `dot ${cls}`; $(`#t-$
 let mapVersion = -1, lastClickT = null, toolChanged = 0;
 function onStatus() {
   const s = ST;
-  if (s.battery_pct != null) setDot("batt", s.battery_pct > 40 ? "ok" : s.battery_pct > 15 ? "warn" : "bad", `${s.battery_pct} %`);
-  else if (s.battery != null) setDot("batt", "", `${s.battery.toFixed(1)} V`);
-  $("#t-batt").parentElement.title = s.battery != null ? `${s.battery.toFixed(2)} V` : "";
+  renderBattery(s);
   const slam = s.procs.slam, nav = s.procs.nav;
   setDot("slam", slam.running ? "ok" : "", slam.running ? `${slam.mode} · ${slam.map}` : "SLAM off");
   setDot("nav", nav.running ? (s.nav.state === "navigating" ? "warn" : "ok") : "", nav.running ? `Nav ${s.nav.state}` : "Nav off");
@@ -296,7 +309,24 @@ function onStatus() {
   renderTable(true);
   renderKV();
   renderRemote();
+  const armsList = Object.values(s.arms || {});
+  setArmsSwitch(armsList.length > 0 && armsList.every((a) => a.powered));
+  setFreeSwitch(armsList.some((a) => a.freedrive));
   drawMap();
+}
+
+function renderBattery(s) {
+  const fill = $("#batt-fill"), pct = s.battery_pct;
+  if (pct != null) {
+    const p = Math.max(0, Math.min(100, pct));
+    fill.style.width = `calc(${p}% - 2px)`;
+    fill.style.background = p > 30 ? "var(--ok)" : p > 15 ? "var(--warn)" : "var(--bad)";
+    $("#t-batt").textContent = `${Math.round(p)} %`;
+  } else {
+    fill.style.width = "0";
+    $("#t-batt").textContent = s.battery != null ? `${s.battery.toFixed(1)} V` : "-- %";
+  }
+  $("#c-batt").title = s.battery != null ? `battery ${s.battery.toFixed(2)} V (7S LiFePO4, full ≈ 23.7 V)` : "battery: no data from the base";
 }
 
 // ---------------- Unitree BLE remote ----------------
@@ -335,14 +365,17 @@ function renderRemote() {
   let text;
   if (conn) {
     text = `connected · ${conn.name} · battery ${r.battery ?? "?"} % · ${r.rssi ?? "?"} dBm`;
-    if (r.driving) text += " · DRIVING";
+    if (r.drive_enabled === true) text += r.driving ? " · DRIVING" : " · drive unlocked";
+    else if (r.drive_enabled === false) text += " · locked (Start)";
+    else if (r.driving) text += " · DRIVING";
     else if (r.pressed && r.pressed.length) text += ` · ${r.pressed.join(" ")}`;
   } else {
     text = r.state + (r.message ? ` · ${r.message}` : "");
   }
   $("#r-state").textContent = text;
   $("#r-state").style.color = conn ? (r.driving ? "var(--ok)" : "var(--text)") : r.message.includes("fail") ? "var(--bad)" : "var(--muted)";
-  if (conn) setDot("remote", r.battery != null && r.battery < 20 ? "warn" : "ok", r.driving ? "remote · driving" : `remote ${r.battery ?? ""}%`);
+  if (conn) setDot("remote", r.drive_enabled || r.driving ? "warn" : r.battery != null && r.battery < 20 ? "warn" : "ok",
+                   r.driving ? "remote · driving" : r.drive_enabled ? "remote · unlocked" : `remote ${r.battery ?? ""}%`);
   else setDot("remote", busy ? "warn" : "", r.autoconnect ? (busy ? `remote ${r.state}` : "remote · waiting") : "remote off");
 }
 const selectedRemote = () => {
@@ -582,8 +615,28 @@ for (const id of ["neck", "jaw"]) $("#" + id).oninput = () => {
 const hex2rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
 $("#led").oninput = () => { const [r, g, b] = hex2rgb($("#led").value); api("led", { r, g, b }); };
 $("#b-ledoff").onclick = () => api("led", { r: 0, g: 0, b: 0 });
-$("#b-armson").onclick = () => { api("arms_power", { on: true }); toast("powering arms on"); };
-$("#b-armsoff").onclick = () => { if (confirm("Power the arms off? They will go limp if not supported.")) api("arms_power", { on: false }); };
+// switches follow the robot state; a click asks for the change and waits for the state to confirm it
+function bindSwitch(id, onChange) {
+  const el = $(id), cb = el.querySelector("input");
+  cb.addEventListener("change", async () => {
+    const want = cb.checked;
+    cb.checked = !want;                         // shown state = robot state until it reports back
+    if (await onChange(want) === false) return;
+    el.classList.add("busy"); el._until = Date.now() + 8000;
+  });
+  return (state) => {
+    if (el._until && Date.now() < el._until && state !== !cb.checked) return;   // still switching
+    el._until = 0; el.classList.remove("busy"); cb.checked = !!state;
+  };
+}
+const setArmsSwitch = bindSwitch("#sw-arms", (on) => {
+  if (!on && !confirm("Power the arms off? They go limp - make sure they are supported.")) return false;
+  api("arms_power", { on }); toast(on ? "powering arms on" : "powering arms off");
+});
+const setFreeSwitch = bindSwitch("#sw-free", (on) => {
+  if (on && !confirm("Freedrive: the arms can be moved by hand. Hold the arms - they may sink. Continue?")) return false;
+  api("freedrive", { on }); toast(on ? "freedrive on (remote: Select toggles)" : "freedrive off - arms hold");
+});
 </script>
 </body>
 </html>

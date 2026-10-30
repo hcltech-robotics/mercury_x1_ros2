@@ -207,6 +207,13 @@ std::optional<Bytes> ArmLink::status() {return request(op::kRobotStatus);}
 
 bool ArmLink::stop() {return request(op::kStop, {}, std::chrono::seconds(1)).has_value();}
 
+bool ArmLink::freedrive(bool on, bool drag_teach)
+{
+  const uint8_t cmd = drag_teach ? (on ? op::kDragTeachSave : op::kDragTeachPause) :
+    (on ? op::kReleaseAllServos : op::kFocusAllServos);
+  return request(cmd, {}, std::chrono::seconds(1)).has_value();
+}
+
 bool ArmLink::setMovementType(bool linear)
 {
   return request(op::kSetMovementType, {static_cast<uint8_t>(linear ? 1 : 0)}) == kAck;

@@ -25,7 +25,7 @@ from mercury_x1_msgs.msg import MeshTile
 from nav_msgs.msg import OccupancyGrid, Path
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
-from sensor_msgs.msg import BatteryState, CameraInfo, CompressedImage, LaserScan, PointCloud2, Range
+from sensor_msgs.msg import CameraInfo, CompressedImage, LaserScan, PointCloud2, Range
 from tf2_msgs.msg import TFMessage
 
 from .pose_chain import PoseChain
@@ -132,7 +132,6 @@ class RerunBridge(Node):
         sub(Path, "/vslam/path", self._on_vslam_path, 1)
         sub(PoseArray, "/web/waypoints", self._on_waypoints, LATCHED)
         sub(PolygonStamped, "/local_costmap/published_footprint", self._on_footprint, 1)
-        sub(BatteryState, "/battery", self._on_battery, 10)
         self.chain = PoseChain()
         self.create_timer(0.5, self._trail_tick)
 
@@ -165,8 +164,7 @@ class RerunBridge(Node):
                 rrb.Vertical(
                     rrb.Spatial2DView(name="Orbbec (jaw)", origin="/cams/orbbec"),
                     rrb.Spatial2DView(name="Bellybutton", origin="/cams/bellybutton"),
-                    rrb.TextDocumentView(name="Battery", origin="/stats/battery_text"),
-                    row_shares=[4, 4, 1]),
+                    row_shares=[1, 1]),
                 column_shares=[3, 1]),
             rrb.BlueprintPanel(state="collapsed"),
             rrb.SelectionPanel(state="collapsed"),
@@ -185,7 +183,7 @@ class RerunBridge(Node):
         # invisible pick target for the whole robot (floor to ~1.3 m around the base, axle frame)
         rr.log("world/robot", rr.CoordinateFrame("base_footprint"),
                rr.Capsules3D(lengths=[0.72], radii=[0.3], translations=[[-0.15, 0.0, 0.3]],
-                             colors=[[255, 255, 255, 0]]), static=True)
+                             colors=[[255, 255, 255, 0]], fill_mode="solid"), static=True)
         rr.log("world/robot/base_axes", rr.TransformAxes3D(axis_length=0.3), rr.CoordinateFrame("base_footprint"),
                static=True)
 
@@ -367,13 +365,6 @@ class RerunBridge(Node):
             pts.append(pts[0])
         rr.log("world/footprint", rr.CoordinateFrame(msg.header.frame_id),
                rr.LineStrips3D([pts], colors=[[0, 255, 140]], radii=0.01))
-
-    def _on_battery(self, msg: BatteryState) -> None:
-        rr.set_time("ros", timestamp=_stamp(msg))
-        pct = msg.percentage * 100 if math.isfinite(msg.percentage) else float("nan")
-        text = f"## 🔋 {pct:.0f} %  \n{msg.voltage:.1f} V" if math.isfinite(pct) else f"## 🔋 {msg.voltage:.1f} V"
-        rr.log("stats/battery_text", rr.TextDocument(text, media_type=rr.MediaType.MARKDOWN))
-        rr.log("stats/battery", rr.Scalars(msg.voltage))
 
     def _trail_tick(self) -> None:
         pose = self.chain.pose()

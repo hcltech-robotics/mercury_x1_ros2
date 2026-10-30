@@ -41,6 +41,14 @@ constexpr uint8_t kRobotStatus = 0xA2;      // all zero = healthy
 constexpr uint8_t kGetAnglesCoords = 0xD5;  // 7 x int32 deg*100 + 6 x int16 coords
 constexpr uint8_t kGetBaseCoords = 0xF0;    // torso-frame coords
 constexpr uint8_t kSendBaseCoords = 0xF2;
+
+// Freedrive (move the arm by hand). From Elephant's Mercury API docs (pymycobot close_loop), not
+// probed: drag teaching = gravity-compensated drag while "recording" (vendor: <= 90 s per recording);
+// release = joints torque-off in damping mode (the arm sinks under gravity), focus = torque on again.
+constexpr uint8_t kReleaseAllServos = 0x13;
+constexpr uint8_t kFocusAllServos = 0x18;
+constexpr uint8_t kDragTeachSave = 0x70;    // start recording -> arm can be dragged
+constexpr uint8_t kDragTeachPause = 0x72;   // stop recording -> joints hold again
 }  // namespace op
 
 using Bytes = std::vector<uint8_t>;
@@ -97,6 +105,9 @@ public:
   bool sendAngles(const Joints & deg, int speed);
   bool sendAngle(int id, double deg, int speed);
   bool sendCoords(const Coords & c, int speed, bool body_frame);
+  // drag_teach: kDragTeachSave / kDragTeachPause; otherwise release / focus all servos.
+  // Returns whether the MCU answered (both are fire-and-forget in pymycobot).
+  bool freedrive(bool on, bool drag_teach);
 
   double lastRttMs() const {return last_rtt_ms_;}
   size_t timeouts() const {return timeouts_;}

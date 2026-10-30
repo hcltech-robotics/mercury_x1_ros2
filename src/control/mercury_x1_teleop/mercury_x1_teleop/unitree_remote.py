@@ -7,8 +7,9 @@ Interface (the web page drives it through mercury_x1_web):
   /remote/status  std_msgs/String JSON  (latched, 5 Hz) state, devices found, saved remote, battery, ...
   /remote/button  std_msgs/String       button name on press
   /joy            sensor_msgs/Joy       axes [lx, ly, rx, ry, dpad_x, dpad_y] (left/up = +1), 16 buttons
-  /cmd_vel        geometry_msgs/Twist   only while driving: hold the dead-man button (L1) and move
-                                        the left stick (forward/back) / right stick (turn)
+  /cmd_vel        geometry_msgs/Twist   only while driving: Start unlocks / locks driving, then the
+                                        left stick drives (forward/back) and the right stick turns.
+                                        B stops and locks. (drive_mode:=deadman -> hold L1 instead)
 
 Autoconnect keeps scanning for the saved remote (any "Unitree*" remote if none is saved yet) and
 reconnects when it drops. "Disconnect" also turns autoconnect off. The saved remote and the
@@ -46,7 +47,10 @@ class UnitreeRemote(Node):
         self.max_vx_rev = float(p("max_linear_reverse", 0.15).value)
         self.max_wz = float(p("max_angular", 0.8).value)
         self.deadzone = float(p("deadzone", 0.08).value)
-        self.deadman = str(p("deadman_button", "L1").value)        # "" = sticks drive directly
+        self.drive_mode = str(p("drive_mode", "toggle").value)      # toggle | deadman
+        self.enable_button = str(p("enable_button", "Start").value) # toggle mode: press = unlock / lock
+        self.deadman = str(p("deadman_button", "L1").value)         # deadman mode: hold to drive
+        self.stop_button = str(p("stop_button", "B").value)         # stop + lock (both modes)
         self.stale = float(p("stale_timeout", 1.0).value)           # no packets -> stop driving
         self.lost = float(p("lost_timeout", 4.0).value)             # no packets -> drop the link
         self.store = os.path.expanduser(p("state_file", "~/.config/mercury_x1/unitree_remote.json").value)
@@ -66,6 +70,7 @@ class UnitreeRemote(Node):
         self.rs: RemoteState | None = None
         self.last_rx = 0.0
         self.driving = False
+        self.drive_enabled = False   # toggle mode: unlocked with Start
         self.stop_burst = 0
         self.busy = False
         self.next_try = 0.0
@@ -82,8 +87,9 @@ class UnitreeRemote(Node):
         self.loop = asyncio.new_event_loop()
         threading.Thread(target=self.loop.run_forever, daemon=True, name="ble").start()
         self._run(self._supervisor())
+        how = f"{self.enable_button} toggles" if self.drive_mode == "toggle" else f"hold {self.deadman or 'nothing'}"
         self.get_logger().info(f"Unitree remote on {self.adapter}: saved={self.saved['address']} "
-                               f"autoconnect={self.autoconnect} dead-man={self.deadman or 'none'}")
+                               f"autoconnect={self.autoconnect} driving: {how}, {self.stop_button} stops")
 
     # ---- persistence ------------------------------------------------------------------------
     def _load(self) -> dict:
@@ -141,7 +147,9 @@ class UnitreeRemote(Node):
         st = {
             "state": self.state, "message": self.message, "autoconnect": self.autoconnect,
             "saved": self.saved, "connected": self.conn if self.state == "connected" else None,
-            "devices": self.devices, "driving": self.driving, "deadman": self.deadman,
+            "devices": self.devices, "driving": self.driving, "drive_mode": self.drive_mode,
+            "drive_enabled": self.drive_enabled if self.drive_mode == "toggle" else None,
+            "deadman": self.deadman, "enable_button": self.enable_button, "stop_button": self.stop_button,
             "battery": rs.battery if live else None, "rssi": rs.rssi if live else None,
             "rx_age": round(age, 2) if live else None,
             "sticks": [round(v, 2) for v in (rs.lx, rs.ly, rs.rx, rs.ry)] if live else None,
@@ -153,12 +161,17 @@ class UnitreeRemote(Node):
         with self.lock:
             rs, age = self.rs, time.monotonic() - self.last_rx
         active, vx, wz = False, 0.0, 0.0
+        if age >= self.stale:
+            self.drive_enabled = False               # link lost or remote off: lock again
         if rs is not None and self.state == "connected" and age < self.stale:
             dz = self.deadzone
             shape = lambda v: 0.0 if abs(v) < dz else (abs(v) - dz) / (1.0 - dz) * (1 if v > 0 else -1)
             fwd = shape(rs.ly)
             turn = shape(-rs.rx) or shape(-rs.lx)        # right stick turns; left stick x as fallback
-            held = not self.deadman or rs.buttons.get(self.deadman, False)
+            if self.drive_mode == "toggle":
+                held = self.drive_enabled
+            else:
+                held = not self.deadman or rs.buttons.get(self.deadman, False)
             if held and (fwd or turn):
                 active = True
                 vx = fwd * (self.max_vx if fwd > 0 else self.max_vx_rev)
@@ -269,6 +282,7 @@ class UnitreeRemote(Node):
         if client is not self.client:
             return
         self.client = None
+        self.drive_enabled = False
         with self.lock:
             self.rs = None
         self.next_try = time.monotonic() + 2.0
@@ -284,6 +298,14 @@ class UnitreeRemote(Node):
             self.last_rx = time.monotonic()
         for b in BUTTONS:
             if rs.buttons[b] and not (prev and prev.buttons[b]):
+                if b == self.stop_button:
+                    self.drive_enabled = False
+                    self.stop_burst = 4
+                    self.pub_cmd.publish(Twist())
+                    self._set(message="stop (B) - driving locked")
+                elif b == self.enable_button and self.drive_mode == "toggle":
+                    self.drive_enabled = not self.drive_enabled
+                    self._set(message="driving unlocked" if self.drive_enabled else "driving locked")
                 self.pub_button.publish(String(data=b))
         joy = Joy()
         joy.header.stamp = self.get_clock().now().to_msg()

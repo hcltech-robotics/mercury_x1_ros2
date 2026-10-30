@@ -66,7 +66,7 @@ struct Motion
 
 struct ArmSnapshot
 {
-  bool connected{false}, powered{false}, moving{false}, have_q{false};
+  bool connected{false}, powered{false}, moving{false}, have_q{false}, freedrive{false};
   arm::Joints q_deg{};
   std::array<double, 7> qd{};
   arm::Coords coords{};
@@ -120,14 +120,36 @@ public:
     return fut.get();
   }
 
-  void setTarget(Motion m, bool queued)
+  // returns false (and drops the motion) while the arm is in freedrive
+  bool setTarget(Motion m, bool queued)
   {
     std::lock_guard<std::mutex> lk(mtx_);
+    const bool moves_arm = m.kind == Motion::kCartesian || !m.arm.empty();
+    if (snap_.freedrive && moves_arm) {return false;}
     if (queued) {
       jobs_.push_back([this, m](arm::ArmLink & l) {execute(l, m, false);});
     } else {
       target_ = std::move(m);
     }
+    return true;
+  }
+
+  // Freedrive on/off on the worker thread. Stops and clears any motion first.
+  bool setFreedrive(bool on, bool drag_teach)
+  {
+    if (on && !snapshot().powered) {return false;}
+    {
+      std::lock_guard<std::mutex> lk(mtx_);
+      target_.reset();
+      if (on) {snap_.freedrive = true;}   // block new targets right away
+    }
+    auto ok = call<bool>([on, drag_teach](arm::ArmLink & l) {
+          if (on) {l.stop();}
+          return l.freedrive(on, drag_teach);
+        }, 3s);
+    std::lock_guard<std::mutex> lk(mtx_);
+    snap_.freedrive = on;
+    return ok.value_or(false);
   }
 
   void clearTarget()
@@ -140,6 +162,7 @@ public:
   {
     std::lock_guard<std::mutex> lk(mtx_);
     snap_.powered = p;
+    if (!p) {snap_.freedrive = false;}   // power on again = joints hold
   }
 
 private:
@@ -302,6 +325,8 @@ public:
     const bool power_on_start = declare_parameter("power_on_start", true);
     const bool poll_body = declare_parameter("poll_body_coords", true);
     default_speed_ = declare_parameter("default_speed", 30);
+    // drag_teach: vendor drag-teaching mode (gravity-compensated); release: torque off, damping
+    freedrive_drag_teach_ = declare_parameter("freedrive_mode", std::string("drag_teach")) != "release";
     max_speed_ = declare_parameter("max_speed", 100);
     const double rate = declare_parameter("publish_rate", 50.0);
     // neck/jaw/waist: URDF joint name -> firmware id, with sign/offset into the URDF convention
@@ -343,6 +368,10 @@ public:
           [this, s](std_srvs::srv::SetBool::Request::ConstSharedPtr req,
           std_srvs::srv::SetBool::Response::SharedPtr res) {srvPower(s, req->data, *res);},
           rmw_qos_profile_services_default, cb_));
+      srv_power_.push_back(create_service<std_srvs::srv::SetBool>(s + "_arm/freedrive",
+          [this, s](std_srvs::srv::SetBool::Request::ConstSharedPtr req,
+          std_srvs::srv::SetBool::Response::SharedPtr res) {srvFreedrive({s}, req->data, *res);},
+          rmw_qos_profile_services_default, cb_));
       srv_stop_.push_back(create_service<std_srvs::srv::Trigger>(s + "_arm/stop",
           [this, s](std_srvs::srv::Trigger::Request::ConstSharedPtr,
           std_srvs::srv::Trigger::Response::SharedPtr res) {srvStop({s}, *res);},
@@ -351,6 +380,10 @@ public:
     srv_stop_.push_back(create_service<std_srvs::srv::Trigger>("upper_body/stop",
         [this](std_srvs::srv::Trigger::Request::ConstSharedPtr, std_srvs::srv::Trigger::Response::SharedPtr res) {
           srvStop({"left", "right"}, *res);
+        }, rmw_qos_profile_services_default, cb_));
+    srv_power_.push_back(create_service<std_srvs::srv::SetBool>("upper_body/freedrive",
+        [this](std_srvs::srv::SetBool::Request::ConstSharedPtr req, std_srvs::srv::SetBool::Response::SharedPtr res) {
+          srvFreedrive({"left", "right"}, req->data, *res);
         }, rmw_qos_profile_services_default, cb_));
     timer_ = create_wall_timer(std::chrono::duration<double>(1.0 / rate), [this] {publish();});
     RCLCPP_INFO(get_logger(), "upper body driver up");
@@ -403,7 +436,9 @@ private:
         RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "%s arm is not powered; call /%s_arm/power",
             side.c_str(), side.c_str());
       }
-      workers_[side]->setTarget(m, msg.queue);
+      if (!workers_[side]->setTarget(m, msg.queue)) {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "%s arm is in freedrive: motion ignored", side.c_str());
+      }
     }
   }
 
@@ -419,7 +454,9 @@ private:
     Motion m{Motion::kCartesian, speed(msg.speed), {}, {}, {}, false, !msg.joint_interpolated};
     std::copy(msg.coords.begin(), msg.coords.end(), m.coords.begin());
     m.body_frame = msg.frame == mercury_x1_msgs::msg::CartesianCommand::FRAME_BODY;
-    workers_[side]->setTarget(m, msg.queue);
+    if (!workers_[side]->setTarget(m, msg.queue)) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "%s arm is in freedrive: motion ignored", side.c_str());
+    }
   }
 
   void srvPower(const std::string & side, bool on, std_srvs::srv::SetBool::Response & res)
@@ -431,6 +468,18 @@ private:
     w.markPowered(powered);
     res.success = ok.value_or(false) && powered == on;
     res.message = side + " arm powered=" + (powered ? "true" : "false");
+  }
+
+  void srvFreedrive(const std::vector<std::string> & sides, bool on, std_srvs::srv::SetBool::Response & res)
+  {
+    res.success = true;
+    for (auto & s : sides) {
+      const bool ok = workers_[s]->setFreedrive(on, freedrive_drag_teach_);
+      res.success = res.success && ok;
+      res.message += s + (ok ? (on ? ": free " : ": holding ") : (on ? ": not powered / no answer " : ": no answer "));
+      RCLCPP_INFO(get_logger(), "%s arm freedrive %s (%s)%s", s.c_str(), on ? "ON" : "off",
+          freedrive_drag_teach_ ? "drag teach" : "release", ok ? "" : " - no answer from the MCU");
+    }
   }
 
   void srvStop(const std::vector<std::string> & sides, std_srvs::srv::Trigger::Response & res)
@@ -461,6 +510,7 @@ private:
       st.connected = s.connected;
       st.powered = s.powered;
       st.moving = s.moving;
+      st.freedrive = s.freedrive;
       for (int i = 0; i < 7; ++i) {
         st.position[i] = deg2rad(s.q_deg[i]);
         st.velocity[i] = s.qd[i];
@@ -488,6 +538,7 @@ private:
   }
 
   int64_t default_speed_, max_speed_;
+  bool freedrive_drag_teach_{true};
   std::vector<std::string> extra_names_;
   std::vector<int> extra_ids_;
   std::vector<double> extra_sign_, extra_offset_;

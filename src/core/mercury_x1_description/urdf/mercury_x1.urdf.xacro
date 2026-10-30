@@ -45,7 +45,10 @@
   <joint name="camera_joint" type="fixed">
     <parent link="link_eye"/>
     <child link="camera_link"/>
-    <origin xyz="0.07 0.008 0" rpy="${-pi/2} 0 ${cam_up_deg*pi/180}"/>   <!-- x: depth-vs-lidar wall fit -->
+    <!-- On the tilt axis at the front of the jaw mesh (head_eye.dae spans x -0.010..0.018, y -0.017..0.012,
+         z -0.062..0.052 in link_eye): the floor-plane fit over several jaw angles put the optical centre on the
+         tilt axis. (x = 0.07 from the depth-vs-lidar wall fit put the frustum 6 cm in front of the camera.) -->
+    <origin xyz="0.012 0 0" rpy="${-pi/2} 0 ${cam_up_deg*pi/180}"/>
   </joint>
 
   <!-- bellybutton RGB camera (above the lidar) -->

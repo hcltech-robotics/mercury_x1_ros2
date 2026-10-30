@@ -13,7 +13,9 @@ mercury_base:
     ultrasonic_names: [left, back, right]   # MCU channels 0..2; sides + rear (left/right not yet verified)
     ultrasonic_guard_distance: 0.0   # m; >0 blocks REVERSING when a guarded channel reads closer
     ultrasonic_guard_channels: [1]   # rear sensor
-    battery_cells: 6                 # 24 V Li-ion pack -> BatteryState.percentage from the cell curve
+    battery_cells: 7                 # 7S LiFePO4 "24 V" pack (full = 23.7 V at rest, 3.38 V/cell)
+    battery_chemistry: lifepo4       # lifepo4 | li-ion: cell curve for BatteryState.percentage
+    battery_log: ~/.ros/mercury_battery.csv   # voltage once a minute ("" = off)
 
 mercury_upper_body:
   ros__parameters:

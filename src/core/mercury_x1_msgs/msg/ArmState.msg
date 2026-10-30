@@ -4,6 +4,7 @@ string arm                       # "left" | "right"
 bool connected                   # serial link to the arm MCU answers
 bool powered                     # servos enabled (power_on)
 bool moving                      # firmware reports a motion in progress
+bool freedrive                   # arm released for moving by hand (motion commands are ignored)
 float64[7] position              # joint 1..7 [rad] (firmware joint order)
 float64[7] velocity              # finite-difference estimate [rad/s]
 float64[6] coords                # flange in the arm base frame: x y z [mm], rx ry rz [deg] (firmware native)

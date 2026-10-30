@@ -150,6 +150,7 @@ class WebNode(Node):
             "left_power": self.create_client(SetBool, "/left_arm/power"),
             "right_power": self.create_client(SetBool, "/right_arm/power"),
             "arms_stop": self.create_client(Trigger, "/upper_body/stop"),
+            "freedrive": self.create_client(SetBool, "/upper_body/freedrive"),
         }
         self.create_timer(0.05, self._run_jobs)
 
@@ -194,6 +195,15 @@ class WebNode(Node):
     def _on_remote_button(self, msg: String) -> None:
         if msg.data == "B":                     # B on the remote = STOP (cancel navigation, stop the base)
             self.cancel()
+        elif msg.data == "Select":              # Select = freedrive on / off (both arms)
+            self.set_freedrive(not self.freedrive_on())
+
+    def freedrive_on(self) -> bool:
+        return any(getattr(a, "freedrive", False) for a in self.arms.values())
+
+    def set_freedrive(self, on: bool) -> None:
+        self.get_logger().info(f"freedrive {'ON' if on else 'off'}")
+        self.call("freedrive", SetBool.Request(data=on))
 
     def _on_plan(self, msg: Path) -> None:
         self.plan = [[round(p.pose.position.x, 3), round(p.pose.position.y, 3)] for p in msg.poses[::3]]
@@ -343,6 +353,7 @@ class WebNode(Node):
     def status(self) -> dict:
         base = self.base
         arms = {s: {"powered": a.powered, "connected": a.connected, "moving": a.moving,
+                    "freedrive": bool(getattr(a, "freedrive", False)),
                     "rate": round(a.state_rate_hz, 1)} for s, a in self.arms.items()}
         return {
             "pose": self.robot_pose(),
@@ -541,6 +552,9 @@ class App:
                     jc.position.append(math.radians(float(body[k])))
             jc.speed = int(body.get("speed", 30))
             n.post(lambda: n.pub_joint.publish(jc))
+        elif action == "freedrive":
+            on = bool(body.get("on", False))
+            n.post(lambda: n.set_freedrive(on))
         elif action == "arms_power":
             on = bool(body.get("on", False))
             for s in ("left", "right"):

@@ -12,7 +12,11 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <ctime>
+#include <fstream>
 #include <limits>
+#include <string>
 #include <mutex>
 #include <thread>
 
@@ -58,7 +62,11 @@ public:
     us_fov_ = declare_parameter("ultrasonic_fov", 0.5);
     guard_dist_ = declare_parameter("ultrasonic_guard_distance", 0.0);
     guard_ch_ = declare_parameter("ultrasonic_guard_channels", std::vector<int64_t>{1});  // rear
-    battery_cells_ = declare_parameter("battery_cells", 6);   // series Li-ion cells (24 V pack)
+    // Mercury X1 pack: 7S LiFePO4 (rests at 23.7 V when full = 3.38 V/cell; factory test read 20.8 V)
+    battery_cells_ = declare_parameter("battery_cells", 7);
+    battery_lfp_ = declare_parameter("battery_chemistry", std::string("lifepo4")) != "li-ion";
+    battery_log_ = declare_parameter("battery_log", std::string("~/.ros/mercury_battery.csv"));
+    if (battery_log_.rfind("~/", 0) == 0 && std::getenv("HOME")) {battery_log_ = std::getenv("HOME") + battery_log_.substr(1);}
 
     pub_odom_ = create_publisher<nav_msgs::msg::Odometry>("odom", 10);
     pub_imu_ = create_publisher<sensor_msgs::msg::Imu>("imu/data_raw", rclcpp::SensorDataQoS());
@@ -288,19 +296,42 @@ private:
     }
   }
 
-  // State of charge from the resting-voltage curve of a Li-ion cell (rough under load).
-  static double socFromCellVoltage(double v)
+  // State of charge from a cell's resting-voltage curve (rough under load). LiFePO4 is flat between
+  // ~20 and ~90 %, so mid-range values are only good to about +-15 %; the ends are reliable.
+  static double interp(const double (*pts)[2], size_t n, double v)
   {
-    static const double pts[][2] = {{3.30, 0.00}, {3.50, 0.05}, {3.60, 0.12}, {3.70, 0.30},
-      {3.80, 0.50}, {3.90, 0.66}, {4.00, 0.80}, {4.10, 0.92}, {4.20, 1.00}};
-    if (v <= pts[0][0]) {return 0.0;}
-    for (size_t i = 1; i < sizeof(pts) / sizeof(pts[0]); ++i) {
+    if (v <= pts[0][0]) {return pts[0][1];}
+    for (size_t i = 1; i < n; ++i) {
       if (v <= pts[i][0]) {
         const double t = (v - pts[i - 1][0]) / (pts[i][0] - pts[i - 1][0]);
         return pts[i - 1][1] + t * (pts[i][1] - pts[i - 1][1]);
       }
     }
-    return 1.0;
+    return pts[n - 1][1];
+  }
+
+  double socFromCellVoltage(double v) const
+  {
+    static const double lfp[][2] = {{2.80, 0.00}, {3.00, 0.05}, {3.10, 0.10}, {3.20, 0.20}, {3.22, 0.30},
+      {3.25, 0.40}, {3.26, 0.50}, {3.28, 0.60}, {3.30, 0.70}, {3.32, 0.80}, {3.33, 0.90}, {3.36, 0.97},
+      {3.38, 1.00}};
+    static const double lion[][2] = {{3.30, 0.00}, {3.50, 0.05}, {3.60, 0.12}, {3.70, 0.30},
+      {3.80, 0.50}, {3.90, 0.66}, {4.00, 0.80}, {4.10, 0.92}, {4.20, 1.00}};
+    return battery_lfp_ ? interp(lfp, sizeof(lfp) / sizeof(lfp[0]), v) :
+           interp(lion, sizeof(lion) / sizeof(lion[0]), v);
+  }
+
+  // one line a minute: time, raw voltage, filtered voltage, percent (to find the LED's low-battery point)
+  void logBattery(double v, double pct)
+  {
+    if (battery_log_.empty() || ++battery_log_tick_ < 60) {return;}
+    battery_log_tick_ = 0;
+    std::ofstream f(battery_log_, std::ios::app);
+    if (!f) {return;}
+    const std::time_t t = std::time(nullptr);
+    char ts[32];
+    std::strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S", std::localtime(&t));
+    f << ts << "," << v << "," << v_filt_ << "," << pct * 100.0 << "\n";
   }
 
   void slowTick()
@@ -337,14 +368,19 @@ private:
       std::numeric_limits<float>::quiet_NaN();
     b.cell_voltage.assign(static_cast<size_t>(std::max<int64_t>(battery_cells_, 0)),
         battery_cells_ > 0 ? st.voltage / battery_cells_ : 0.0f);
-    b.power_supply_technology = sensor_msgs::msg::BatteryState::POWER_SUPPLY_TECHNOLOGY_LION;
+    b.power_supply_technology = battery_lfp_ ? sensor_msgs::msg::BatteryState::POWER_SUPPLY_TECHNOLOGY_LIFE :
+      sensor_msgs::msg::BatteryState::POWER_SUPPLY_TECHNOLOGY_LION;
     pub_batt_->publish(b);
+    if (connected && std::isfinite(b.percentage)) {logBattery(st.voltage, b.percentage);}
     if (!connected) {RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "no frames from base MCU");}
   }
 
   // parameters
   std::string port_, odom_frame_, base_frame_, imu_frame_;
   int64_t baud_, battery_cells_;
+  bool battery_lfp_{true};
+  std::string battery_log_;
+  int battery_log_tick_{59};
   bool publish_tf_, yaw_from_gyro_;
   double cmd_timeout_, max_lin_, max_ang_, lin_scale_, ang_scale_, us_max_, us_min_, us_fov_, guard_dist_;
   std::vector<std::string> us_names_;
