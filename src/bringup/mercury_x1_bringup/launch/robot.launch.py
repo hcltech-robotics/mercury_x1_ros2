@@ -47,6 +47,9 @@ def generate_launch_description():
             launch_arguments={
                 "camera_name": "camera", "depth_registration": "true", "color_fps": "30",
                 "depth_fps": "15", "enable_ir": "false", "enable_point_cloud": "false",
+                # the DaBai streams colour only at 30 Hz (and has no frame sync): publish one colour frame per
+                # depth frame, the closest in time -> colour 15 Hz; halves the decode + copies to every subscriber
+                "color_only_with_depth": "true",
                 "publish_tf": "true",
             }.items(),
             condition=IfCondition(LC("cameras"))),
