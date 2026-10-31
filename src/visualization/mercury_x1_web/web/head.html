@@ -127,8 +127,15 @@
   .rm-badge.ok { color: var(--ok); border-color: #2f8a57; background: #183626; }
   .rm-badge.warn { color: var(--warn); border-color: #8a6a1f; background: #3a2d0d; }
   .rm-badge.muted { color: var(--muted); }
-  #r-ind { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
-  #r-ind .v { display: inline-flex; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; }
+  /* fixed sizes: the changing lock text / numbers must not resize the status bar or the tile */
+  #remote-chip { width: 228px; overflow: hidden; }
+  #remote-ind { flex: none; width: 110px; justify-content: flex-end; gap: 8px; }
+  #remote-txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #r-ind { display: grid; grid-template-columns: minmax(0, 1fr) 100px 130px; align-items: center; gap: 14px; }
+  #r-ind:empty { display: none; }
+  #r-ind .rm-badge { min-width: 0; overflow: hidden; white-space: nowrap; }
+  #r-ind .rm-badge svg { flex: none; }
+  #r-ind .v { display: inline-flex; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 </style>
 <script src="/static/remote_ui.js"></script>
 </head>

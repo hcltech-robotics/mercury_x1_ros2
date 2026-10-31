@@ -122,6 +122,9 @@
   table.maps td.meta { color: var(--muted); font-size: 11px; }
   table.maps tr.active td { background: rgba(76,194,255,.10); }
   table.maps td.act button { font-size: 14px; padding: 0 5px; }
+  details > summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 8px; }
+  #exp3d-files div { display: flex; gap: 6px; align-items: center; }
+  #exp3d-files button { background: none; border: 0; color: #ff8a99; cursor: pointer; font-size: 13px; padding: 0 4px; margin-left: auto; }
   .badge { display: inline-block; font-size: 10px; font-weight: 600; padding: 0 6px; border-radius: 999px;
     background: #1b4f6e; color: #fff; margin-left: 4px; vertical-align: 1px; }
   .badge.mapping { background: #5a4410; }
@@ -149,8 +152,15 @@
   .rm-badge.ok { color: var(--ok); border-color: #2f8a57; background: #183626; }
   .rm-badge.warn { color: var(--warn); border-color: #8a6a1f; background: #3a2d0d; }
   .rm-badge.muted { color: var(--muted); }
-  #r-ind { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
-  #r-ind .v { font-variant-numeric: tabular-nums; color: var(--text); font-size: 12px; }
+  /* fixed sizes: the changing lock text / numbers must not resize the header chip or the tile row */
+  #c-remote { width: 150px; overflow: hidden; }
+  #t-remote { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #rm-hdr { flex: none; width: 62px; justify-content: flex-end; gap: 4px; }
+  #r-ind { display: grid; grid-template-columns: minmax(0, 1fr) 70px 98px; align-items: center; gap: 10px; margin-bottom: 6px; }
+  #r-ind:empty { display: none; }
+  #r-ind .rm-badge { min-width: 0; overflow: hidden; white-space: nowrap; }
+  #r-ind .rm-badge svg { flex: none; }
+  #r-ind .v { font-variant-numeric: tabular-nums; color: var(--text); font-size: 12px; white-space: nowrap; }
 </style>
 <script src="/static/remote_ui.js"></script>
 </head>
@@ -162,7 +172,7 @@
     <span class="chip hidden" id="c-estop" title="Physical E-stop pressed: base MCU and arm servo power are cut. Release the button, then switch the arms back on."><span class="ic"><svg viewBox="0 0 24 24"><path d="M8 2h8l6 6v8l-6 6H8l-6-6V8z"/><path d="M12 7v6M12 16.5v.5"/></svg></span>E-STOP</span>
     <span class="chip" id="c-batt"><span class="batt"><i id="batt-fill"></i></span><span id="t-batt">-- %</span></span>
     <span class="chip" title="Arm servo power (Robot tab)"><span class="ic" id="d-arms"><svg viewBox="0 0 24 24"><path d="M5 21h10M10 21v-5"/><circle cx="10" cy="14" r="2"/><path d="M11.5 12.5L16 7"/><circle cx="17" cy="6" r="2"/><path d="M18.5 7.5l2.5 3M15.5 4.5L18 2"/></svg></span><span id="t-arms">arms</span></span>
-    <span class="chip" title="Unitree BLE remote (Robot tab)"><span class="ic" id="d-remote"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="11" rx="5"/><path d="M7 10.5v4M5 12.5h4"/><circle cx="15.5" cy="11.5" r=".9"/><circle cx="18" cy="14" r=".9"/></svg></span><span id="t-remote">remote</span><span class="rm-ind" id="rm-hdr"></span></span>
+    <span class="chip" id="c-remote" title="Unitree BLE remote (Robot tab)"><span class="ic" id="d-remote"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="11" rx="5"/><path d="M7 10.5v4M5 12.5h4"/><circle cx="15.5" cy="11.5" r=".9"/><circle cx="18" cy="14" r=".9"/></svg></span><span id="t-remote">remote</span><span class="rm-ind" id="rm-hdr"></span></span>
   </div>
   <div class="grp"><span class="glbl">Nav</span>
     <span class="chip" title="RTAB-Map: mapping / localizing, on which map"><span class="ic" id="d-slam"><svg viewBox="0 0 24 24"><path d="M3 6.5l6-2.5 6 2.5 6-2.5v13.5l-6 2.5-6-2.5-6 2.5z"/><path d="M9 4v13.5M15 6.5V20"/></svg></span><span id="t-slam">SLAM off</span></span>
@@ -254,13 +264,17 @@
             <option value="0.08">8 cm</option><option value="0.1">10 cm</option><option value="0.15">15 cm</option><option value="0.2">20 cm</option>
           </select>
         </div>
-        <div class="row">
-          <span class="spacer"></span>
-          <button class="b" id="b-exp-cloud" title="Coloured point cloud of the whole map (.ply, a few seconds)">Export cloud</button>
-          <button class="b" id="b-exp-mesh" title="Textured mesh of the whole map (.obj + texture, zipped; about a minute)">Export mesh</button>
-        </div>
-        <div class="muted" style="font-size:11px" id="exp3d-msg"></div>
-        <div id="exp3d-files" style="font-size:12px"></div>
+        <div class="muted" style="font-size:11px" id="vox-msg"></div>
+        <details id="exp3d">
+          <summary>Export 3D files <span class="muted" id="exp3d-count"></span></summary>
+          <div class="muted" style="font-size:11px;margin:6px 0">The whole map as a file for other 3D programs (MeshLab, CloudCompare, Blender). Not used by the robot.</div>
+          <div class="row">
+            <button class="b" id="b-exp-cloud" title="Coloured point cloud of the whole map (.ply, a few seconds)">Export cloud (.ply)</button>
+            <button class="b" id="b-exp-mesh" title="Textured mesh of the whole map (.obj + texture, zipped; about a minute)">Export mesh (.obj)</button>
+          </div>
+          <div class="muted" style="font-size:11px" id="exp3d-msg"></div>
+          <div id="exp3d-files" style="font-size:12px"></div>
+        </details>
       </section>
     </div>
 
@@ -474,8 +488,10 @@ function onStatus() {
   if (s.export3d) {
     const e = s.export3d;
     $("#b-exp-cloud").disabled = $("#b-exp-mesh").disabled = !!e.busy;
-    $("#exp3d-msg").textContent = [e.busy ? `${e.busy}…` : e.message, s.viz_layers && s.viz_layers.nvblox.includes("slam3d") ? e.live : ""].filter(Boolean).join(" · ");
-    const h = e.files.map((f) => `<div><a href="/exports/${encodeURIComponent(f.name)}" download>${f.name}</a> <span class="muted">${f.size_mb} MB · ${f.time}</span></div>`).join("");
+    $("#exp3d-msg").textContent = e.busy ? `${e.busy}…` : e.message;
+    $("#vox-msg").textContent = s.viz_layers && s.viz_layers.nvblox.includes("slam3d") ? e.live : "";
+    $("#exp3d-count").textContent = e.files.length ? `· ${e.files.length} file${e.files.length > 1 ? "s" : ""}` : "";
+    const h = e.files.map((f) => `<div><a href="/exports/${encodeURIComponent(f.name)}" download>${f.name}</a> <span class="muted">${f.size_mb} MB · ${f.time}</span><button data-f="${f.name}" title="delete this file">✕</button></div>`).join("");
     if (h !== $("#exp3d-files")._h) { $("#exp3d-files").innerHTML = h; $("#exp3d-files")._h = h; }
   }
   if (s.ros) {
@@ -845,6 +861,10 @@ $("#b-newmap").onclick = () => {
 };
 $("#b-slamstop").onclick = async () => { toast("stopping SLAM (saving map)…"); await api("slam_stop"); toast("SLAM stopped, map saved"); };
 $("#b-exp-cloud").onclick = () => api("export3d", { kind: "cloud" });
+$("#exp3d-files").addEventListener("click", (ev) => {
+  const b = ev.target.closest("button[data-f]");
+  if (b && confirm(`Delete ${b.dataset.f}?`)) api("export3d_delete", { name: b.dataset.f });
+});
 $("#b-exp-mesh").onclick = () => api("export3d", { kind: "mesh" });
 $("#b-export").onclick = async () => { const j = await api("export_map"); if (j && j.ok) toast(`saved ${j.file}`); };
 $("#b-nav").onclick = async () => { toast("starting Nav2…"); await api("nav"); };

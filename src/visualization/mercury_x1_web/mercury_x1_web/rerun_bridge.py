@@ -548,11 +548,13 @@ class RerunBridge(Node):
                          vertex_texcoords=[[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
                          albedo_texture=tex)
 
+    # Data sent once and then unchanged for a long time (the map while localizing, waypoints, the trail while
+    # standing) is logged static: the server's history buffer drops old timestamped data, and a viewer that
+    # connects later would never get it. Static keeps the latest version for every new viewer.
     def _on_map(self, msg: OccupancyGrid) -> None:
-        self._set_time(_stamp(msg))
         mesh = self._map_mesh(msg)
         if mesh is not None:
-            self._log("world/map", rr.CoordinateFrame(msg.header.frame_id or "map"), mesh)
+            self._log("world/map", rr.CoordinateFrame(msg.header.frame_id or "map"), mesh, static=True)
 
     def _on_costmap(self, msg: OccupancyGrid) -> None:
         if not self.thr_costmap():
@@ -660,9 +662,9 @@ class RerunBridge(Node):
             pos.append([p.position.x, p.position.y, 0.05])
             vec.append([0.35 * math.cos(yaw), 0.35 * math.sin(yaw), 0.0])
             labels.append(str(i + 1))
-        self._set_time(time.time())   # newest on the timeline: otherwise an older stamp can hide a deletion
         self._log("world/waypoints", rr.CoordinateFrame(msg.header.frame_id or "map"),
-               rr.Arrows3D(origins=pos, vectors=vec, colors=[[255, 220, 0]] * len(pos), radii=0.03, labels=labels))
+               rr.Arrows3D(origins=pos, vectors=vec, colors=[[255, 220, 0]] * len(pos), radii=0.03, labels=labels),
+               static=True)
 
     def _on_footprint(self, msg: PolygonStamped) -> None:
         pts = [[p.x, p.y, 0.02] for p in msg.polygon.points]
@@ -679,9 +681,8 @@ class RerunBridge(Node):
         p = [pose[1], pose[2], 0.02]
         if not self.trail or math.dist(p, self.trail[-1]) > 0.03:
             self.trail = (self.trail + [p])[-3000:]
-            self._set_time(time.time())
             self._log("world/trail", rr.CoordinateFrame("map"),
-                   rr.LineStrips3D([self.trail], colors=[[255, 255, 255, 120]], radii=0.008))
+                   rr.LineStrips3D([self.trail], colors=[[255, 255, 255, 120]], radii=0.008), static=True)
 
 
 def main(args=None) -> None:

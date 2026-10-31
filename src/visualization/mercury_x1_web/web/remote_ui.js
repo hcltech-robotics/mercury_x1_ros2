@@ -36,9 +36,9 @@
   // drive lock: {cls: ok|warn|muted, short, long, icon(h)}; null when not connected / unknown
   function lock(r) {
     if (!r || r.state !== "connected") return null;
-    if (r.driving) return { cls: "warn", short: "DRIVING", long: "DRIVING · sticks move the base", open: true, color: C.warn };
-    if (r.drive_enabled === true) return { cls: "ok", short: "unlocked", long: "Control allowed · Start locks", open: true, color: C.ok };
-    if (r.drive_enabled === false) return { cls: "muted", short: "locked", long: "Locked · press Start to drive", open: false, color: "#959cab" };
+    if (r.driving) return { cls: "warn", short: "DRIVING", long: "DRIVING", open: true, color: C.warn };
+    if (r.drive_enabled === true) return { cls: "ok", short: "unlocked", long: "Control allowed", open: true, color: C.ok };
+    if (r.drive_enabled === false) return { cls: "muted", short: "locked", long: "Locked · press Start", open: false, color: "#959cab" };
     return null;
   }
 

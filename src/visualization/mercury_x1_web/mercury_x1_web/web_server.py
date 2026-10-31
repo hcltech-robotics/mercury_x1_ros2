@@ -801,7 +801,7 @@ class App:
                 st["map_name"] = self.map_name
                 st["viz_layers"] = {"nvblox": self.viz_layers, "voxel": self.voxel}
                 st["head_hold"] = self.head_hold
-                st["export3d"] = {**self.export3d, "files": self.export3d["files"][:6]}
+                st["export3d"] = {**self.export3d, "files": self.export3d["files"][:20]}
                 st["system"] = self.sysstats.snapshot()
                 st["ros"] = self.ros_network()
                 if time.monotonic() - self._maps_t > 3.0:     # saved maps: cheap, but no need at 5 Hz
@@ -874,6 +874,12 @@ class App:
             if not os.path.exists(self._db_path()):
                 return web.json_response({"ok": False, "error": f"no map database '{self.map_name}'"})
             threading.Thread(target=self._export3d_job, args=(kind,), daemon=True).start()
+        elif action == "export3d_delete":   # {"name"}: one file in ~/maps/exports
+            path = os.path.join(slam3d.EXPORT_DIR, os.path.basename(str(body.get("name", ""))))
+            if not os.path.isfile(path):
+                return web.json_response({"ok": False, "error": "no such file"})
+            os.remove(path)
+            self.export3d["files"] = slam3d.list_exports()
         elif action == "viz_layers":     # {"nvblox": [...]} -> rerun_bridge parameter, saved for restarts
             layers = [k for k in NVBLOX_LAYERS if k in body.get("nvblox", [])]
             self.viz_layers = layers
