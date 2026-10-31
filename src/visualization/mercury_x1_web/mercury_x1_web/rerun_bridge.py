@@ -62,14 +62,17 @@ NVBLOX_LAYERS = {
     "occupancy": (OccupancyGrid, "/nvblox_node/static_occupancy_grid", RELIABLE_1, 2.0),
     # not nvblox: the whole RTAB-Map map as a coloured 3D cloud from its stored RGB-D frames, aligned to
     # the map frame (web_server re-exports it every 20 s while this is subscribed)
-    "slam3d": (PointCloud2, "/slam/cloud3d", LATCHED, 0.2),
-    "voxmap": (PointCloud2, "/slam/cloud3d", LATCHED, 0.2),   # the same voxels drawn as solid cubes
+    "slam3d": (PointCloud2, "/slam/cloud3d", LATCHED, 0.0),
 }
 VIEW_LAYERS = ("camera",)   # switchable like the nvblox layers, but no subscription: camera frustums + image
 # The viewer gets voxel grids, not raw clouds (mapping still uses the full-resolution depth):
 DEPTH_VOXEL = 0.05         # [m] live depth points (~100k points/frame -> a few thousand voxels)
-SLAM3D_VOXEL = 0.05        # [m] = web_server.LIVE3D_VOXEL (the cloud arrives already voxelised)
-SLAM3D_TILE = 2.0          # [m] whole-map tiles: only tiles whose voxels changed are re-sent
+# Voxel map (whole RTAB-Map map): web_server publishes it at 3 cm; the bridge keeps that copy and re-voxelises
+# it at `voxel_size`, drawn `voxel_shape` = round (points) | square (solid cubes), in 2 m static tiles of
+# which only the changed ones are re-sent. Both are parameters (page settings), applied without a re-export.
+VOXEL_SHAPES = ("round", "square")
+VOXEL_SIZES = (0.03, 0.2)  # [m] allowed range
+SLAM3D_TILE = 2.0          # [m]
 
 
 def _turbo(t: np.ndarray) -> np.ndarray:
@@ -122,7 +125,9 @@ class RerunBridge(Node):
         p = self.declare_parameter
         grpc_port = int(p("grpc_port", 9876).value)
         web_port = int(p("web_port", 9090).value)
-        mem = p("memory_limit", "150MiB").value   # replayed to every newly connected viewer
+        # the server keeps this much history and replays it to every newly connected viewer; newest first,
+        # so a new viewer shows the live state at once and the history fills in behind it
+        mem = p("memory_limit", "64MiB").value
         self.img_hz = float(p("image_rate", 4.0).value)
         self.cloud_hz = float(p("cloud_rate", 3.0).value)
         self.scan_hz = float(p("scan_rate", 10.0).value)
@@ -138,7 +143,7 @@ class RerunBridge(Node):
         threading.Thread(target=self._log_worker, daemon=True, name="rerun_log").start()
         self.mesh_dir = os.path.join(get_package_share_directory("mercury_x1_web"), "meshes")
         self.robot_parts = self._robot_parts()
-        uri = rr.serve_grpc(grpc_port=grpc_port, server_memory_limit=mem,
+        uri = rr.serve_grpc(grpc_port=grpc_port, server_memory_limit=mem, newest_first=True,
                             cors_allow_origin=["*"], default_blueprint=self._blueprint(self.robot_parts))
         # after a hard restart the old viewer port lingers in TIME_WAIT for ~60 s and rerun's web server
         # then hangs instead of failing: wait until the port can really be bound
@@ -199,13 +204,17 @@ class RerunBridge(Node):
         self.nvblox_handlers = {"mesh": self._on_mesh_tile, "esdf": self._on_esdf, "depth": self._on_nvblox_depth,
                                 "tsdf": lambda m: self._on_voxels(m, "tsdf"),
                                 "color": lambda m: self._on_voxels(m, "color"), "occupancy": self._on_nvblox_occupancy,
-                                "slam3d": lambda m: self._on_slam3d(m, "slam3d"),
-                                "voxmap": lambda m: self._on_slam3d(m, "voxmap")}
+                                "slam3d": self._on_slam3d}
         self.nvblox_subs: dict = {}
         self.thr_nvblox = {k: Throttle(v[3]) for k, v in NVBLOX_LAYERS.items()}
         self.mesh_tiles: set[str] = set()          # tile ids logged, blanked when the mesh layer goes off
-        # whole-map tiles per layer (points / cubes): tile -> hash of what the viewer has
-        self.slam3d_tiles: dict[str, dict[str, int]] = {"slam3d": {}, "voxmap": {}}
+        # voxel map: the latest 3 cm cloud (frame, xyz, rgb) and per shape: tile -> hash of what the viewer has
+        self.slam3d_cloud: tuple | None = None
+        self.slam3d_tiles: dict[str, dict[str, int]] = {k: {} for k in VOXEL_SHAPES}
+        shape, size = self._saved_voxel()
+        self.voxel_shape = p("voxel_shape", shape).value
+        self.voxel_size = float(p("voxel_size", size).value)
+        self.voxel_changed = False
         self.layers_wanted: list[str] | None = None
         self.show_camera = True                    # "camera" layer: frustums with the live image
         p("nvblox_layers", self._saved_layers())
@@ -251,16 +260,35 @@ class RerunBridge(Node):
         try:
             with open(VIZ_LAYERS_FILE) as f:
                 saved = json.load(f)
-            layers = [k for k in saved.get("nvblox", []) if k in NVBLOX_LAYERS or k in VIEW_LAYERS]
+            layers = [("slam3d" if k == "voxmap" else k) for k in saved.get("nvblox", [])]   # voxmap: old name
+            layers = list(dict.fromkeys(k for k in layers if k in NVBLOX_LAYERS or k in VIEW_LAYERS))
             if saved.get("version", 1) < 2:   # saved before the camera layer existed: on, like before
                 layers.append("camera")
             return layers or [""]           # rclpy cannot infer the type of an empty list
         except (OSError, ValueError, AttributeError):
             return ["mesh", "depth", "camera"]
 
+    @staticmethod
+    def _saved_voxel() -> tuple[str, float]:
+        try:
+            with open(VIZ_LAYERS_FILE) as f:
+                v = json.load(f).get("voxel", {})
+            return (v.get("shape") if v.get("shape") in VOXEL_SHAPES else "square",
+                    min(max(float(v.get("size", 0.05)), VOXEL_SIZES[0]), VOXEL_SIZES[1]))
+        except (OSError, ValueError, AttributeError, TypeError):
+            return "square", 0.05
+
     def _on_params(self, params) -> SetParametersResult:
         for prm in params:
-            if prm.name == "nvblox_layers":
+            if prm.name == "voxel_shape":
+                if prm.value not in VOXEL_SHAPES:
+                    return SetParametersResult(successful=False, reason=f"voxel_shape: one of {VOXEL_SHAPES}")
+                self.voxel_shape, self.voxel_changed = prm.value, True
+            elif prm.name == "voxel_size":
+                if not VOXEL_SIZES[0] <= float(prm.value) <= VOXEL_SIZES[1]:
+                    return SetParametersResult(successful=False, reason=f"voxel_size: {VOXEL_SIZES} m")
+                self.voxel_size, self.voxel_changed = float(prm.value), True
+            elif prm.name == "nvblox_layers":
                 bad = [k for k in prm.value if k and k not in NVBLOX_LAYERS and k not in VIEW_LAYERS]
                 if bad:
                     return SetParametersResult(successful=False, reason=f"unknown layers {bad}")
@@ -268,6 +296,9 @@ class RerunBridge(Node):
         return SetParametersResult(successful=True)
 
     def _layers_tick(self) -> None:
+        if self.voxel_changed:                    # page changed shape / size: re-draw from the kept cloud
+            self.voxel_changed = False
+            self._render_slam3d()
         if self.layers_wanted is not None:
             wanted, self.layers_wanted = self.layers_wanted, None
             self._apply_layers(wanted)
@@ -290,10 +321,10 @@ class RerunBridge(Node):
         self.get_logger().info(f"nvblox layers: {sorted(self.nvblox_subs) or 'none'}, camera {'on' if camera else 'off'}")
 
     def _clear_layer(self, key: str) -> None:
-        if key in self.slam3d_tiles:  # static tiles: blank each (the latched cloud is re-sent on resubscribe)
-            for tid in self.slam3d_tiles[key]:
-                self._log(f"world/{key}/{tid}", self._empty_tile(key), static=True)
-            self.slam3d_tiles[key].clear()
+        if key == "slam3d":  # static tiles: blank each (the latched cloud is re-sent on resubscribe)
+            for shape in VOXEL_SHAPES:
+                self._blank_tiles(shape, list(self.slam3d_tiles[shape]))
+            self.slam3d_cloud = None
             return
         if key == "mesh":   # static tiles: overwrite each with an empty mesh (the tiler resends all on resubscribe)
             for tid in self.mesh_tiles:
@@ -336,56 +367,68 @@ class RerunBridge(Node):
         self._log(f"world/nvblox/{key}", rr.CoordinateFrame(msg.header.frame_id),
                rr.Boxes3D(centers=centers, half_sizes=[[h, h, h]], colors=colors, fill_mode="solid"))
 
-    @staticmethod
-    def _empty_tile(key: str):
-        """static data cannot be cleared: overwrite a tile with an empty shape of its kind"""
+    def _blank_tiles(self, shape: str, tids: list[str]) -> None:
+        """static data cannot be cleared: overwrite tiles with an empty shape of their kind"""
         empty = np.zeros((0, 3), np.float32)
-        return rr.Boxes3D(centers=empty, half_sizes=empty) if key == "voxmap" else rr.Points3D(empty)
+        for tid in tids:
+            self.slam3d_tiles[shape].pop(tid, None)
+            self._log(f"world/slam3d/{shape}/{tid}",
+                      rr.Boxes3D(centers=empty, half_sizes=empty) if shape == "square" else rr.Points3D(empty),
+                      static=True)
 
-    def _on_slam3d(self, msg: PointCloud2, key: str) -> None:
-        """whole-map voxels (map frame) as points (slam3d) or solid cubes (voxmap); static tiles"""
-        if not self.thr_nvblox[key]():
-            return
+    def _on_slam3d(self, msg: PointCloud2) -> None:
+        """whole map, 3 cm voxels in the map frame (web_server): kept, then drawn at the page's size / shape"""
         offs = {f.name: f.offset for f in msg.fields}
         n = msg.width * msg.height
         if n == 0 or not all(k in offs for k in ("x", "y", "z")):
             return
         buf = np.frombuffer(msg.data, dtype=np.uint8).reshape(n, msg.point_step)
         xyz = np.stack([buf[:, offs[k]:offs[k] + 4].copy().view(np.float32)[:, 0] for k in "xyz"], 1)
-        colors = None
         if "rgb" in offs:
             packed = buf[:, offs["rgb"]:offs["rgb"] + 4].copy().view(np.uint32)[:, 0]
-            colors = np.stack([(packed >> 16) & 255, (packed >> 8) & 255, packed & 255], 1).astype(np.uint8)
-        # 2 m x 2 m tiles, static (the viewer keeps only the latest of each); unchanged tiles are not re-sent,
-        # so a growing map streams only where it grew
-        frame = msg.header.frame_id or "map"
-        if colors is None:
-            colors = np.full((len(xyz), 3), 200, np.uint8)
+            rgb = np.stack([(packed >> 16) & 255, (packed >> 8) & 255, packed & 255], 1).astype(np.uint8)
+        else:
+            rgb = np.full((len(xyz), 3), 200, np.uint8)
+        self.slam3d_cloud = (msg.header.frame_id or "map", xyz, rgb)
+        self._render_slam3d()
+
+    def _render_slam3d(self) -> None:
+        """2 m x 2 m static tiles (the viewer keeps only the latest of each); unchanged tiles are not re-sent,
+        so a growing map streams only where it grew"""
+        if self.slam3d_cloud is None:
+            return
+        t0 = time.monotonic()
+        frame, xyz, rgb = self.slam3d_cloud
+        shape, size = self.voxel_shape, self.voxel_size
+        other = [t for s in VOXEL_SHAPES if s != shape for t in self.slam3d_tiles[s]]
+        for s in VOXEL_SHAPES:
+            if s != shape:
+                self._blank_tiles(s, list(self.slam3d_tiles[s]))
+        xyz, colors = voxel_down(xyz, rgb, size)
         tx = np.floor(xyz[:, 0] / SLAM3D_TILE).astype(np.int32)
         ty = np.floor(xyz[:, 1] / SLAM3D_TILE).astype(np.int32)
         order = np.lexsort((ty, tx))
         xyz, colors, tx, ty = xyz[order], colors[order], tx[order], ty[order]
         cuts = np.flatnonzero((np.diff(tx) != 0) | (np.diff(ty) != 0)) + 1
-        tiles, h_vox = self.slam3d_tiles[key], SLAM3D_VOXEL * 0.5
+        tiles, h = self.slam3d_tiles[shape], size * 0.5
         seen, sent = set(), 0
         for a, b in zip(np.r_[0, cuts], np.r_[cuts, len(xyz)]):
             tid = f"{tx[a]}_{ty[a]}"
             seen.add(tid)
-            h = hash((xyz[a:b].tobytes(), colors[a:b].tobytes()))
-            if tiles.get(tid) == h:
+            digest = hash((size, xyz[a:b].tobytes(), colors[a:b].tobytes()))
+            if tiles.get(tid) == digest:
                 continue
-            tiles[tid] = h
-            if key == "voxmap":
-                shape = rr.Boxes3D(centers=xyz[a:b], half_sizes=[[h_vox, h_vox, h_vox]], colors=colors[a:b],
-                                   fill_mode="solid")
+            tiles[tid] = digest
+            if shape == "square":
+                vis = rr.Boxes3D(centers=xyz[a:b], half_sizes=[[h, h, h]], colors=colors[a:b], fill_mode="solid")
             else:
-                shape = rr.Points3D(xyz[a:b], radii=h_vox, colors=colors[a:b])
-            self._log(f"world/{key}/{tid}", rr.CoordinateFrame(frame), shape, static=True)
+                vis = rr.Points3D(xyz[a:b], radii=h, colors=colors[a:b])
+            self._log(f"world/slam3d/{shape}/{tid}", rr.CoordinateFrame(frame), vis, static=True)
             sent += b - a
-        for tid in [t for t in tiles if t not in seen]:
-            del tiles[tid]
-            self._log(f"world/{key}/{tid}", self._empty_tile(key), static=True)
-        self.get_logger().info(f"whole-map 3D ({key}): {len(xyz)} voxels in {len(seen)} tiles, sent {sent}")
+        self._blank_tiles(shape, [t for t in tiles if t not in seen])
+        self.get_logger().info(f"voxel map: {len(xyz)} {shape} voxels of {size * 100:.0f} cm in {len(seen)} tiles, "
+                               f"sent {sent} ({(time.monotonic() - t0) * 1000:.0f} ms)"
+                               + (f", blanked {len(other)} old tiles" if other else ""))
 
     def _on_nvblox_occupancy(self, msg: OccupancyGrid) -> None:
         """nvblox' own 2D occupancy (from the depth camera), drawn just above the floor"""

@@ -235,8 +235,16 @@
         <div class="muted" style="font-size:11px">Layers that are off are not streamed (no CPU / GPU cost). Local map: ~6 m around the robot.</div>
         <h2 style="margin-top:12px">SLAM 3D map</h2>
         <div class="row" id="slam-layers">
-          <label class="switch" data-layer="slam3d" title="The whole RTAB-Map map as coloured 5 cm points (lighter than the Voxel map cubes), aligned to the live map"><input type="checkbox"><span class="track"></span>Whole map (points)</label>
-          <label class="switch" data-layer="voxmap" title="The whole RTAB-Map map as solid 5 cm cubes in its camera colours (re-sent only where the map changed)"><input type="checkbox"><span class="track"></span>Voxel map</label>
+          <label class="switch" data-layer="slam3d" title="The whole RTAB-Map map as voxels in its camera colours, aligned to the live map (re-sent only where the map changed)"><input type="checkbox"><span class="track"></span>Voxel map</label>
+          <div class="seg" id="vox-shape" title="Round = points (lighter for the browser), square = solid cubes">
+            <button data-shape="round">● Round</button><button data-shape="square">■ Square</button>
+          </div>
+          <select id="vox-size" title="Voxel size (smaller = more detail, more data for the viewer)">
+            <option value="0.03">3 cm</option><option value="0.04">4 cm</option><option value="0.05">5 cm</option>
+            <option value="0.08">8 cm</option><option value="0.1">10 cm</option><option value="0.15">15 cm</option><option value="0.2">20 cm</option>
+          </select>
+        </div>
+        <div class="row">
           <span class="spacer"></span>
           <button class="b" id="b-exp-cloud" title="Coloured point cloud of the whole map (.ply, a few seconds)">Export cloud</button>
           <button class="b" id="b-exp-mesh" title="Textured mesh of the whole map (.obj + texture, zipped; about a minute)">Export mesh</button>
@@ -445,11 +453,16 @@ function onStatus() {
     for (const el of document.querySelectorAll(LAYER_SEL))
       el.querySelector("input").checked = s.viz_layers.nvblox.includes(el.dataset.layer);
   }
+  const vx = s.viz_layers && s.viz_layers.voxel;
+  if (vx && Date.now() > voxUntil) {
+    document.querySelectorAll("#vox-shape button").forEach((b) => b.classList.toggle("active", b.dataset.shape === vx.shape));
+    if (document.activeElement !== $("#vox-size")) $("#vox-size").value = String(vx.size);
+  }
   $("#c-estop").classList.toggle("hidden", !s.estop);
   if (s.export3d) {
     const e = s.export3d;
     $("#b-exp-cloud").disabled = $("#b-exp-mesh").disabled = !!e.busy;
-    $("#exp3d-msg").textContent = [e.busy ? `${e.busy}…` : e.message, s.viz_layers && ["slam3d", "voxmap"].some((k) => s.viz_layers.nvblox.includes(k)) ? e.live : ""].filter(Boolean).join(" · ");
+    $("#exp3d-msg").textContent = [e.busy ? `${e.busy}…` : e.message, s.viz_layers && s.viz_layers.nvblox.includes("slam3d") ? e.live : ""].filter(Boolean).join(" · ");
     const h = e.files.map((f) => `<div><a href="/exports/${encodeURIComponent(f.name)}" download>${f.name}</a> <span class="muted">${f.size_mb} MB · ${f.time}</span></div>`).join("");
     if (h !== $("#exp3d-files")._h) { $("#exp3d-files").innerHTML = h; $("#exp3d-files")._h = h; }
   }
@@ -920,6 +933,14 @@ for (const el of document.querySelectorAll(LAYER_SEL)) {
     api("viz_layers", { nvblox: on });
   });
 }
+// voxel map look: the bridge re-draws its kept copy of the map, no re-export
+let voxUntil = 0;
+document.querySelectorAll("#vox-shape button").forEach((b) => b.onclick = () => {
+  voxUntil = Date.now() + 1500;
+  document.querySelectorAll("#vox-shape button").forEach((x) => x.classList.toggle("active", x === b));
+  api("viz_voxel", { shape: b.dataset.shape });
+});
+$("#vox-size").onchange = () => { voxUntil = Date.now() + 1500; api("viz_voxel", { size: +$("#vox-size").value }); };
 const setLanSwitch = bindSwitch("#sw-lan", (lan) => {
   const what = lan ? "LAN: other machines can see the robot's ROS topics (DDS traffic on the WiFi)"
                    : "Robot only: ROS traffic stays on the robot";

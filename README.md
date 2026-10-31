@@ -41,8 +41,8 @@ Wi-Fi changes run `sudo -n nmcli` (NetworkManager falls back to the previous net
 Starting **mapping** levels the head first (neck 0°, jaw −5.7° = camera horizontal) and the page refuses
 head moves while mapping runs; RTAB-Map's 2D grid uses the lidar **and** the depth camera
 (`Grid/Sensor 2`), so tables / overhangs between 6 cm and 1.4 m end up in the saved map.
-The page's **SLAM 3D map → Whole map (3D)** layer is the whole map from the stored RGB-D frames as a
-5 cm voxel grid in 2 m tiles (`rtabmap-export`, re-exported only when the graph changed, ≤ every 30 s while
+The page's **SLAM 3D map → Voxel map** layer is the whole map from the stored RGB-D frames: web_server sends
+it at 3 cm, the bridge re-voxelises it at the page's size (3–20 cm) as round points or solid cubes, in 2 m tiles (`rtabmap-export`, re-exported only when the graph changed, ≤ every 30 s while
 mapping; the bridge re-sends only changed tiles), fitted to the live map frame on the nodes both share
 (`Grid/3D` stays off: a database reprocessed with it gave a 2D map of a single scan fan);
 **Export cloud / Export mesh** write a .ply / zipped textured .obj via `rtabmap-export` to
@@ -69,7 +69,10 @@ the outline and those points (+4 cm); MPPI (`consider_footprint`) and the behavi
 it. Published only on change (a new footprint makes the costmaps re-inflate). Arms hanging: outline.
 
 ### 3D view layers
-Page → "3D view": **Voxel map** (the whole RTAB-Map map as solid 5 cm cubes, tiled, only changed tiles re-sent), **Cameras in 3D** (frustums of the jaw and bellybutton cameras with the live image, 2 Hz; default on),
+The Rerun server keeps 64 MiB of history and replays it **newest first** to a new viewer (the live view shows
+at once, history fills in behind).
+
+Page → "3D view": **Cameras in 3D** (frustums of the jaw and bellybutton cameras with the live image, 2 Hz; default on),
 nvblox: Mesh + Depth points (default; shown as 5 cm voxels, mapping uses the full depth), ESDF slice (distance to obstacles at the costmap slice height,
 what Nav2 uses), Depth points (back-projected depth, downsampled to 40k), TSDF voxels, Colour voxels,
 Occupancy. The choice is the `nvblox_layers` parameter of `rerun_bridge`, saved in

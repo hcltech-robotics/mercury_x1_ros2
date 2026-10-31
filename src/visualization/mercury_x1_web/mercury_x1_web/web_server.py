@@ -58,11 +58,14 @@ CONF_DIR = os.path.expanduser("~/.config/mercury_x1")
 ROS_NETWORK_FILE = os.path.join(CONF_DIR, "ros_network")   # read by scripts/ros_env.sh at stack start
 VIZ_LAYERS_FILE = os.path.join(CONF_DIR, "viz_layers.json")  # read by rerun_bridge at start
 # = rerun_bridge.NVBLOX_LAYERS + "camera" (camera frustums with the live image in the 3D view)
-NVBLOX_LAYERS = ("mesh", "esdf", "depth", "tsdf", "color", "occupancy", "slam3d", "voxmap", "camera")
+NVBLOX_LAYERS = ("mesh", "esdf", "depth", "tsdf", "color", "occupancy", "slam3d", "camera")
+VOXEL_SHAPES = ("round", "square")   # voxel map look (rerun_bridge voxel_shape / voxel_size)
+VOXEL_SIZES = (0.03, 0.2)
+DEFAULT_VOXEL = {"shape": "square", "size": 0.05}
 DEFAULT_VIZ_LAYERS = ["mesh", "depth", "camera"]
 TRASH_DIR = os.path.join(MAPS_DIR, ".trash")   # deleted maps, purged after TRASH_DAYS
 TRASH_DAYS = 7
-LIVE3D_VOXEL = 0.05         # [m] voxel size of the whole-map 3D layer
+LIVE3D_VOXEL = 0.03         # [m] the whole map goes to the bridge at this, it re-voxelises at the page's size
 LIVE3D_PERIOD = 30.0        # [s] at most one re-export per this while the map grows (mapping)
 WAYPOINT_PICK_RADIUS = 0.6   # [m] a "delete" click removes the nearest waypoint within this distance
 # head pose while mapping: neck straight, Orbbec level (its pitch = -jaw - 5.7 deg, see the URDF notes)
@@ -425,6 +428,11 @@ class WebNode(Node):
         val = ParameterValue(type=ParameterType.PARAMETER_STRING_ARRAY, string_array_value=layers or [""])
         self.call("bridge_params", SetParameters.Request(parameters=[Parameter(name="nvblox_layers", value=val)]))
 
+    def set_voxel(self, shape: str, size: float) -> None:
+        self.call("bridge_params", SetParameters.Request(parameters=[
+            Parameter(name="voxel_shape", value=ParameterValue(type=ParameterType.PARAMETER_STRING, string_value=shape)),
+            Parameter(name="voxel_size", value=ParameterValue(type=ParameterType.PARAMETER_DOUBLE, double_value=size))]))
+
     def live_graph(self, timeout: float = 15.0) -> dict[int, tuple[float, float, float]] | None:
         """node id -> optimized position in the map frame, from rtabmap (graph only, no sensor data).
         Called from a worker thread; the executor thread completes the future."""
@@ -495,6 +503,7 @@ class App:
         self.static_dir = os.path.join(get_package_share_directory("mercury_x1_web"), "web")
         self.viewer_ready = all(os.path.exists(os.path.join(VIEWER_CACHE, f)) for f in VIEWER_FILES)
         self.viz_layers = self.load_viz_layers()
+        self.voxel = self.load_voxel()
         self.head_hold = True        # hold the head level while mapping (switch on the page)
         self.wifi = Wifi()
         self.export3d = {"busy": "", "message": "", "files": slam3d.list_exports(), "live": ""}
@@ -602,11 +611,27 @@ class App:
                                   "frame": m.header.frame_id})
 
     @staticmethod
+    def load_voxel() -> dict:
+        try:
+            with open(VIZ_LAYERS_FILE) as f:
+                v = json.load(f).get("voxel", {})
+            return {"shape": v["shape"] if v.get("shape") in VOXEL_SHAPES else DEFAULT_VOXEL["shape"],
+                    "size": min(max(float(v.get("size", DEFAULT_VOXEL["size"])), VOXEL_SIZES[0]), VOXEL_SIZES[1])}
+        except (OSError, ValueError, AttributeError, TypeError):
+            return dict(DEFAULT_VOXEL)
+
+    def save_viz(self) -> None:
+        os.makedirs(CONF_DIR, exist_ok=True)
+        with open(VIZ_LAYERS_FILE, "w") as f:
+            json.dump({"nvblox": self.viz_layers, "version": 2, "voxel": self.voxel}, f)
+
+    @staticmethod
     def load_viz_layers() -> list[str]:
         try:
             with open(VIZ_LAYERS_FILE) as f:
                 saved = json.load(f)
-            layers = [k for k in saved.get("nvblox", []) if k in NVBLOX_LAYERS]
+            layers = [("slam3d" if k == "voxmap" else k) for k in saved.get("nvblox", [])]   # voxmap: old name
+            layers = list(dict.fromkeys(k for k in layers if k in NVBLOX_LAYERS))
             if saved.get("version", 1) < 2:      # saved before the camera layer existed: on, like before
                 layers.append("camera")
             return layers
@@ -703,8 +728,8 @@ class App:
                 vox, vrgb = slam3d.voxel_down((xyz @ r.T + t).astype(np.float32), rgb, LIVE3D_VOXEL)
                 msg = cloud_msg(vox, vrgb, "map", n.get_clock().now().to_msg())
                 n.post(lambda m=msg: n.pub_cloud3d.publish(m))
-                self.export3d["live"] = (f"3D layer: {len(vox)} voxels ({LIVE3D_VOXEL * 100:.0f} cm) from {len(xyz)} points, "
-                                         f"{len(exp)} nodes, fit {err * 100:.0f} cm, {time.strftime('%H:%M:%S')}")
+                self.export3d["live"] = (f"voxel map: {len(xyz)} points, {len(exp)} nodes, fit {err * 100:.0f} cm, "
+                                         f"exported {time.strftime('%H:%M:%S')}")
             except Exception as e:  # noqa: BLE001 - keep the loop alive
                 self.export3d["live"] = f"3D layer: {e}"
 
@@ -774,7 +799,7 @@ class App:
                 st = self.node.status()
                 st["procs"] = self.sup.status()
                 st["map_name"] = self.map_name
-                st["viz_layers"] = {"nvblox": self.viz_layers}
+                st["viz_layers"] = {"nvblox": self.viz_layers, "voxel": self.voxel}
                 st["head_hold"] = self.head_hold
                 st["export3d"] = {**self.export3d, "files": self.export3d["files"][:6]}
                 st["system"] = self.sysstats.snapshot()
@@ -852,10 +877,16 @@ class App:
         elif action == "viz_layers":     # {"nvblox": [...]} -> rerun_bridge parameter, saved for restarts
             layers = [k for k in NVBLOX_LAYERS if k in body.get("nvblox", [])]
             self.viz_layers = layers
-            os.makedirs(CONF_DIR, exist_ok=True)
-            with open(VIZ_LAYERS_FILE, "w") as f:
-                json.dump({"nvblox": layers, "version": 2}, f)
+            self.save_viz()
             n.post(lambda: n.set_nvblox_layers(layers))
+        elif action == "viz_voxel":      # {"shape"?: round|square, "size"?: m} -> rerun_bridge, saved
+            shape = body.get("shape", self.voxel["shape"])
+            size = float(body.get("size", self.voxel["size"]))
+            if shape not in VOXEL_SHAPES or not VOXEL_SIZES[0] <= size <= VOXEL_SIZES[1]:
+                return web.json_response({"ok": False, "error": f"shape {VOXEL_SHAPES}, size {VOXEL_SIZES} m"})
+            self.voxel = {"shape": shape, "size": size}
+            self.save_viz()
+            n.post(lambda: n.set_voxel(shape, size))
         elif action == "ros_network":   # {"network": "localhost" | "lan"} -> saved, then the stack restarts
             net = body.get("network")
             if net not in ("localhost", "lan"):
