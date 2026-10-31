@@ -43,6 +43,25 @@
   .page.active { display: grid; }
   #status { grid-template-columns: 420px 1fr; gap: 18px; align-content: start; }
   #settings { grid-template-columns: 1fr 1fr; gap: 18px; align-content: start; }
+  /* chat: no animations (the kiosk renders on the CPU); the state shows as colour */
+  #chat { grid-template-columns: 360px 1fr; gap: 18px; }
+  #talk { display: flex; flex-direction: column; align-items: center; gap: 14px; padding-top: 30px; text-align: center; }
+  #mic { width: 200px; height: 200px; min-height: 0; border-radius: 50%; padding: 0; border: 6px solid var(--line);
+    background: var(--panel2); display: flex; align-items: center; justify-content: center; }
+  #mic svg { width: 92px; height: 92px; fill: none; stroke: #cfd3da; stroke-width: 1.8; stroke-linecap: round; }
+  #mic.listening { border-color: var(--ok); }
+  #mic.hearing { border-color: var(--ok); background: #1d5a36; }
+  #mic.thinking { border-color: var(--accent); background: #12344a; }
+  #mic.speaking { border-color: var(--warn); background: #4a3710; }
+  #mic.error, #mic.connecting { border-color: var(--bad); }
+  #mic-state { font-size: 24px; font-weight: 600; }
+  #convo-card { display: flex; flex-direction: column; min-height: 0; max-height: 100%; }
+  #convo { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 6px; }
+  .msg { max-width: 78%; padding: 12px 16px; border-radius: 18px; font-size: 20px; line-height: 1.35; }
+  .msg.user { align-self: flex-end; background: #134a66; border-bottom-right-radius: 4px; }
+  .msg.robot { align-self: flex-start; background: var(--panel2); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .msg.note { align-self: center; color: #ffb3bd; font-size: 15px; background: none; }
+  .msg .t { display: block; color: var(--muted); font-size: 13px; margin-top: 4px; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px 18px; }
   .card h2 { margin: 0 0 12px; font-size: 14px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
   .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0; }
@@ -168,6 +187,7 @@
 <div id="tabs">
   <button data-tab="status" class="active">Status</button>
   <button data-tab="settings">Settings</button>
+  <button data-tab="chat">Chat</button>
 </div>
 
 <div class="page active" id="status">
@@ -183,6 +203,25 @@
   <div class="card">
     <h2>ROS 2 nodes <span id="node-count" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
     <div id="nodes"></div>
+  </div>
+</div>
+
+<div class="page" id="chat">
+  <div class="card" id="talk">
+    <button id="mic" class="off" aria-label="listen on / off">
+      <svg viewBox="0 0 24 24"><rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3.5M8.5 21.5h7"/></svg>
+    </button>
+    <div id="mic-state">Tap to talk with Mercury</div>
+    <div id="mic-sub" class="muted small"></div>
+    <div class="row" style="justify-content:center">
+      <button id="v-stop">Stop talking</button>
+      <button id="v-clear">Clear</button>
+    </div>
+    <div id="v-stats" class="muted small"></div>
+  </div>
+  <div class="card" id="convo-card">
+    <h2>Conversation</h2>
+    <div id="convo"><div class="muted">Switch listening on and just speak - Mercury answers out loud.</div></div>
   </div>
 </div>
 
@@ -265,7 +304,7 @@ function render() {
   const slam = S.procs.slam, nav = S.procs.nav;
   $("#state").textContent = [slam.running ? `${slam.mode} · ${slam.map}` : "SLAM off", nav.running ? `Nav ${S.nav}` : "Nav off"].join("  ·  ");
   $("#estop").classList.toggle("show", !!S.estop);
-  renderBattery(); renderWifiChip(); renderSystem(); renderNodes(); renderArms(); renderWifi(); renderRemote();
+  renderBattery(); renderWifiChip(); renderSystem(); renderNodes(); renderArms(); renderWifi(); renderRemote(); renderVoice();
 }
 
 function renderBattery() {
@@ -417,6 +456,28 @@ function askPassword(ssid) {
 $("#pw-show").onclick = () => { pwShow = !pwShow; $("#pw-show").textContent = pwShow ? "Hide" : "Show"; drawPw(); };
 $("#pw-cancel").onclick = () => { $("#dlg").classList.remove("show"); pw = ""; };
 $("#pw-ok").onclick = () => { api("wifi_connect", { ssid: pwSsid, password: pw }); $("#dlg").classList.remove("show"); pw = ""; };
+
+// ---- voice chat (web_server voice.py: mic -> Whisper -> Qwen -> Kokoro -> speaker)
+const VOICE_TEXT = { off: "Tap to talk with Mercury", connecting: "Connecting…", listening: "Listening - just speak",
+  hearing: "Hearing you…", thinking: "Thinking…", speaking: "Speaking", error: "Voice error" };
+$("#mic").onclick = () => api("voice", { op: "listen", on: !(S.voice && S.voice.enabled) });
+$("#v-stop").onclick = () => api("voice", { op: "stop" });
+$("#v-clear").onclick = () => api("voice", { op: "clear" });
+function renderVoice() {
+  const v = S.voice;
+  if (!v) return;
+  const st = v.enabled ? v.state : "off";
+  $("#mic").className = st;
+  $("#mic-state").textContent = VOICE_TEXT[st] || st;
+  $("#mic-sub").textContent = st === "error" ? v.message : v.enabled ? "tap the microphone to stop listening" : "";
+  $("#v-stop").disabled = !(st === "speaking" || st === "thinking");
+  const s = v.stats || {};
+  $("#v-stats").textContent = s.stt_ms != null ? `heard in ${s.stt_ms} ms · first word ${s.llm_first_s ?? "?"} s · voice ${s.tts_ms ?? "?"} ms` : "";
+  const h = (v.transcript || []).map((m) => `<div class="msg ${m.role}">${esc(m.text)}<span class="t">${m.t}</span></div>`).join("");
+  const box = $("#convo");
+  if (h && h !== box._h) { box.innerHTML = h; box._h = h; box.scrollTop = box.scrollHeight; }
+  else if (!h && box._h) { box.innerHTML = `<div class="muted">Switch listening on and just speak - Mercury answers out loud.</div>`; box._h = ""; }
+}
 
 // ---- Unitree remote
 $("#r-scan").onclick = () => api("remote", { op: "scan" });

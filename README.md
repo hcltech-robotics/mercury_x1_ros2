@@ -60,6 +60,15 @@ after 7 days; the map in use cannot be deleted). **New map** starts an empty map
 that name goes to the trash first). Waypoints belong to a map (`<name>.waypoints.json`): ✕ per row,
 **Delete all**, or the **✕ Waypoint** tool (click a waypoint on the 2D map or in the 3D view).
 
+### Voice chat (head display → Chat tab)
+Tap the microphone, then just speak. Robot: `arecord` on the XFM-DP mic array (16 kHz, beamformed on the board)
+streams to the speech service on 192.168.11.51:8096 (`server/voice_service`, systemd `mercury-voice`): Silero VAD
+finds phrases, Whisper large-v3-turbo (GPU, ~2.5 GB, ~0.1 s/phrase) transcribes; `voice.py` in web_server sends the
+text to Qwen (pennyroyal proxy :11434, thinking off, ~0.2 s to first word), cuts the reply into sentences, Kokoro
+(11.51 CPU, ~0.2 s/sentence) speaks them, `aplay` plays on the C-Media speaker; the mic is muted while it talks.
+Config + bearer token: `~/.config/mercury_x1/voice.env` (chmod 600). The room's 150-300 Hz hum made webrtcvad
+trigger 95 % of the time; Silero scores it ≤ 0.3.
+
 ### Nav2 in one process
 `nav.launch.py` runs all Nav2 servers in one `component_container_isolated` (`/nav2_container`, one executor
 thread per server; `composition:=false` for separate processes): idle CPU 72 % → 51 % of a core.

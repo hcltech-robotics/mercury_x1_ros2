@@ -1,0 +1,19 @@
+[Unit]
+Description=Mercury X1 speech service (Whisper STT on GPU, Kokoro TTS on CPU) on :8096
+After=network-online.target docker.service
+
+[Service]
+User=hcltech
+WorkingDirectory=/home/hcltech/mercury-voice
+# PENNY_API_KEY: the same bearer token as the model
+EnvironmentFile=/home/hcltech/pennyroyal/docker/pennyroyal/.env
+Environment=VOICE_PORT=8096
+# models are cached in ~/.cache/huggingface: no network check at start
+Environment=HF_HUB_OFFLINE=1
+ExecStart=/home/hcltech/mercury-voice/run.sh
+Restart=on-failure
+RestartSec=5
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

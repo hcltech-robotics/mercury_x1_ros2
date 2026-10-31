@@ -46,6 +46,7 @@ from tf2_msgs.msg import TFMessage
 from .pose_chain import PoseChain
 from . import slam3d
 from .sysstats import SysStats
+from .voice import VoiceChat
 from .wifi import Wifi
 from std_msgs.msg import Bool, ColorRGBA, String
 from std_srvs.srv import SetBool, Trigger
@@ -534,6 +535,8 @@ class App:
         self.head_port = head_port
         self.sysstats = SysStats()           # CPU / GPU load and temperatures for the status page
         self.jetson = self.jetson_versions()
+        self.voice = VoiceChat(on_change=self._voice_changed)   # kiosk Chat tab
+        self.voice_version = 0
         node.waypoints_changed = self.save_waypoints
         os.makedirs(MAPS_DIR, exist_ok=True)
 
@@ -594,21 +597,28 @@ class App:
     async def head_index(self, req):
         return web.FileResponse(os.path.join(self.static_dir, "head.html"))
 
+    def _voice_changed(self) -> None:
+        self.voice_version += 1
+
     def head_status(self) -> dict:
         st = self.node.status()
         return {"battery": st["battery"], "battery_pct": st["battery_pct"], "charge": st["charge"],
                 "base": st["base"], "arms": st["arms"], "remote": st["remote"], "nav": st["nav"]["state"], "estop": st["estop"],
                 "procs": self.sup.status(), "map_name": self.map_name, "system": self.sysstats.snapshot(),
                 "nodes": self.node.node_names, "wifi": self.wifi.snapshot(), "ros": self.ros_network(),
-                "time": time.strftime("%H:%M")}
+                "time": time.strftime("%H:%M"), "voice": self.voice.snapshot()}
 
     async def head_ws(self, req):
         ws = web.WebSocketResponse(heartbeat=10)
         await ws.prepare(req)
         try:
+            seen, last = -1, 0.0
             while not ws.closed:
-                await ws.send_str(json.dumps(self.head_status()))
-                await asyncio.sleep(1.0)      # 1 Hz: the panel only shows slow-changing state
+                # 1 Hz for the slow state, at once (within 0.2 s) when the voice chat changes
+                if self.voice_version != seen or time.monotonic() - last >= 1.0:
+                    seen, last = self.voice_version, time.monotonic()
+                    await ws.send_str(json.dumps(self.head_status()))
+                await asyncio.sleep(0.2)
         except (ConnectionResetError, asyncio.CancelledError):
             pass
         return ws
@@ -918,6 +928,16 @@ class App:
             n.post(lambda: n.run_waypoints(bool(body.get("loop", False))))
         elif action == "initialpose":
             n.post(lambda: n.set_initial_pose(body["x"], body["y"], body.get("yaw", 0.0)))
+        elif action == "voice":          # {"op": "listen", "on"} | {"op": "stop"} | {"op": "clear"}
+            op = body.get("op")
+            if op == "listen":
+                await self.voice.enable(bool(body.get("on")))
+            elif op == "stop":
+                await self.voice.stop_speaking()
+            elif op == "clear":
+                self.voice.clear()
+            else:
+                return web.json_response({"ok": False, "error": "bad voice op"})
         elif action == "wifi_scan":       # results arrive in the head status (wifi.networks)
             threading.Thread(target=self.wifi.scan, daemon=True).start()
         elif action == "wifi_connect":    # {"ssid", "password"?}; progress / result in wifi.busy / wifi.message
@@ -1064,6 +1084,7 @@ class App:
             for sig in (signal.SIGINT, signal.SIGTERM):
                 loop.add_signal_handler(sig, stop.set)
             await stop.wait()
+            await self.voice.enable(False)
             for name in ("nav", "slam"):     # rtabmap saves its database on SIGINT
                 await loop.run_in_executor(None, lambda n=name: self.sup.stop(n))
             for runner in runners:
