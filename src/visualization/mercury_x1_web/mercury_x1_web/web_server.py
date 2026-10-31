@@ -71,9 +71,6 @@ LIVE3D_PERIOD = 30.0        # [s] at most one re-export per this while the map g
 WAYPOINT_PICK_RADIUS = 0.6   # [m] a "delete" click removes the nearest waypoint within this distance
 # head pose while mapping: neck straight, Orbbec level (its pitch = -jaw - 5.7 deg, see the URDF notes)
 MAPPING_HEAD = {"head": 0.0, "eye": -5.7}
-# Arm MCU firmware: recorded by hand on 2026-10-29 (devlog low-level-protocols). Reading it live needs a version
-# opcode never verified on this robot, and probing unverified arm opcodes powered an arm off once - so not polled.
-ARM_FIRMWARE_RECORDED = {"left": "1.1", "right": "1.1", "recorded": "2026-10-29"}
 VIEWER_CACHE = os.path.expanduser(f"~/.cache/mercury_x1_web/rerun-web-viewer/{VIEWER_VERSION}")
 
 
@@ -695,8 +692,12 @@ class App:
 
     def versions(self) -> dict:
         base = self.node.base
+        # arms: read by mercury_x1_driver on connect (firmware 0x02 = what myStudio checks, end board 0x09, board 0x01)
+        arms = {s: {"firmware": getattr(a, "firmware_version", "") or None, "atom": getattr(a, "atom_version", "") or None,
+                    "board": getattr(a, "board_version", -1) if getattr(a, "board_version", -1) >= 0 else None}
+                for s, a in self.node.arms.items()}
         return {"base": base.firmware_version if base is not None and base.firmware_version else None,
-                "arms": ARM_FIRMWARE_RECORDED, "camera": self.node.camera_info, **self.jetson}
+                "arms": arms, "camera": self.node.camera_info, **self.jetson}
 
     def ros_network(self) -> dict:
         """network = what this stack runs with, configured = what the next (re)start uses"""

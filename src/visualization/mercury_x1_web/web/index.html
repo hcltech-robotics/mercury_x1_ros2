@@ -684,11 +684,16 @@ function renderNodesAndVersions(s) {
   }
   const v = s.versions;
   if (!v) return;
-  const arms = v.arms || {}, cam = v.camera;
+  const cam = v.camera;
+  const arm = (side) => {
+    const a = (v.arms || {})[side];
+    if (!a || !a.firmware) return `<span class="muted">— (not read yet)</span>`;
+    return `<b>${a.firmware}</b> <span class="muted">· end board ${a.atom ?? "?"} · board ${a.board ?? "?"}</span>`;
+  };
   const rows = [
     ["base MCU", v.base || "— (no link)"],
-    ["left arm MCU", `${arms.left ?? "?"} <span class="muted">(recorded ${arms.recorded ?? ""}, not read live)</span>`],
-    ["right arm MCU", `${arms.right ?? "?"} <span class="muted">(recorded ${arms.recorded ?? ""}, not read live)</span>`],
+    ["left arm MCU", arm("left")],
+    ["right arm MCU", arm("right")],
     ["depth camera", cam ? `${cam.name} · fw ${cam.firmware} <span class="muted">· s/n ${cam.serial}</span>` : "—"],
     ["Jetson", [v.l4t ? `L4T ${v.l4t}` : "", v.jetpack ? `JetPack ${v.jetpack}` : ""].filter(Boolean).join(" · ") || "—"]];
   setHTML("#versions", rows.map(([k, x]) => `<span>${k}</span><span>${x}</span>`).join(""));

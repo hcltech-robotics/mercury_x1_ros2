@@ -38,6 +38,11 @@ constexpr uint8_t kInPositionEvent = 0x5B;  // unsolicited when a motion complet
 constexpr uint8_t kSetMovementType = 0x87;  // 0 moveJ, 1 moveL
 constexpr uint8_t kGetMovementType = 0x88;
 constexpr uint8_t kRobotStatus = 0xA2;      // all zero = healthy
+// version reads, no data; reply = one signed big-endian int (verified read-only on both arms 2026-10-30:
+// 0x01 = 7, 0x02 = 11 -> firmware 1.1 = what myStudio compares for updates, 0x09 = 12 -> end board 1.2)
+constexpr uint8_t kGetBoardVersion = 0x01;
+constexpr uint8_t kGetFirmwareVersion = 0x02;
+constexpr uint8_t kGetAtomVersion = 0x09;
 constexpr uint8_t kGetAnglesCoords = 0xD5;  // 7 x int32 deg*100 + 6 x int16 coords
 constexpr uint8_t kGetBaseCoords = 0xF0;    // torso-frame coords
 constexpr uint8_t kSendBaseCoords = 0xF2;
@@ -100,6 +105,7 @@ public:
   std::optional<double> joint(int id);
   std::optional<bool> isMoving();
   std::optional<Bytes> status();
+  std::optional<int> version(uint8_t cmd);  // kGet*Version -> raw number (firmware 11 = 1.1)
   bool stop();
   bool setMovementType(bool linear);
   bool sendAngles(const Joints & deg, int speed);

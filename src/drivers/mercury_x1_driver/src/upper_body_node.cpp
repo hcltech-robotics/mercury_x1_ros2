@@ -73,6 +73,7 @@ struct ArmSnapshot
   arm::Coords body{};
   arm::Bytes status;
   std::map<int, double> extra;
+  int fw{-1}, atom{-1}, board{-1};   // version reads (raw: fw 11 = 1.1)
   double rate_hz{0};
 };
 
@@ -173,9 +174,25 @@ private:
     f(snap_);
   }
 
+  // firmware / end board / board versions: on every (re)open, and every 30 s while one is missing
+  void readVersions(arm::ArmLink & link)
+  {
+    auto fw = link.version(arm::op::kGetFirmwareVersion);
+    auto atom = link.version(arm::op::kGetAtomVersion);
+    auto board = link.version(arm::op::kGetBoardVersion);
+    update([&](ArmSnapshot & s) {
+      s.fw = fw.value_or(s.fw); s.atom = atom.value_or(s.atom); s.board = board.value_or(s.board);
+    });
+    if (fw) {
+      RCLCPP_INFO(log_, "%s arm: firmware %.1f, end board %.1f, board %d", side_.c_str(), *fw / 10.0,
+                  atom.value_or(-10) / 10.0, board.value_or(-1));
+    }
+  }
+
   void run()
   {
     std::unique_ptr<arm::ArmLink> link;
+    double last_version_try = 0;
     uint64_t k = 0;
     double last_t = -1, rate_t = steadyNow();
     int rate_n = 0;
@@ -193,6 +210,8 @@ private:
             powered = link->power(true);
           }
           update([&](ArmSnapshot & s) {s.connected = pw.has_value(); s.powered = powered;});
+          readVersions(*link);
+          last_version_try = steadyNow();
         } catch (const std::exception & e) {
           RCLCPP_ERROR(log_, "%s arm: %s", side_.c_str(), e.what());
           link.reset();
@@ -201,6 +220,10 @@ private:
         }
       }
       try {
+        if (snapshot().fw < 0 && steadyNow() - last_version_try > 30.0) {
+          readVersions(*link);
+          last_version_try = steadyNow();
+        }
         // 1) jobs (services, queued motions)
         while (true) {
           Job job;
@@ -519,6 +542,10 @@ private:
       std::copy(s.body.begin(), s.body.end(), st.body_coords.begin());
       st.status_raw = s.status;
       st.state_rate_hz = static_cast<float>(s.rate_hz);
+      auto ver = [](int v) {return v < 0 ? std::string() : std::to_string(v / 10) + "." + std::to_string(v % 10);};
+      st.firmware_version = ver(s.fw);
+      st.atom_version = ver(s.atom);
+      st.board_version = static_cast<int16_t>(s.board);
       pub_arm_[side]->publish(st);
       if (!s.have_q) {continue;}  // never publish made-up arm joint positions
       for (int i = 0; i < 7; ++i) {

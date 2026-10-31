@@ -205,6 +205,15 @@ std::optional<bool> ArmLink::isMoving()
 
 std::optional<Bytes> ArmLink::status() {return request(op::kRobotStatus);}
 
+std::optional<int> ArmLink::version(uint8_t cmd)
+{
+  auto r = request(cmd);
+  if (!r || r->empty() || r->size() > 4) {return std::nullopt;}
+  int32_t v = static_cast<int8_t>((*r)[0]);  // sign from the first byte
+  for (size_t i = 1; i < r->size(); ++i) {v = (v << 8) | (*r)[i];}
+  return v;
+}
+
 bool ArmLink::stop() {return request(op::kStop, {}, std::chrono::seconds(1)).has_value();}
 
 bool ArmLink::freedrive(bool on, bool drag_teach)
