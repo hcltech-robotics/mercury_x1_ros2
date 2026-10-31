@@ -3,12 +3,12 @@
 ## New stack (2026): goalkeeper drivers + RTAB-Map + Nav2 + Rerun web UI
 
 ```bash
-./deploy.sh                                   # rsync to elephant@192.168.10.176 (REMOTE_HOST=... to override)
-ssh elephant@192.168.10.176 'cd ~/mercury_x1_ros2 && colcon build --packages-up-to mercury_x1_bringup mercury_x1_web'
-ssh elephant@192.168.10.176 '~/mercury_x1_ros2/start.sh'             # whole stack: hardware + page + SLAM + Nav2
-ssh elephant@192.168.10.176 '~/mercury_x1_ros2/scripts/mx1_up.sh'    # ... or only hardware + Rerun bridge + page
-open http://192.168.10.176:8080               # SLAM / Nav2 / waypoints / teleop from the page
-ssh elephant@192.168.10.176 '~/mercury_x1_ros2/scripts/mx1_stop.sh'  # stop everything (rtabmap saves the map)
+./deploy.sh                                   # rsync to elephant@192.168.11.175 (REMOTE_HOST=... to override)
+ssh elephant@192.168.11.175 'cd ~/mercury_x1_ros2 && colcon build --packages-up-to mercury_x1_bringup mercury_x1_web'
+ssh elephant@192.168.11.175 '~/mercury_x1_ros2/start.sh'             # whole stack: hardware + page + SLAM + Nav2
+ssh elephant@192.168.11.175 '~/mercury_x1_ros2/scripts/mx1_up.sh'    # ... or only hardware + Rerun bridge + page
+open http://192.168.11.175:8080               # SLAM / Nav2 / waypoints / teleop from the page
+ssh elephant@192.168.11.175 '~/mercury_x1_ros2/scripts/mx1_stop.sh'  # stop everything (rtabmap saves the map)
 ```
 **Autostart:** `scripts/install_autostart.sh` installs the systemd unit `mercury-x1` (`config/systemd/`),
 which runs `./start.sh` at boot: SLAM continues the most recently saved map (`~/maps/*.db`) in mapping mode,
