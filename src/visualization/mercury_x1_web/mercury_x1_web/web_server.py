@@ -38,7 +38,7 @@ from rclpy.node import Node
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import SetParameters
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from rtabmap_msgs.srv import GetMap
+from rtabmap_msgs.msg import MapGraph
 from sensor_msgs.msg import BatteryState, PointCloud2, PointField
 from tf2_msgs.msg import TFMessage
 
@@ -183,7 +183,11 @@ class WebNode(Node):
         self.pub_remote = self.create_publisher(String, "/remote/cmd", 10)
         # whole map as a coloured 3D cloud (App._live3d_loop), built only while someone subscribes
         self.pub_cloud3d = self.create_publisher(PointCloud2, "/slam/cloud3d", LATCHED)
-        self.cli_map_data = self.create_client(GetMap, "/rtabmap/get_map_data")
+        # rtabmap's optimised graph (node ids + poses, no sensor data), sampled: subscribe, take one message,
+        # unsubscribe (rtabmap publishes it at ~9 Hz). Not the get_map_data service: its reply carries every
+        # node's keypoints even with graph_only, and unpacking that in Python every 5 s cost ~half a core.
+        self.sub_graph = None
+        self.graph: dict[int, tuple[float, float, float]] | None = None
         # The physical E-stop cuts the base MCU's power (its USB serial device disappears) and the arm
         # servos' power (the arm controllers report powered=false, and their link may drop out too);
         # nothing reports the button itself. Base link lost while no arm reports power = E-stop.
@@ -202,7 +206,8 @@ class WebNode(Node):
             "freedrive": self.create_client(SetBool, "/upper_body/freedrive"),
             "bridge_params": self.create_client(SetParameters, "/rerun_bridge/set_parameters"),
         }
-        self.create_timer(0.05, self._run_jobs)
+        # post() wakes the executor through a guard condition (a polling timer cost wake-ups when idle)
+        self.jobs_gc = self.create_guard_condition(self._run_jobs)
         self.node_names: list[str] = []
         self.create_timer(2.0, self._refresh_nodes)
 
@@ -218,6 +223,7 @@ class WebNode(Node):
     # -- run a callable on the ROS thread ------------------------------------------------------
     def post(self, fn) -> None:
         self.jobs.put(fn)
+        self.jobs_gc.trigger()
 
     def _run_jobs(self) -> None:
         while not self.jobs.empty():
@@ -433,18 +439,16 @@ class WebNode(Node):
             Parameter(name="voxel_shape", value=ParameterValue(type=ParameterType.PARAMETER_STRING, string_value=shape)),
             Parameter(name="voxel_size", value=ParameterValue(type=ParameterType.PARAMETER_DOUBLE, double_value=size))]))
 
-    def live_graph(self, timeout: float = 15.0) -> dict[int, tuple[float, float, float]] | None:
-        """node id -> optimized position in the map frame, from rtabmap (graph only, no sensor data).
-        Called from a worker thread; the executor thread completes the future."""
-        if not self.cli_map_data.wait_for_service(timeout_sec=2.0):
-            return None
-        fut = self.cli_map_data.call_async(GetMap.Request(global_map=True, optimized=True, graph_only=True))
-        done = threading.Event()
-        fut.add_done_callback(lambda _: done.set())
-        if not done.wait(timeout) or fut.result() is None:
-            return None
-        g = fut.result().data.graph
-        return {int(i): (p.position.x, p.position.y, p.position.z) for i, p in zip(g.poses_id, g.poses)}
+    def sample_graph(self) -> None:
+        """subscribe /mapGraph until one message arrived (runs on the ROS thread)"""
+        if self.sub_graph is None:
+            self.sub_graph = self.create_subscription(MapGraph, "/mapGraph", self._on_graph, 1)
+
+    def _on_graph(self, msg: MapGraph) -> None:
+        self.graph = {int(i): (p.position.x, p.position.y, p.position.z) for i, p in zip(msg.poses_id, msg.poses)}
+        if self.sub_graph is not None:
+            self.destroy_subscription(self.sub_graph)
+            self.sub_graph = None
 
     def call(self, key: str, req) -> None:
         cli = self.srv[key]
@@ -698,12 +702,20 @@ class App:
             db = self._db_path()
             if not os.path.exists(db):
                 continue
-            live = n.live_graph()
-            if live is None:
-                self.export3d["live"] = "3D layer: rtabmap did not return its graph"
+            n.graph = None
+            n.post(n.sample_graph)
+            for _ in range(20):                  # one /mapGraph message (~9 Hz)
+                time.sleep(0.25)
+                if n.graph is not None:
+                    break
+            live = n.graph
+            if not live:
+                self.export3d["live"] = "voxel map: waiting for rtabmap's graph"
                 continue
             # graph unchanged and nobody new (the bridge re-subscribing gets the latched cloud anyway)
-            key = (self.map_name, len(live), max(live, default=0), round(sum(p[0] + p[1] for p in live.values()), 1))
+            # mapping: the graph grew; localizing: the map is fixed (its graph only jitters) -> once per map
+            mode = self.sup.status()["slam"].get("mode")
+            key = (self.map_name, len(live), max(live, default=0)) if mode == "mapping" else (self.map_name, mode)
             if key == last_key and nsubs <= subs:
                 subs = nsubs
                 continue
