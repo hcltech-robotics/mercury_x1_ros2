@@ -142,7 +142,17 @@
     aside { border-left: 0; }
     header { flex-wrap: wrap; height: auto; padding: 8px 12px; }
   }
+  .rm-ic { flex: none; display: block; }
+  .rm-ind { display: inline-flex; align-items: center; gap: 6px; }
+  .rm-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-weight: 600;
+    font-size: 12px; border: 1px solid var(--line); background: var(--panel2); }
+  .rm-badge.ok { color: var(--ok); border-color: #2f8a57; background: #183626; }
+  .rm-badge.warn { color: var(--warn); border-color: #8a6a1f; background: #3a2d0d; }
+  .rm-badge.muted { color: var(--muted); }
+  #r-ind { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+  #r-ind .v { font-variant-numeric: tabular-nums; color: var(--text); font-size: 12px; }
 </style>
+<script src="/static/remote_ui.js"></script>
 </head>
 <body>
 <header>
@@ -152,7 +162,7 @@
     <span class="chip hidden" id="c-estop" title="Physical E-stop pressed: base MCU and arm servo power are cut. Release the button, then switch the arms back on."><span class="ic"><svg viewBox="0 0 24 24"><path d="M8 2h8l6 6v8l-6 6H8l-6-6V8z"/><path d="M12 7v6M12 16.5v.5"/></svg></span>E-STOP</span>
     <span class="chip" id="c-batt"><span class="batt"><i id="batt-fill"></i></span><span id="t-batt">-- %</span></span>
     <span class="chip" title="Arm servo power (Robot tab)"><span class="ic" id="d-arms"><svg viewBox="0 0 24 24"><path d="M5 21h10M10 21v-5"/><circle cx="10" cy="14" r="2"/><path d="M11.5 12.5L16 7"/><circle cx="17" cy="6" r="2"/><path d="M18.5 7.5l2.5 3M15.5 4.5L18 2"/></svg></span><span id="t-arms">arms</span></span>
-    <span class="chip" title="Unitree BLE remote (Robot tab)"><span class="ic" id="d-remote"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="11" rx="5"/><path d="M7 10.5v4M5 12.5h4"/><circle cx="15.5" cy="11.5" r=".9"/><circle cx="18" cy="14" r=".9"/></svg></span><span id="t-remote">remote</span></span>
+    <span class="chip" title="Unitree BLE remote (Robot tab)"><span class="ic" id="d-remote"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="11" rx="5"/><path d="M7 10.5v4M5 12.5h4"/><circle cx="15.5" cy="11.5" r=".9"/><circle cx="18" cy="14" r=".9"/></svg></span><span id="t-remote">remote</span><span class="rm-ind" id="rm-hdr"></span></span>
   </div>
   <div class="grp"><span class="glbl">Nav</span>
     <span class="chip" title="RTAB-Map: mapping / localizing, on which map"><span class="ic" id="d-slam"><svg viewBox="0 0 24 24"><path d="M3 6.5l6-2.5 6 2.5 6-2.5v13.5l-6 2.5-6-2.5-6 2.5z"/><path d="M9 4v13.5M15 6.5V20"/></svg></span><span id="t-slam">SLAM off</span></span>
@@ -266,6 +276,7 @@
           <button class="b danger" id="r-disconnect">Disconnect</button>
           <button class="b" id="r-auto" title="Keep looking for the selected / saved remote and reconnect whenever it drops or is switched on">Autoconnect</button>
         </div>
+        <div id="r-ind"></div>
         <div id="r-state" class="muted" style="min-height:18px"></div>
         <div class="muted" style="font-size:11px"><b>Start</b> = unlock / lock driving · left stick = drive, right stick = turn · <b>B</b> = stop (locks) · <b>Select</b> = freedrive arms. Driving cancels navigation.</div>
       </section>
@@ -412,6 +423,7 @@ setInterval(() => {
   else { cls = "ok"; text = `LIVE ${(msgTimes.length / 3).toFixed(1)}/s`; }
   $("#live").className = cls + ($("#live").classList.contains("beat") ? " beat" : ""); $("#t-live").textContent = text;
 }, 250);
+function setHTML(sel, h) { const e = $(sel); if (e._h !== h) { e.innerHTML = h; e._h = h; } }
 function setDot(id, cls, text) { $(`#d-${id}`).className = `ic ${cls}`; $(`#t-${id}`).textContent = text; }
 
 let mapVersion = -1, lastClickT = null, toolChanged = 0;
@@ -546,6 +558,7 @@ function renderRemote() {
   const btns = ["#r-scan", "#r-connect", "#r-disconnect", "#r-auto"];
   if (!r) {
     setDot("remote", "", "remote");
+    setHTML("#rm-hdr", ""); setHTML("#r-ind", "");
     $("#r-state").textContent = "remote node not running (mercury_x1_teleop/unitree_remote)";
     btns.forEach((b) => ($(b).disabled = true));
     return;
@@ -575,19 +588,27 @@ function renderRemote() {
   $("#r-auto").textContent = r.autoconnect ? "Autoconnect ✓" : "Autoconnect";
   let text;
   if (conn) {
-    text = `connected · ${conn.name} · battery ${r.battery ?? "?"} % · ${r.rssi ?? "?"} dBm`;
-    if (r.drive_enabled === true) text += r.driving ? " · DRIVING" : " · drive unlocked";
-    else if (r.drive_enabled === false) text += " · locked (Start)";
-    else if (r.driving) text += " · DRIVING";
-    else if (r.pressed && r.pressed.length) text += ` · ${r.pressed.join(" ")}`;
+    text = `connected · ${conn.name}`;
+    if (r.pressed && r.pressed.length) text += ` · ${r.pressed.join(" ")}`;
   } else {
     text = r.state + (r.message ? ` · ${r.message}` : "");
   }
   $("#r-state").textContent = text;
   $("#r-state").style.color = conn ? (r.driving ? "var(--ok)" : "var(--text)") : r.message.includes("fail") ? "var(--bad)" : "var(--muted)";
-  if (conn) setDot("remote", r.drive_enabled || r.driving ? "warn" : r.battery != null && r.battery < 20 ? "warn" : "ok",
-                   r.driving ? "remote · driving" : r.drive_enabled ? "remote · unlocked" : `remote ${r.battery ?? ""}%`);
-  else setDot("remote", busy ? "warn" : "", r.autoconnect ? (busy ? `remote ${r.state}` : "remote · waiting") : "remote off");
+  // header chip + tile: lock state, battery icon, signal bars
+  const lk = RemoteUI.lock(r), U = RemoteUI;
+  if (conn) {
+    setDot("remote", lk ? (lk.cls === "muted" ? "ok" : lk.cls) : "ok", lk ? lk.short : "remote");
+    setHTML("#rm-hdr", (lk ? U.lockIcon(lk.open, lk.color, 13) : "") + U.battery(r.battery, 12) + U.signal(r.rssi, 12));
+    $("#rm-hdr").parentElement.title = `Unitree remote ${conn.name} · battery ${r.battery ?? "?"} % · ${r.rssi ?? "?"} dBm` + (lk ? ` · ${lk.long}` : "");
+    setHTML("#r-ind", (lk ? `<span class="rm-badge ${lk.cls}">${U.lockIcon(lk.open, lk.color, 14)}${lk.long}</span>`
+                                : `<span class="rm-badge muted">lock state unknown</span>`) +
+      `<span class="rm-ind">${U.battery(r.battery, 14)}<span class="v">${r.battery ?? "?"} %</span></span>` +
+      `<span class="rm-ind">${U.signal(r.rssi, 14)}<span class="v">${r.rssi ?? "?"} dBm</span></span>`);
+  } else {
+    setDot("remote", busy ? "warn" : "", r.autoconnect ? (busy ? `remote ${r.state}` : "remote · waiting") : "remote off");
+    setHTML("#rm-hdr", ""); setHTML("#r-ind", "");
+  }
 }
 const selectedRemote = () => {
   const o = $("#r-dev").selectedOptions[0];

@@ -118,7 +118,19 @@
   #toast { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); background: #000c; border: 1px solid var(--line);
     padding: 14px 22px; border-radius: 12px; opacity: 0; transition: opacity .3s; pointer-events: none; max-width: 80%; }
   #toast.show { opacity: 1; }
+  .rm-ic { flex: none; display: block; }
+  #remote-chip { gap: 8px; }
+  #remote-chip .gp { width: 30px; height: 30px; fill: none; stroke: #cfd3da; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  #remote-chip.off { opacity: .45; }
+  .rm-badge { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 999px; font-weight: 600;
+    font-size: 18px; border: 1px solid var(--line); background: var(--panel2); }
+  .rm-badge.ok { color: var(--ok); border-color: #2f8a57; background: #183626; }
+  .rm-badge.warn { color: var(--warn); border-color: #8a6a1f; background: #3a2d0d; }
+  .rm-badge.muted { color: var(--muted); }
+  #r-ind { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+  #r-ind .v { display: inline-flex; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; }
 </style>
+<script src="/static/remote_ui.js"></script>
 </head>
 <body>
 <div id="bar">
@@ -126,6 +138,10 @@
   <span class="time" id="time">--:--</span>
   <span class="chip"><span id="conn-dot" title="link to the robot"></span><span class="sub" id="state">connecting…</span></span>
   <span class="spacer"></span>
+  <span class="chip off" id="remote-chip" title="Unitree remote">
+    <svg class="gp" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="11" rx="5"/><path d="M7 10.5v4M5 12.5h4"/><circle cx="15.5" cy="11.5" r=".9"/><circle cx="18" cy="14" r=".9"/></svg>
+    <span id="remote-ind" class="chip"></span><span class="sub" id="remote-txt">off</span>
+  </span>
   <span class="chip" id="wifi-chip">
     <svg width="30" height="24" viewBox="0 0 30 24" id="wifi-icon"></svg>
     <span><span id="wifi-ssid">—</span> <span class="sub" id="wifi-sub"></span></span>
@@ -181,6 +197,7 @@
   </div>
   <div class="card">
     <h2>Unitree remote</h2>
+    <div class="row" id="r-ind"></div>
     <div class="row"><span id="r-state" class="grow">—</span></div>
     <div class="row">
       <button id="r-scan" class="primary">Scan</button>
@@ -419,9 +436,21 @@ $("#r-auto").onclick = () => {
   const r = S.remote || {}, on = !r.autoconnect;
   api("remote", { op: "autoconnect", enabled: on, ...(on && r.saved ? { address: r.saved.address, name: r.saved.name } : {}) });
 };
+function setHTML(sel, h) { const e = $(sel); if (e._h !== h) { e.innerHTML = h; e._h = h; } }
+// status-bar chip + settings tile: drive lock, battery icon, 1-5 signal bars (remote_ui.js)
+function renderRemoteInd(r) {
+  const U = RemoteUI, conn = r && r.state === "connected", lk = U.lock(r);
+  $("#remote-chip").classList.toggle("off", !conn);
+  setHTML("#remote-ind", conn ? (lk ? U.lockIcon(lk.open, lk.color, 22) : "") + U.battery(r.battery, 20) + U.signal(r.rssi, 20) : "");
+  $("#remote-txt").textContent = conn ? (lk ? lk.short : "") : !r ? "" : r.autoconnect ? "waiting" : "off";
+  setHTML("#r-ind", !conn ? "" :
+    (lk ? `<span class="rm-badge ${lk.cls}">${U.lockIcon(lk.open, lk.color, 22)}${lk.long}</span>` : `<span class="rm-badge muted">lock state unknown</span>`) +
+    `<span class="v">${U.battery(r.battery, 22)}${r.battery ?? "?"} %</span><span class="v">${U.signal(r.rssi, 22)}${r.rssi ?? "?"} dBm</span>`);
+}
 function renderRemote() {
   const r = S.remote;
   for (const id of ["#r-scan", "#r-disconnect", "#r-auto"]) $(id).disabled = !r;
+  renderRemoteInd(r);
   if (!r) { $("#r-state").textContent = "remote node not running"; $("#r-list").innerHTML = ""; return; }
   const busy = r.state === "scanning" || r.state === "connecting";
   const conn = r.state === "connected" ? r.connected : null;
@@ -430,7 +459,7 @@ function renderRemote() {
   $("#r-auto").classList.toggle("on", !!r.autoconnect);
   $("#r-auto").textContent = r.autoconnect ? "Autoconnect ✓" : "Autoconnect";
   $("#r-state").innerHTML = conn
-    ? `<b>${esc(conn.name)}</b> <span class="muted small">· battery ${r.battery ?? "?"} % · ${r.rssi ?? "?"} dBm · ${r.drive_enabled ? (r.driving ? "DRIVING" : "drive unlocked") : "locked (Start unlocks)"}</span>`
+    ? `<b>${esc(conn.name)}</b> <span class="muted small">· connected</span>`
     : `<span class="muted">${esc(r.state)}${r.message ? " · " + esc(r.message) : ""}</span>`;
   const devs = [...(r.devices || [])];
   for (const d of [conn, r.saved]) if (d && d.address && !devs.find((x) => x.address === d.address)) devs.push({ address: d.address, name: d.name, rssi: null });
