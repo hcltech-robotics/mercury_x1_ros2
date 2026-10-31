@@ -89,7 +89,8 @@ class Engines:
 
     def speak(self, text: str, voice: str, speed: float) -> bytes:
         with self.tts_lock:
-            audio, sr = self.kokoro.create(text, voice=voice, speed=speed, lang="en-us")
+            # voice prefix a* = American, b* = British English (Kokoro voice naming)
+            audio, sr = self.kokoro.create(text, voice=voice, speed=speed, lang="en-gb" if voice[:1] == "b" else "en-us")
         pcm = (np.clip(audio, -1, 1) * 32767).astype(np.int16).tobytes()
         buf = io.BytesIO()
         with wave.open(buf, "wb") as w:
@@ -230,7 +231,7 @@ async def tts(req: web.Request) -> web.Response:
     eng: Engines = req.app["engines"]
     t = time.time()
     wav = await asyncio.get_running_loop().run_in_executor(
-        None, eng.speak, text, str(body.get("voice", "af_heart")), float(body.get("speed", 1.0)))
+        None, eng.speak, text, str(body.get("voice", "af_heart")), min(max(float(body.get("speed", 1.0)), 0.5), 2.0))
     return web.Response(body=wav, content_type="audio/wav", headers={"X-TTS-ms": str(round((time.time() - t) * 1000))})
 
 

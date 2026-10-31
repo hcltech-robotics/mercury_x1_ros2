@@ -20,6 +20,11 @@ import time
 import aiohttp
 
 CONF = os.path.expanduser("~/.config/mercury_x1/voice.env")
+SETTINGS_FILE = os.path.expanduser("~/.config/mercury_x1/voice_settings.json")
+VOICES = {"af_heart": "Heart (US)", "af_bella": "Bella (US)", "am_michael": "Michael (US)",
+          "bf_emma": "Emma (UK)", "bm_george": "George (UK)", "am_puck": "Puck (US)"}
+DEFAULT_SETTINGS = {"volume": 46, "voice": "af_heart", "speed": 1.0}
+TEST_PHRASE = "Hello, I am Mercury. This is how loud I speak."
 SYSTEM_PROMPT = (
     "You are Mercury, a friendly wheeled humanoid robot with two arms, made by Elephant Robotics and working in the "
     "HCLTech robotics lab. You are talking out loud with people standing in front of you, so answer in one to three "
@@ -70,11 +75,77 @@ class VoiceChat:
         self._arecord: asyncio.subprocess.Process | None = None
         self._aplay: asyncio.subprocess.Process | None = None
         self._muted = False
+        self.settings = self._load_settings()
+        self._vol_applied = False
+
+    # ---- settings: speaker volume (ALSA hardware PCM control), voice, speed; saved ----------
+    @staticmethod
+    def _load_settings() -> dict:
+        try:
+            with open(SETTINGS_FILE) as f:
+                saved = json.load(f)
+        except (OSError, ValueError):
+            saved = {}
+        st = {**DEFAULT_SETTINGS, **{k: v for k, v in saved.items() if k in DEFAULT_SETTINGS}}
+        if st["voice"] not in VOICES:
+            st["voice"] = DEFAULT_SETTINGS["voice"]
+        return st
+
+    @staticmethod
+    def _speaker_card(conf: dict) -> str:
+        m = re.search(r"CARD=([^,]+)", conf.get("VOICE_SPEAKER", ""))
+        return m.group(1) if m else "Device"
+
+    async def apply_volume(self) -> None:
+        card = self._speaker_card(load_conf())
+        p = await asyncio.create_subprocess_exec("amixer", "-q", "-c", card, "sset", "PCM", f"{self.settings['volume']}%",
+                                                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+        err = (await p.communicate())[1]
+        if p.returncode != 0:
+            raise RuntimeError(f"volume: {err.decode(errors='replace').strip()[:100]}")
+        self._vol_applied = True
+
+    async def update_settings(self, changes: dict) -> None:
+        if "volume" in changes:
+            self.settings["volume"] = max(0, min(100, int(changes["volume"])))
+        if changes.get("voice") in VOICES:
+            self.settings["voice"] = changes["voice"]
+        if "speed" in changes:
+            self.settings["speed"] = round(max(0.7, min(1.4, float(changes["speed"]))), 2)
+        os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump(self.settings, f)
+        if "volume" in changes:
+            await self.apply_volume()
+        self.on_change()
+
+    async def test_voice(self) -> None:
+        """say a fixed phrase with the current settings (to hear the level); not while answering"""
+        if self._reply_task and not self._reply_task.done():
+            return
+        conf = load_conf()
+        if not self._vol_applied:
+            await self.apply_volume()
+        own = self._session is None
+        session = self._session or aiohttp.ClientSession(headers={"Authorization": f"Bearer {conf.get('VOICE_API_KEY', '')}"})
+        prev = self._session
+        self._session = session
+        try:
+            await self._mute(True)
+            wav = await self._tts(conf["VOICE_STT_TTS_URL"].rstrip("/") + "/tts", TEST_PHRASE)
+            await self._play(wav, conf)
+        except Exception as e:  # noqa: BLE001 - shown in the conversation
+            self._say("note", f"voice test failed: {str(e)[:120] or type(e).__name__}")
+        finally:
+            await self._mute(False)
+            if own:
+                await session.close()
+                self._session = prev
 
     # ---- state for the page ---------------------------------------------------------------
     def snapshot(self) -> dict:
         return {"enabled": self.enabled, "state": self.state, "message": self.message,
-                "transcript": self.transcript[-14:], "stats": self.stats}
+                "transcript": self.transcript[-14:], "stats": self.stats, "settings": self.settings, "voices": VOICES}
 
     def _set(self, state: str, message: str = "") -> None:
         if (state, message) != (self.state, self.message):
@@ -136,6 +207,8 @@ class VoiceChat:
     async def _session_run(self, conf: dict) -> None:
         if not conf.get("VOICE_STT_TTS_URL"):
             raise RuntimeError(f"not configured ({CONF})")
+        if not self._vol_applied:
+            await self.apply_volume()
         self._session = aiohttp.ClientSession(headers={"Authorization": f"Bearer {conf.get('VOICE_API_KEY', '')}"})
         url = conf["VOICE_STT_TTS_URL"].rstrip("/")
         self._ws = await self._session.ws_connect(url.replace("http", "ws", 1) + "/listen", heartbeat=15,
@@ -263,7 +336,7 @@ class VoiceChat:
 
     async def _tts(self, url: str, text: str) -> bytes:
         t = time.time()
-        async with self._session.post(url, json={"text": text, "voice": "af_heart"},
+        async with self._session.post(url, json={"text": text, "voice": self.settings["voice"], "speed": self.settings["speed"]},
                                       timeout=aiohttp.ClientTimeout(total=30)) as r:
             if r.status != 200:
                 raise RuntimeError(f"speech: HTTP {r.status}")

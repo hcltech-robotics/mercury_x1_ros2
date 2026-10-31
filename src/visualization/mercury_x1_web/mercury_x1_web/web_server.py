@@ -928,7 +928,7 @@ class App:
             n.post(lambda: n.run_waypoints(bool(body.get("loop", False))))
         elif action == "initialpose":
             n.post(lambda: n.set_initial_pose(body["x"], body["y"], body.get("yaw", 0.0)))
-        elif action == "voice":          # {"op": "listen", "on"} | {"op": "stop"} | {"op": "clear"}
+        elif action == "voice":          # {"op": listen (+on) | stop | clear | settings | test}
             op = body.get("op")
             if op == "listen":
                 await self.voice.enable(bool(body.get("on")))
@@ -936,6 +936,10 @@ class App:
                 await self.voice.stop_speaking()
             elif op == "clear":
                 self.voice.clear()
+            elif op == "settings":       # {"volume"?: 0..100, "voice"?, "speed"?: 0.7..1.4}
+                await self.voice.update_settings(body)
+            elif op == "test":
+                asyncio.create_task(self.voice.test_voice())
             else:
                 return web.json_response({"ok": False, "error": "bad voice op"})
         elif action == "wifi_scan":       # results arrive in the head status (wifi.networks)

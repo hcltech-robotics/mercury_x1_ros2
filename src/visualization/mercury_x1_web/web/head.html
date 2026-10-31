@@ -44,17 +44,27 @@
   #status { grid-template-columns: 420px 1fr; gap: 18px; align-content: start; }
   #settings { grid-template-columns: 1fr 1fr; gap: 18px; align-content: start; }
   /* chat: no animations (the kiosk renders on the CPU); the state shows as colour */
-  #chat { grid-template-columns: 360px 1fr; gap: 18px; }
-  #talk { display: flex; flex-direction: column; align-items: center; gap: 14px; padding-top: 30px; text-align: center; }
-  #mic { width: 200px; height: 200px; min-height: 0; border-radius: 50%; padding: 0; border: 6px solid var(--line);
+  #chat { grid-template-columns: 280px 1fr 300px; gap: 18px; }
+  #talk { display: flex; flex-direction: column; align-items: center; gap: 10px; padding-top: 16px; text-align: center; }
+  #mic { flex: none; width: 170px; height: 170px; min-height: 0; border-radius: 50%; padding: 0; border: 6px solid var(--line);
     background: var(--panel2); display: flex; align-items: center; justify-content: center; }
-  #mic svg { width: 92px; height: 92px; fill: none; stroke: #cfd3da; stroke-width: 1.8; stroke-linecap: round; }
+  #mic svg { width: 80px; height: 80px; fill: none; stroke: #cfd3da; stroke-width: 1.8; stroke-linecap: round; }
   #mic.listening { border-color: var(--ok); }
   #mic.hearing { border-color: var(--ok); background: #1d5a36; }
   #mic.thinking { border-color: var(--accent); background: #12344a; }
   #mic.speaking { border-color: var(--warn); background: #4a3710; }
   #mic.error, #mic.connecting { border-color: var(--bad); }
   #mic-state { font-size: 24px; font-weight: 600; }
+  #v-set { width: 100%; text-align: left; }
+  #v-set .lbl { color: var(--muted); font-size: 15px; }
+  .vrow { display: grid; grid-template-columns: 62px 1fr 50px; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .vrow b { text-align: right; font-variant-numeric: tabular-nums; }
+  #v-vol { -webkit-appearance: none; appearance: none; height: 10px; border-radius: 5px; background: var(--panel2); width: 100%; }
+  #v-vol::-webkit-slider-thumb { -webkit-appearance: none; width: 34px; height: 34px; border-radius: 50%; background: var(--accent); border: 0; }
+  .vseg { grid-column: 2 / 4; display: flex; gap: 5px; min-width: 0; }
+  .vseg button, #v-voices button { min-height: 46px; padding: 0 6px; font-size: 15px; flex: 1; min-width: 0; }
+  .vseg button.on, #v-voices button.on { background: #134a66; border-color: var(--accent); }
+  #v-voices { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
   #convo-card { display: flex; flex-direction: column; min-height: 0; max-height: 100%; }
   #convo { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 6px; }
   .msg { max-width: 78%; padding: 12px 16px; border-radius: 18px; font-size: 20px; line-height: 1.35; }
@@ -213,8 +223,8 @@
     </button>
     <div id="mic-state">Tap to talk with Mercury</div>
     <div id="mic-sub" class="muted small"></div>
-    <div class="row" style="justify-content:center">
-      <button id="v-stop">Stop talking</button>
+    <div class="row" style="justify-content:center;flex-wrap:nowrap">
+      <button id="v-stop">Stop</button>
       <button id="v-clear">Clear</button>
     </div>
     <div id="v-stats" class="muted small"></div>
@@ -222,6 +232,17 @@
   <div class="card" id="convo-card">
     <h2>Conversation</h2>
     <div id="convo"><div class="muted">Switch listening on and just speak - Mercury answers out loud.</div></div>
+  </div>
+  <div class="card" id="voice-card">
+    <h2>Voice</h2>
+    <div id="v-set">
+      <div class="vrow"><span class="lbl">Volume</span><input type="range" id="v-vol" min="0" max="100" step="1"><b id="v-vol-t">--</b></div>
+      <div class="vrow"><span class="lbl">Speed</span>
+        <div class="vseg" id="v-speed"><button data-s="0.85">Slow</button><button data-s="1">Normal</button><button data-s="1.15">Fast</button></div></div>
+      <div class="lbl" style="margin:6px 0 6px">Voice</div>
+      <div id="v-voices"></div>
+      <button id="v-test" class="primary" style="margin-top:12px;width:100%">Test voice</button>
+    </div>
   </div>
 </div>
 
@@ -463,6 +484,17 @@ const VOICE_TEXT = { off: "Tap to talk with Mercury", connecting: "Connecting…
 $("#mic").onclick = () => api("voice", { op: "listen", on: !(S.voice && S.voice.enabled) });
 $("#v-stop").onclick = () => api("voice", { op: "stop" });
 $("#v-clear").onclick = () => api("voice", { op: "clear" });
+// voice settings: the robot's state wins unless the user just changed something (2 s)
+let vSetUntil = 0;
+const vSet = (o) => { vSetUntil = Date.now() + 2000; api("voice", { op: "settings", ...o }); };
+$("#v-vol").oninput = () => { vSetUntil = Date.now() + 2000; $("#v-vol-t").textContent = `${$("#v-vol").value}%`; };
+$("#v-vol").onchange = () => vSet({ volume: +$("#v-vol").value });
+for (const b of document.querySelectorAll("#v-speed button")) b.onclick = () => {
+  document.querySelectorAll("#v-speed button").forEach((x) => x.classList.toggle("on", x === b)); vSet({ speed: +b.dataset.s }); };
+$("#v-voices").onclick = (e) => {
+  const b = e.target.closest("button[data-v]"); if (!b) return;
+  document.querySelectorAll("#v-voices button").forEach((x) => x.classList.toggle("on", x === b)); vSet({ voice: b.dataset.v }); };
+$("#v-test").onclick = () => api("voice", { op: "test" });
 function renderVoice() {
   const v = S.voice;
   if (!v) return;
@@ -471,6 +503,15 @@ function renderVoice() {
   $("#mic-state").textContent = VOICE_TEXT[st] || st;
   $("#mic-sub").textContent = st === "error" ? v.message : v.enabled ? "tap the microphone to stop listening" : "";
   $("#v-stop").disabled = !(st === "speaking" || st === "thinking");
+  const set = v.settings || {};
+  if (v.voices && !$("#v-voices").children.length)
+    $("#v-voices").innerHTML = Object.entries(v.voices).map(([k, n]) => `<button data-v="${esc(k)}">${esc(n)}</button>`).join("");
+  if (Date.now() > vSetUntil && set.volume != null) {
+    $("#v-vol").value = set.volume; $("#v-vol-t").textContent = `${set.volume}%`;
+    document.querySelectorAll("#v-speed button").forEach((x) => x.classList.toggle("on", Math.abs(+x.dataset.s - set.speed) < 0.01));
+    document.querySelectorAll("#v-voices button").forEach((x) => x.classList.toggle("on", x.dataset.v === set.voice));
+  }
+  $("#v-test").disabled = st === "thinking" || st === "speaking";
   const s = v.stats || {};
   $("#v-stats").textContent = s.stt_ms != null ? `heard in ${s.stt_ms} ms · first word ${s.llm_first_s ?? "?"} s · voice ${s.tts_ms ?? "?"} ms` : "";
   const h = (v.transcript || []).map((m) => `<div class="msg ${m.role}">${esc(m.text)}<span class="t">${m.t}</span></div>`).join("");
