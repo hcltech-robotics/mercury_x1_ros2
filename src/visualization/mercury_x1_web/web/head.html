@@ -487,8 +487,14 @@ $("#v-clear").onclick = () => api("voice", { op: "clear" });
 // voice settings: the robot's state wins unless the user just changed something (2 s)
 let vSetUntil = 0;
 const vSet = (o) => { vSetUntil = Date.now() + 2000; api("voice", { op: "settings", ...o }); };
-$("#v-vol").oninput = () => { vSetUntil = Date.now() + 2000; $("#v-vol-t").textContent = `${$("#v-vol").value}%`; };
-$("#v-vol").onchange = () => vSet({ volume: +$("#v-vol").value });
+// the kiosk's WebKit fires no "change" after a touch drag: send while dragging (debounced) and on release
+let volTimer = null;
+const sendVol = () => { clearTimeout(volTimer); volTimer = null; vSet({ volume: +$("#v-vol").value }); };
+$("#v-vol").oninput = () => {
+  vSetUntil = Date.now() + 2000; $("#v-vol-t").textContent = `${$("#v-vol").value}%`;
+  if (!volTimer) volTimer = setTimeout(sendVol, 300);
+};
+for (const ev of ["change", "pointerup", "touchend", "mouseup"]) $("#v-vol").addEventListener(ev, sendVol);
 for (const b of document.querySelectorAll("#v-speed button")) b.onclick = () => {
   document.querySelectorAll("#v-speed button").forEach((x) => x.classList.toggle("on", x === b)); vSet({ speed: +b.dataset.s }); };
 $("#v-voices").onclick = (e) => {
