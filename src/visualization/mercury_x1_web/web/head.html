@@ -138,6 +138,7 @@
   #r-ind .v { display: inline-flex; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 </style>
 <script src="/static/remote_ui.js"></script>
+<script src="/static/nodes_ui.js"></script>
 </head>
 <body>
 <div id="bar">
@@ -312,29 +313,10 @@ function renderSystem() {
 }
 
 // node groups: which nodes belong where, and which group must run for what
-const GROUPS = [
-  ["Drivers & sensors", ["mercury_base", "mercury_upper_body", "robot_state_publisher", "lslidar_driver_node", "camera", "camera_container",
-                         "bellybutton_camera", "unitree_remote"], () => true],
-  ["Perception (GPU)", ["nvblox_node", "nvblox_mesh_tiler", "cuvslam_rgbd"], () => S.procs.slam.running],
-  ["SLAM", ["rtabmap", "icp_odometry", "rgbd_sync"], () => S.procs.slam.running],
-  ["Navigation", ["controller_server", "planner_server", "bt_navigator", "behavior_server", "smoother_server", "velocity_smoother",
-                  "waypoint_follower", "lifecycle_manager_navigation", "local_costmap", "global_costmap"], () => S.procs.nav.running],
-  ["Web & viewer", ["mercury_web", "rerun_bridge", "preview_orbbec", "preview_bellybutton"], () => true],
-];
-function renderNodes() {
-  const up = new Set(S.nodes), known = new Set(GROUPS.flatMap((g) => g[1]));
-  const html = GROUPS.map(([name, list, needed]) => {
-    const need = needed();
-    return `<div class="group"><div class="gname">${esc(name)}</div><div class="bubbles">` +
-      list.map((n) => `<span class="bubble ${up.has(n) ? "up" : "down" + (need ? " need" : "")}">${esc(n)}</span>`).join("") + "</div></div>";
-  });
-  const other = S.nodes.filter((n) => !known.has(n));
-  if (other.length) html.push(`<div class="group"><div class="gname">Other</div><div class="bubbles">` +
-    other.map((n) => `<span class="bubble up">${esc(n)}</span>`).join("") + "</div></div>");
-  const h = html.join("");
-  if (h !== $("#nodes")._h) { $("#nodes").innerHTML = h; $("#nodes")._h = h; }
-  const missing = GROUPS.filter((g) => g[2]()).flatMap((g) => g[1]).filter((n) => !up.has(n)).length;
-  $("#node-count").textContent = `· ${S.nodes.length} running` + (missing ? ` · ${missing} missing` : "");
+function renderNodes() {      // groups and bubbles: nodes_ui.js (shared with the control page)
+  const r = NodesUI.render(S.nodes, S.procs);
+  if (r.html !== $("#nodes")._h) { $("#nodes").innerHTML = r.html; $("#nodes")._h = r.html; }
+  $("#node-count").textContent = `· ${r.running} running` + (r.missing ? ` · ${r.missing} missing` : "");
 }
 
 // ---- switches: show the robot's state; a tap asks for a change and waits up to 8 s for it to show

@@ -145,6 +145,18 @@
     aside { border-left: 0; }
     header { flex-wrap: wrap; height: auto; padding: 8px 12px; }
   }
+  /* ROS 2 node bubbles (nodes_ui.js) */
+  #nodes .group { margin: 2px 0 9px; }
+  #nodes .gname { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+  #nodes .bubbles { display: flex; flex-wrap: wrap; gap: 4px; }
+  #nodes .bubble { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; font-size: 11px;
+    background: var(--panel2); border: 1px solid var(--line); color: var(--muted); }
+  #nodes .bubble::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #3a3f4b; }
+  #nodes .bubble.up { color: var(--text); border-color: #2d6b48; background: #17301f; }
+  #nodes .bubble.up::before { background: var(--ok); }
+  #nodes .bubble.down { border-style: dashed; }
+  #nodes .bubble.down.need { color: #ffb3bd; border-color: #6b2d36; }
+  #nodes .bubble.down.need::before { background: var(--bad); }
   .rm-ic { flex: none; display: block; }
   .rm-ind { display: inline-flex; align-items: center; gap: 6px; }
   .rm-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-weight: 600;
@@ -163,6 +175,7 @@
   #r-ind .v { font-variant-numeric: tabular-nums; color: var(--text); font-size: 12px; white-space: nowrap; }
 </style>
 <script src="/static/remote_ui.js"></script>
+<script src="/static/nodes_ui.js"></script>
 </head>
 <body>
 <header>
@@ -178,7 +191,7 @@
     <span class="chip" title="RTAB-Map: mapping / localizing, on which map"><span class="ic" id="d-slam"><svg viewBox="0 0 24 24"><path d="M3 6.5l6-2.5 6 2.5 6-2.5v13.5l-6 2.5-6-2.5-6 2.5z"/><path d="M9 4v13.5M15 6.5V20"/></svg></span><span id="t-slam">SLAM off</span></span>
     <span class="chip" title="Nav2"><span class="ic" id="d-nav"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg></span><span id="t-nav">Nav2 off</span></span>
   </div>
-  <div class="grp" id="c-sys" title="Jetson load, hottest temperature, module power (details: Robot tab · Status)"><span class="glbl">Jetson</span>
+  <div class="grp" id="c-sys" title="Jetson load, hottest temperature, module power (details: Status tab)"><span class="glbl">Jetson</span>
     <span class="chip"><span class="ic" id="d-sys"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg></span><span id="t-sys">CPU -- · GPU --</span></span>
     <span class="chip"><span class="ic" id="d-temp"><svg viewBox="0 0 24 24"><path d="M14 14.8V5a2 2 0 0 0-4 0v9.8a4 4 0 1 0 4 0z"/></svg></span><span id="t-temp">--°C</span></span>
     <span class="chip"><span class="ic" id="d-watt"><svg viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg></span><span id="t-watt">-- W</span></span>
@@ -193,7 +206,7 @@
     <span class="k" data-k="0,1">A</span><span class="k" data-k="-1,0">S</span><span class="k" data-k="0,-1">D</span></div>
     <div id="hud-speed" style="text-align:center">⇧ shift = fast</div></div></div>
   <aside>
-    <div class="tabs"><button class="active" data-tab="nav">Navigate</button><button data-tab="robot">Robot</button></div>
+    <div class="tabs"><button class="active" data-tab="nav">Navigate</button><button data-tab="robot">Robot</button><button data-tab="status">Status</button></div>
 
     <div data-pane="nav">
       <section>
@@ -328,8 +341,12 @@
           <span class="muted" id="ros-net">—</span>
         </div>
       </section>
+
+    </div>
+
+    <div data-pane="status" class="hidden">
       <section>
-        <h2>Status</h2>
+        <h2>Jetson</h2>
         <div class="sys" id="sys">
           <span class="lbl">CPU</span><div class="bar"><i id="sys-cpu"></i></div><span class="val" id="sys-cpu-t">—</span>
           <span class="lbl">cores</span><div class="cores" id="sys-cores"></div><span class="val muted" id="sys-mhz">—</span>
@@ -337,7 +354,18 @@
           <span class="lbl">RAM</span><div class="bar"><i id="sys-ram"></i></div><span class="val" id="sys-ram-t">—</span>
         </div>
         <div class="kv" id="power" style="margin-bottom:10px"></div>
+      </section>
+      <section>
+        <h2>Robot</h2>
         <div class="kv" id="kv"></div>
+      </section>
+      <section>
+        <h2>Versions</h2>
+        <div class="kv" id="versions"></div>
+      </section>
+      <section>
+        <h2>ROS 2 nodes <span id="node-count" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
+        <div id="nodes"></div>
       </section>
     </div>
   </aside>
@@ -470,6 +498,7 @@ function onStatus() {
   $("#navstate").style.color = n.state === "error" || n.state === "aborted" ? "var(--bad)" : n.state === "navigating" ? "var(--warn)" : "var(--muted)";
   renderTable(true);
   renderKV();
+  renderNodesAndVersions(s);
   renderRemote();
   const armsList = Object.values(s.arms || {});
   setArmsSwitch(armsList.length > 0 && armsList.every((a) => a.powered));
@@ -640,11 +669,29 @@ $("#r-auto").onclick = () => {
 
 function renderKV() {
   const s = ST, b = s.base || {};
-  const rows = [["base", b.connected ? `ok · fw ${b.fw}` : "no link"],
+  const rows = [["base", b.connected ? "connected" : "no link"],
     ["battery", `${s.charge || "—"} (estimated)`],
     ["MCU flag / aux", b.connected ? `${b.flag} / ${(b.aux || []).join(", ")}` : "—"]];
   for (const [side, a] of Object.entries(s.arms || {})) rows.push([`${side} arm`, `${a.powered ? "powered" : "off"} · ${a.rate} Hz${a.moving ? " · moving" : ""}`]);
   $("#kv").innerHTML = rows.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
+}
+
+function renderNodesAndVersions(s) {
+  if (s.nodes) {
+    const r = NodesUI.render(s.nodes, s.procs);
+    setHTML("#nodes", r.html);
+    $("#node-count").textContent = `· ${r.running} running` + (r.missing ? ` · ${r.missing} missing` : "");
+  }
+  const v = s.versions;
+  if (!v) return;
+  const arms = v.arms || {}, cam = v.camera;
+  const rows = [
+    ["base MCU", v.base || "— (no link)"],
+    ["left arm MCU", `${arms.left ?? "?"} <span class="muted">(recorded ${arms.recorded ?? ""}, not read live)</span>`],
+    ["right arm MCU", `${arms.right ?? "?"} <span class="muted">(recorded ${arms.recorded ?? ""}, not read live)</span>`],
+    ["depth camera", cam ? `${cam.name} · fw ${cam.firmware} <span class="muted">· s/n ${cam.serial}</span>` : "—"],
+    ["Jetson", [v.l4t ? `L4T ${v.l4t}` : "", v.jetpack ? `JetPack ${v.jetpack}` : ""].filter(Boolean).join(" · ") || "—"]];
+  setHTML("#versions", rows.map(([k, x]) => `<span>${k}</span><span>${x}</span>`).join(""));
 }
 
 // ---------------- map canvas ----------------

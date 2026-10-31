@@ -19,6 +19,7 @@
   <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>rtabmap_msgs</exec_depend>
+  <exec_depend>orbbec_camera_msgs</exec_depend>
   <!-- pip: rerun-sdk==0.39.0 aiohttp -->
   <export>
     <build_type>ament_python</build_type>

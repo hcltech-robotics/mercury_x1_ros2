@@ -38,6 +38,7 @@ from rclpy.node import Node
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import SetParameters
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from orbbec_camera_msgs.srv import GetDeviceInfo
 from rtabmap_msgs.msg import MapGraph
 from sensor_msgs.msg import BatteryState, PointCloud2, PointField
 from tf2_msgs.msg import TFMessage
@@ -70,6 +71,9 @@ LIVE3D_PERIOD = 30.0        # [s] at most one re-export per this while the map g
 WAYPOINT_PICK_RADIUS = 0.6   # [m] a "delete" click removes the nearest waypoint within this distance
 # head pose while mapping: neck straight, Orbbec level (its pitch = -jaw - 5.7 deg, see the URDF notes)
 MAPPING_HEAD = {"head": 0.0, "eye": -5.7}
+# Arm MCU firmware: recorded by hand on 2026-10-29 (devlog low-level-protocols). Reading it live needs a version
+# opcode never verified on this robot, and probing unverified arm opcodes powered an arm off once - so not polled.
+ARM_FIRMWARE_RECORDED = {"left": "1.1", "right": "1.1", "recorded": "2026-10-29"}
 VIEWER_CACHE = os.path.expanduser(f"~/.cache/mercury_x1_web/rerun-web-viewer/{VIEWER_VERSION}")
 
 
@@ -210,6 +214,22 @@ class WebNode(Node):
         self.jobs_gc = self.create_guard_condition(self._run_jobs)
         self.node_names: list[str] = []
         self.create_timer(2.0, self._refresh_nodes)
+        # depth camera identity (Orbbec driver service), asked until it answers
+        self.camera_info: dict | None = None
+        self.cli_cam_info = self.create_client(GetDeviceInfo, "/camera/get_device_info")
+        self.cam_info_timer = self.create_timer(10.0, self._ask_camera_info)
+
+    def _ask_camera_info(self) -> None:
+        if self.camera_info is not None:
+            self.cam_info_timer.cancel()
+            return
+        if self.cli_cam_info.service_is_ready():
+            self.cli_cam_info.call_async(GetDeviceInfo.Request()).add_done_callback(self._on_camera_info)
+
+    def _on_camera_info(self, fut) -> None:
+        r = fut.result()
+        if r is not None and r.success:
+            self.camera_info = {"name": r.info.name, "serial": r.info.serial_number, "firmware": r.info.firmware_version}
 
     def _refresh_nodes(self) -> None:
         """running ROS nodes for the head display (helper nodes of tf listeners / launch filtered out)"""
@@ -516,6 +536,7 @@ class App:
         threading.Thread(target=self._live3d_loop, daemon=True, name="live3d").start()
         self.head_port = head_port
         self.sysstats = SysStats()           # CPU / GPU load and temperatures for the status page
+        self.jetson = self.jetson_versions()
         node.waypoints_changed = self.save_waypoints
         os.makedirs(MAPS_DIR, exist_ok=True)
 
@@ -653,6 +674,29 @@ class App:
         jc = JointCommand(name=list(MAPPING_HEAD), position=[math.radians(v) for v in MAPPING_HEAD.values()],
                           speed=30)
         self.node.post(lambda: self.node.pub_joint.publish(jc))
+
+    @staticmethod
+    def jetson_versions() -> dict:
+        out = {}
+        try:
+            with open("/etc/nv_tegra_release") as f:     # "# R36 (release), REVISION: 4.7, ..."
+                head = f.readline()
+            rel, rev = head.split("(")[0].replace("#", "").strip(), head.split("REVISION:")[1].split(",")[0].strip()
+            out["l4t"] = f"{rel}.{rev}"
+        except (OSError, IndexError):
+            pass
+        try:
+            r = subprocess.run(["dpkg-query", "-W", "-f=${Version}", "nvidia-jetpack"], capture_output=True, text=True, timeout=5)
+            if r.returncode == 0 and r.stdout:
+                out["jetpack"] = r.stdout.split("+")[0]
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return out
+
+    def versions(self) -> dict:
+        base = self.node.base
+        return {"base": base.firmware_version if base is not None and base.firmware_version else None,
+                "arms": ARM_FIRMWARE_RECORDED, "camera": self.node.camera_info, **self.jetson}
 
     def ros_network(self) -> dict:
         """network = what this stack runs with, configured = what the next (re)start uses"""
@@ -816,6 +860,8 @@ class App:
                 st["export3d"] = {**self.export3d, "files": self.export3d["files"][:20]}
                 st["system"] = self.sysstats.snapshot()
                 st["ros"] = self.ros_network()
+                st["nodes"] = self.node.node_names
+                st["versions"] = self.versions()
                 if time.monotonic() - self._maps_t > 3.0:     # saved maps: cheap, but no need at 5 Hz
                     self._maps_cache, self._maps_t = self.map_list(), time.monotonic()
                 st["maps"] = self._maps_cache

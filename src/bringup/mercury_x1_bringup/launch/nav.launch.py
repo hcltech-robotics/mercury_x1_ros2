@@ -1,6 +1,6 @@
 """Nav2 on top of RTAB-Map (/map + map->odom). No AMCL / map_server: RTAB-Map localizes.
 
-  ros2 launch mercury_x1_bringup nav.launch.py [perception:=nvblox|cpu] [arm_footprint:=true|false]
+  ros2 launch mercury_x1_bringup nav.launch.py [perception:=nvblox|cpu] [arm_footprint:=true|false] [composition:=true|false]
 
 perception:=nvblox (default): Orbbec depth obstacles come from the nvblox ESDF slice (GPU, started by
 slam.launch.py nvblox:=true). perception:=cpu: no nvblox layers; the decimated depth cloud
@@ -44,7 +44,15 @@ def _base_footprint(path: str) -> str:
 
 def _nav(context):
     params = _params_for(LC("params_file").perform(context), LC("perception").perform(context))
+    composition = LC("composition").perform(context) == "true"
     nodes = []
+    if composition:
+        # all Nav2 servers in one process (nav2_bringup loads them into /nav2_container but does not start
+        # it); isolated = one executor thread per server, as nav2_bringup's own container
+        nodes.append(Node(package="rclcpp_components", executable="component_container_isolated",
+                          name="nav2_container", output="screen",
+                          parameters=[params, {"autostart": True}],
+                          remappings=[("/tf", "tf"), ("/tf_static", "tf_static")]))
     if LC("arm_footprint").perform(context) == "true":
         # grows the costmaps' footprint while an arm reaches out (scripts/arm_footprint.py)
         nodes.append(Node(package="mercury_x1_bringup", executable="arm_footprint.py", name="arm_footprint",
@@ -52,7 +60,8 @@ def _nav(context):
     return nodes + [IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(share("nav2_bringup"), "launch", "navigation_launch.py")),
         launch_arguments={"params_file": params, "autostart": "true",
-                          "use_sim_time": "false", "use_composition": "False"}.items())]
+                          "use_sim_time": "false", "use_composition": "True" if composition else "False",
+                          "container_name": "nav2_container"}.items())]
 
 
 def generate_launch_description():
@@ -60,6 +69,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("params_file", default_value=params),
         DeclareLaunchArgument("perception", default_value="nvblox", choices=["nvblox", "cpu"]),
+        DeclareLaunchArgument("composition", default_value="true", choices=["true", "false"],
+                              description="all Nav2 servers in one process (less CPU than ~10 processes)"),
         DeclareLaunchArgument("arm_footprint", default_value="true", choices=["true", "false"],
                               description="grow the footprint for arms reaching out"),
         OpaqueFunction(function=_nav),

@@ -60,6 +60,10 @@ after 7 days; the map in use cannot be deleted). **New map** starts an empty map
 that name goes to the trash first). Waypoints belong to a map (`<name>.waypoints.json`): ✕ per row,
 **Delete all**, or the **✕ Waypoint** tool (click a waypoint on the 2D map or in the 3D view).
 
+### Nav2 in one process
+`nav.launch.py` runs all Nav2 servers in one `component_container_isolated` (`/nav2_container`, one executor
+thread per server; `composition:=false` for separate processes): idle CPU 72 % → 51 % of a core.
+
 ### Arm-aware footprint
 `nav.launch.py` also starts `arm_footprint.py` (`arm_footprint:=false` to skip): 5 Hz, the arm links'
 mesh hulls (`config/arm_hulls.yaml`, from `mercury_x1_web/tools/arm_hulls.py`) + 8 cm for a hand beyond
