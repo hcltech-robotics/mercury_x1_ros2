@@ -1,5 +1,5 @@
 [Unit]
-Description=Mercury X1 speech service (Whisper STT on GPU, Kokoro TTS on CPU) on :8096
+Description=Mercury X1 speech service (Whisper STT on GPU) on :8096
 After=network-online.target docker.service
 
 [Service]
@@ -10,6 +10,8 @@ EnvironmentFile=/home/hcltech/pennyroyal/docker/pennyroyal/.env
 Environment=VOICE_PORT=8096
 # models are cached in ~/.cache/huggingface: no network check at start
 Environment=HF_HUB_OFFLINE=1
+# Kokoro TTS here is off: the robot speaks on its own GPU (server/robot_tts); VOICE_TTS=1 turns it back on
+Environment=VOICE_TTS=0
 ExecStart=/home/hcltech/mercury-voice/run.sh
 Restart=on-failure
 RestartSec=5

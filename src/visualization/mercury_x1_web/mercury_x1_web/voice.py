@@ -6,7 +6,7 @@ Runs on web_server's asyncio loop (all I/O, no threads):
   * Each phrase goes to Qwen (the pennyroyal proxy, streamed, thinking off); the reply is cut into
     sentences, each one is synthesised by Kokoro (/tts) and played with `aplay` on the C-Media speaker
     while the next is being made. Kokoro runs on the robot's GPU (`mercury-tts`, 127.0.0.1:8097,
-    VOICE_TTS_URL); when that is down the speech service on 11.51 speaks instead.
+    VOICE_TTS_URL; 11.51 only does speech-to-text).
   * The mic is muted while the robot talks (no echo loop) and for a short tail after it.
 Config: ~/.config/mercury_x1/voice.env (URLs, bearer token, ALSA devices; chmod 600).
 """
@@ -344,27 +344,20 @@ class VoiceChat:
             sentence = following
 
     async def _tts(self, conf: dict, text: str) -> bytes:
-        """wav from the robot's own Kokoro (GPU); the speech service on 11.51 when that one is not answering"""
+        """wav from the robot's own Kokoro (Jetson GPU, mercury-tts)"""
         body = {"text": text, "voice": self.settings["voice"], "speed": self.settings["speed"]}
-        local = conf.get("VOICE_TTS_URL", LOCAL_TTS).rstrip("/")
-        targets = [(local, "Jetson", aiohttp.ClientTimeout(total=15, sock_connect=1))] if local else []
-        if conf.get("VOICE_STT_TTS_URL"):
-            remote = conf["VOICE_STT_TTS_URL"].rstrip("/")
-            targets.append((remote, urlparse(remote).hostname or "server", aiohttp.ClientTimeout(total=30)))
-        err: Exception = RuntimeError("speech: no TTS configured")
-        for base, where, timeout in targets:
-            t = time.time()
-            try:
-                async with self._session.post(base + "/tts", json=body, timeout=timeout) as r:
-                    if r.status != 200:
-                        raise RuntimeError(f"speech ({where}): HTTP {r.status}")
-                    data = await r.read()
-            except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError) as e:
-                err = e
-                continue
-            self._last_tts_ms, self._last_tts_on = round((time.time() - t) * 1000), where
-            return data
-        raise err
+        base = conf.get("VOICE_TTS_URL", LOCAL_TTS).rstrip("/")
+        t = time.time()
+        try:
+            async with self._session.post(base + "/tts", json=body, timeout=aiohttp.ClientTimeout(total=15)) as r:
+                if r.status != 200:
+                    raise RuntimeError(f"speech: HTTP {r.status}")
+                data = await r.read()
+        except aiohttp.ClientConnectionError as e:
+            raise RuntimeError("speech: mercury-tts is not running (sudo systemctl start mercury-tts)") from e
+        self._last_tts_ms = round((time.time() - t) * 1000)
+        self._last_tts_on = "Jetson" if urlparse(base).hostname in ("127.0.0.1", "localhost") else urlparse(base).hostname
+        return data
 
     _last_tts_ms, _last_tts_on = 0, ""
 

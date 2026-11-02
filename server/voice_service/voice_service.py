@@ -6,12 +6,13 @@
                   {"type": "speech_start"} / {"type": "speech_end"} / {"type": "final", "text", ...} /
                   {"type": "dropped", "text", "why"}. Client messages: {"type": "mute", "on": bool} (stop
                   segmenting, e.g. while the robot talks), {"type": "config", "language": "en"}.
-  POST /tts       {"text", "voice"?, "speed"?} -> audio/wav (Kokoro, CPU, 24 kHz mono)
+  POST /tts       {"text", "voice"?, "speed"?} -> audio/wav (Kokoro, CPU, 24 kHz mono); only with VOICE_TTS=1,
+                  off by default: the robot speaks with its own Kokoro on the Jetson GPU (server/robot_tts)
   GET  /health    no auth
 
 Bearer token on /listen and /tts: the model's PENNY_API_KEY (systemd EnvironmentFile).
-Whisper large-v3-turbo fp16 holds ~2.5 GB of GPU memory and runs ~0.1 s per phrase; Kokoro runs on
-the CPU (~0.2 s per sentence) so it never competes with the model for the GPU.
+Whisper large-v3-turbo fp16 holds ~2.5 GB of GPU memory and runs ~0.1 s per phrase; Kokoro (if enabled)
+runs on the CPU (~0.2 s per sentence) so it never competes with the model for the GPU.
 """
 from __future__ import annotations
 
@@ -29,13 +30,13 @@ import onnxruntime as ort
 import faster_whisper
 from aiohttp import web
 from faster_whisper import WhisperModel
-from kokoro_onnx import Kokoro
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("VOICE_PORT", "8096"))
 API_KEY = os.environ.get("PENNY_API_KEY", "")
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
 TTS_THREADS = int(os.environ.get("TTS_THREADS", "8"))
+TTS_ENABLED = os.environ.get("VOICE_TTS", "0") == "1"
 RATE = 16000
 # Voice activity: Silero (neural). webrtcvad called 95 % of the robot's room "speech": its noise is a
 # 150-300 Hz hum (fans / servos), right in the voice pitch range; Silero scores it <= 0.3.
@@ -64,15 +65,19 @@ class Engines:
         self.whisper = WhisperModel(WHISPER_MODEL, device="cuda", compute_type="float16")
         # warm-up: the first transcription on a fresh process takes ~5 s
         list(self.whisper.transcribe(np.zeros(RATE, np.float32), language="en", beam_size=1)[0])
-        opts = ort.SessionOptions()
-        opts.intra_op_num_threads = TTS_THREADS
-        sess = ort.InferenceSession(os.path.join(HERE, "models", "kokoro-v1.0.onnx"), opts,
-                                    providers=["CPUExecutionProvider"])
-        self.kokoro = Kokoro.from_session(sess, os.path.join(HERE, "models", "voices-v1.0.bin"))
-        self.kokoro.create("Ready.", voice="af_heart", lang="en-us")
+        self.kokoro = None
+        if TTS_ENABLED:
+            from kokoro_onnx import Kokoro
+            opts = ort.SessionOptions()
+            opts.intra_op_num_threads = TTS_THREADS
+            sess = ort.InferenceSession(os.path.join(HERE, "models", "kokoro-v1.0.onnx"), opts,
+                                        providers=["CPUExecutionProvider"])
+            self.kokoro = Kokoro.from_session(sess, os.path.join(HERE, "models", "voices-v1.0.bin"))
+            self.kokoro.create("Ready.", voice="af_heart", lang="en-us")
         self.stt_lock = threading.Lock()
         self.tts_lock = threading.Lock()
-        log.info("engines ready in %.1f s (whisper %s, kokoro %d threads)", time.time() - t, WHISPER_MODEL, TTS_THREADS)
+        log.info("engines ready in %.1f s (whisper %s, kokoro %s)", time.time() - t, WHISPER_MODEL,
+                 f"{TTS_THREADS} threads" if self.kokoro else "off")
 
     def transcribe(self, pcm: bytes, language: str) -> dict:
         audio = np.frombuffer(pcm, np.int16).astype(np.float32) / 32768.0
@@ -229,6 +234,8 @@ async def tts(req: web.Request) -> web.Response:
     if not text:
         raise web.HTTPBadRequest(text="no text")
     eng: Engines = req.app["engines"]
+    if eng.kokoro is None:
+        raise web.HTTPServiceUnavailable(text="TTS is off here (VOICE_TTS=1 to enable)")
     t = time.time()
     wav = await asyncio.get_running_loop().run_in_executor(
         None, eng.speak, text, str(body.get("voice", "af_heart")), min(max(float(body.get("speed", 1.0)), 0.5), 2.0))
@@ -236,7 +243,7 @@ async def tts(req: web.Request) -> web.Response:
 
 
 async def health(req: web.Request) -> web.Response:
-    return web.json_response({"ok": True, "whisper": WHISPER_MODEL, "tts": "kokoro-v1.0"})
+    return web.json_response({"ok": True, "whisper": WHISPER_MODEL, "tts": "kokoro-v1.0" if req.app["engines"].kokoro else None})
 
 
 def main() -> None:

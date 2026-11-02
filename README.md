@@ -68,7 +68,7 @@ text to Qwen (pennyroyal proxy :11434, thinking off, ~0.2 s to first word), cuts
 opening clause goes first), Kokoro speaks them, `aplay` plays on the C-Media speaker; the mic is muted while it talks.
 Kokoro runs on the robot's GPU: `server/robot_tts` (systemd `mercury-tts`, 127.0.0.1:8097, own venv ~/mercury-tts with
 the Jetson onnxruntime-gpu wheel; `server/robot_tts/setup.sh` installs it). ~0.35-0.8 s per sentence, ~0.9 GB of
-memory; when it is down, 11.51 speaks instead (CPU, ~0.2 s). The Chat tab shows which one spoke.
+memory. 11.51 only transcribes (its Kokoro is off: `VOICE_TTS=0` in `mercury-voice.service`).
 Config + bearer token: `~/.config/mercury_x1/voice.env` (chmod 600). The room's 150-300 Hz hum made webrtcvad
 trigger 95 % of the time; Silero scores it ≤ 0.3.
 
