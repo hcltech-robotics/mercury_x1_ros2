@@ -64,11 +64,13 @@ that name goes to the trash first). Waypoints belong to a map (`<name>.waypoints
 Tap the microphone, then just speak. Speech runs on the robot; only text goes to Qwen on 11.51.
 `arecord` on the XFM-DP mic array (16 kHz, beamformed on the board) streams to `mercury-speech` (`server/robot_speech`,
 127.0.0.1:8097, own venv ~/mercury-speech with the Jetson onnxruntime-gpu wheel; `server/robot_speech/setup.sh`
-installs it): Silero VAD finds phrases, NVIDIA Parakeet TDT 0.6B v2 int8 transcribes them on the CPU (~0.35 s for a
-short phrase, ~1.2 s for 7 s; int8 does not fit on CUDA here), Kokoro speaks on the GPU (~0.35-0.8 s per sentence).
+installs it): Silero VAD finds phrases, NVIDIA Parakeet TDT 0.6B v2 transcribes them on the GPU (fp16 made on a PC
+with `server/robot_speech/make_parakeet_fp16.py`, LayerNorm kept fp32; ~0.4 s for a short phrase, ~0.5 s for 7.7 s;
+falls back to the int8 model on the CPU, ~0.4 / ~1.4 s), Kokoro speaks on the GPU (~0.35-0.8 s per sentence). The unit
+compacts RAM before starting: fragmented memory made the GPU allocations fail (nvmap error 12) with GBs free.
 `voice.py` in web_server sends the text to Qwen (pennyroyal proxy :11434, thinking off, ~0.2 s to first word), cuts
 the reply into sentences (the opening clause goes first), `aplay` plays them on the C-Media speaker; the mic is muted
-while it talks. ~0.8 GB GPU + ~1 GB RAM in all (kiosk Status → GPU processes shows it). `server/voice_service`
+while it talks. ~2.3 GB of GPU memory in all (kiosk Status → GPU processes shows it). `server/voice_service`
 (Whisper on 11.51, systemd `mercury-voice`) is the old remote speech service, disabled since 2026-11-02.
 Config + bearer token: `~/.config/mercury_x1/voice.env` (chmod 600). The room's 150-300 Hz hum made webrtcvad
 trigger 95 % of the time; Silero scores it ≤ 0.3.

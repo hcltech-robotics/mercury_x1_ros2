@@ -10,9 +10,10 @@
 
 Listens on 127.0.0.1 only (no token). Own venv (~/mercury-speech, `setup.sh`), not ROS' Python: the Jetson
 onnxruntime-gpu wheel needs NumPy 1.x. Measured with the robot stack running:
-  * STT: NVIDIA Parakeet TDT 0.6B v2, int8, on the CPU (2 threads): ~0.35 s for a short phrase, ~0.5 s for a
-    sentence, ~1.2 s for 7 s of speech; ~1 GB. int8 does not fit on CUDA here: ORT's int8 kernels are CPU
-    kernels, on CUDA the encoder alone took ~1.5 GB and the next session ran out of memory.
+  * STT: NVIDIA Parakeet TDT 0.6B v2, fp16 on the GPU (make_parakeet_fp16.py; LayerNorm stays fp32): ~0.4 s
+    for a short phrase, ~0.5 s for 7.7 s of speech, ~1.5 GB, no CPU. Falls back to the published int8 model on
+    the CPU (2 threads: ~0.38 / ~1.44 s, ~1 GB) when the fp16 files are missing or the GPU load fails; int8 itself
+    does not fit on CUDA (ORT's int8 kernels are CPU kernels; on CUDA it ran out of memory).
   * TTS: Kokoro fp32 on CUDA (GPU arena capped): ~0.35 s for a short sentence, ~0.75 s for 5 s of speech,
     ~0.9 GB; GPU-bound (shared with nvblox). The fp16 model is slower here (casts).
   * VAD: Silero v6, streaming, on the CPU (~1 % of a core).
@@ -42,6 +43,8 @@ TTS_GPU_MEM_MB = int(os.environ.get("TTS_GPU_MEM_MB", "768"))
 STT_MODEL = "nemo-parakeet-tdt-0.6b-v2"
 STT_DIR = os.path.join(MODELS, "parakeet-tdt-0.6b-v2")
 STT_THREADS = int(os.environ.get("STT_THREADS", "2"))     # 4 is no faster: the CPU is busy with ROS
+STT_DEVICE = os.environ.get("STT_DEVICE", "cuda")          # cuda: fp16 model on the GPU; cpu: int8 model
+STT_GPU_MEM_MB = int(os.environ.get("STT_GPU_MEM_MB", "2048"))
 RATE = 16000
 WARMUP = ["Ready.", "Hello, I am Mercury, the robot in the HCLTech robotics lab.",
           "I can talk with you, but I cannot move yet, so please ask me something about the lab or the robots here."]
@@ -79,20 +82,44 @@ class Engines:
                                     providers=[("CUDAExecutionProvider", cuda), "CPUExecutionProvider"])
         self.tts_provider = sess.get_providers()[0]
         self.kokoro = Kokoro.from_session(sess, os.path.join(MODELS, "voices-v1.0.bin"))
-        # STT: Parakeet int8 on the CPU; no arena (it kept ~150 MB more for nothing)
-        so = _quiet_session_options(STT_THREADS)
-        so.enable_cpu_mem_arena = False
-        self.parakeet = onnx_asr.load_model(STT_MODEL, STT_DIR, quantization="int8", sess_options=so,
-                                            providers=["CPUExecutionProvider"])
-        self.tts_lock = threading.Lock()
-        self.stt_lock = threading.Lock()
-        # the first runs per input length pick their kernels (~1 s each): do them now, not on the first reply
+        # warm Kokoro up before Parakeet loads: the first runs per input length pick their kernels (~1 s each),
+        # and its GPU arena is claimed right after the memory compaction (systemd ExecStartPre)
         for _ in range(2):
             for s in WARMUP:
                 self.kokoro.create(s, voice="af_heart", lang="en-us")
-        self.parakeet.recognize(np.zeros(RATE, np.float32), sample_rate=RATE)
-        log.info("ready in %.1f s (TTS %s on %s, GPU arena <= %d MB; STT %s int8, CPU %d threads)", time.time() - t,
-                 TTS_MODEL, self.tts_provider, TTS_GPU_MEM_MB, STT_MODEL, STT_THREADS)
+        # STT: Parakeet fp16 on the GPU, else int8 on the CPU
+        self.parakeet, self.stt_where = None, ""
+        if STT_DEVICE == "cuda" and os.path.exists(os.path.join(STT_DIR, "encoder-model.fp16.onnx")):
+            try:
+                self.parakeet = self._load_stt(cuda)
+                self.stt_where = "fp16, GPU"
+            except Exception as e:  # noqa: BLE001 - e.g. nvmap out of memory: hear on the CPU instead
+                log.warning("Parakeet on the GPU failed (%s); using the int8 model on the CPU", str(e)[-160:])
+                self.parakeet = None
+        if self.parakeet is None:
+            self.parakeet = self._load_stt(None)
+            self.stt_where = f"int8, CPU {STT_THREADS} threads"
+        self.tts_lock = threading.Lock()
+        self.stt_lock = threading.Lock()
+        log.info("ready in %.1f s (TTS %s on %s, GPU arena <= %d MB; STT %s %s)", time.time() - t,
+                 TTS_MODEL, self.tts_provider, TTS_GPU_MEM_MB, STT_MODEL, self.stt_where)
+
+    @staticmethod
+    def _load_stt(cuda: dict | None):
+        so = _quiet_session_options(STT_THREADS)
+        so.enable_cpu_mem_arena = False                       # the CPU arena kept ~150 MB more for nothing
+        if cuda is not None:
+            providers = [("CUDAExecutionProvider", {**cuda, "gpu_mem_limit": str(STT_GPU_MEM_MB << 20)}),
+                         "CPUExecutionProvider"]
+            m = onnx_asr.load_model(STT_MODEL, STT_DIR, quantization="fp16", sess_options=so, providers=providers)
+        else:
+            m = onnx_asr.load_model(STT_MODEL, STT_DIR, quantization="int8", sess_options=so,
+                                    providers=["CPUExecutionProvider"])
+        # first runs per length pick the GPU kernels; the longest phrase (MAX_FRAMES, 15 s) also grows the GPU
+        # arena to its full size now, right after the compaction, not later mid-conversation
+        for sec in (1, 3, 6, 15):
+            m.recognize(np.zeros(RATE * sec, np.float32), sample_rate=RATE)
+        return m
 
     def speak(self, text: str, voice: str, speed: float) -> bytes:
         with self.tts_lock:
@@ -241,7 +268,7 @@ async def tts(req: web.Request) -> web.Response:
 
 async def health(req: web.Request) -> web.Response:
     eng: Engines = req.app["engines"]
-    return web.json_response({"ok": True, "stt": f"{STT_MODEL} int8 (CPU)", "tts": f"{TTS_MODEL} ({eng.tts_provider})"})
+    return web.json_response({"ok": True, "stt": f"{STT_MODEL} ({eng.stt_where})", "tts": f"{TTS_MODEL} ({eng.tts_provider})"})
 
 
 def main() -> None:

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Set up speech on the robot (JetPack 6.2 / CUDA 12.6, Python 3.10): Parakeet STT (CPU) + Kokoro TTS (GPU) +
+# Set up speech on the robot (JetPack 6.2 / CUDA 12.6, Python 3.10): Parakeet STT + Kokoro TTS (GPU) +
 # Silero VAD, then install + start the systemd unit mercury-speech (127.0.0.1:8097).
 #   server/robot_speech/setup.sh            venv ~/mercury-speech/.venv, models ~/mercury-speech/models
 #   server/robot_speech/setup.sh --remove   stop + remove the unit (venv and models stay)
@@ -34,6 +34,10 @@ done
 from huggingface_hub import snapshot_download
 snapshot_download('istupakov/parakeet-tdt-0.6b-v2-onnx', local_dir='$D/models/parakeet-tdt-0.6b-v2',
                   allow_patterns=['*int8.onnx', 'config.json', 'vocab.txt'])"
+# Parakeet fp16 for the GPU is made on a PC (server/robot_speech/make_parakeet_fp16.py, then rsync into
+# $D/models/parakeet-tdt-0.6b-v2/); without it the service hears with the int8 model on the CPU
+[ -s "$D/models/parakeet-tdt-0.6b-v2/encoder-model.fp16.onnx" ] || \
+  echo "NOTE: no fp16 Parakeet in $D/models/parakeet-tdt-0.6b-v2: STT runs on the CPU (see make_parakeet_fp16.py)"
 "$D/.venv/bin/python" -c "import onnxruntime as o; assert 'CUDAExecutionProvider' in o.get_available_providers()"
 sudo install -m 644 "$REPO/config/systemd/mercury-speech.service" /etc/systemd/system/mercury-speech.service
 sudo systemctl daemon-reload
