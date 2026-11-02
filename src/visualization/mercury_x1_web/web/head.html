@@ -661,15 +661,16 @@ $("#vb-presets").onclick = (e) => {
   if (!confirm(`Load the wake word "${b.textContent}" (threshold ${thr})? The board compiles it and restarts its engine (~40 s).`)) return;
   api("wake_word", { keyword: b.dataset.k, threshold: thr });
 };
-// radar: linear array -> 0..180 deg, 0 at the right, 90 up (to be calibrated: which side is the robot's left)
+// radar: linear array -> 0..180 deg, 90 up; drawn mirrored (0 on the screen's left) - matches what a person
+// standing in front of the robot sees (checked with a phone moved around the robot, 2026-11-02)
 const RC = { x: 160, y: 158, r: 140 };
-const rpt = (deg, r) => [RC.x + r * Math.cos(deg * Math.PI / 180), RC.y - r * Math.sin(deg * Math.PI / 180)];
+const rpt = (deg, r) => [RC.x - r * Math.cos(deg * Math.PI / 180), RC.y - r * Math.sin(deg * Math.PI / 180)];
 function radarBase() {
   let h = "";
   const sectors = [[0, 60], [60, 120], [120, 180]];      // mic4 beams 0..2 (assumed equal sectors)
   sectors.forEach(([a, b], i) => {
     const [x1, y1] = rpt(a, RC.r), [x2, y2] = rpt(b, RC.r), [lx, ly] = rpt((a + b) / 2, RC.r * 0.62);
-    h += `<path id="beam${i}" d="M${RC.x},${RC.y} L${x1},${y1} A${RC.r},${RC.r} 0 0 0 ${x2},${y2} Z" fill="#1a2733" stroke="#323743"/>` +
+    h += `<path id="beam${i}" d="M${RC.x},${RC.y} L${x1},${y1} A${RC.r},${RC.r} 0 0 1 ${x2},${y2} Z" fill="#1a2733" stroke="#323743"/>` +
          `<text x="${lx}" y="${ly}" fill="#5d6576" font-size="13" text-anchor="middle">beam ${i}</text>`;
   });
   for (const d of [0, 45, 90, 135, 180]) {
