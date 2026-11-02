@@ -7,7 +7,7 @@ slam.launch.py nvblox:=true). perception:=cpu: no nvblox layers; the decimated d
 (/camera/cloud, point_cloud_xyz in robot.launch.py) goes into the local voxel layer instead.
 
 arm_footprint:=true (default): the footprint follows the arms - when a link or the hand reaches
-outside the base outline, the costmaps get a grown footprint (scripts/arm_footprint.py).
+outside the base outline, the costmaps get a grown footprint (src/arm_footprint.cpp).
 """
 import os
 import tempfile
@@ -54,8 +54,8 @@ def _nav(context):
                           parameters=[params, {"autostart": True}],
                           remappings=[("/tf", "tf"), ("/tf_static", "tf_static")]))
     if LC("arm_footprint").perform(context) == "true":
-        # grows the costmaps' footprint while an arm reaches out (scripts/arm_footprint.py)
-        nodes.append(Node(package="mercury_x1_bringup", executable="arm_footprint.py", name="arm_footprint",
+        # grows the costmaps' footprint while an arm reaches out (src/arm_footprint.cpp)
+        nodes.append(Node(package="mercury_x1_bringup", executable="arm_footprint", name="arm_footprint",
                           output="screen", parameters=[{"base_footprint": _base_footprint(params)}]))
     return nodes + [IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(share("nav2_bringup"), "launch", "navigation_launch.py")),

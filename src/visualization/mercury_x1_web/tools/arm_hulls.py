@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Arm link hull points for the arm-aware Nav2 footprint (mercury_x1_bringup/scripts/arm_footprint.py).
+"""Arm link hull points for the arm-aware Nav2 footprint (mercury_x1_bringup/src/arm_footprint.cpp).
 
 Reads the per-link GLBs (link frame, see convert_meshes.py) and keeps a few dozen points of each
 link's convex hull, written as YAML: {link: [[x, y, z], ...]}.

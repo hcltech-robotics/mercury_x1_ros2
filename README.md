@@ -80,7 +80,7 @@ trigger 95 % of the time; Silero scores it ≤ 0.3.
 thread per server; `composition:=false` for separate processes): idle CPU 72 % → 51 % of a core.
 
 ### Arm-aware footprint
-`nav.launch.py` also starts `arm_footprint.py` (`arm_footprint:=false` to skip): 5 Hz, the arm links'
+`nav.launch.py` also starts `arm_footprint` (C++, `src/arm_footprint.cpp`; `arm_footprint:=false` to skip): 5 Hz, the arm links'
 mesh hulls (`config/arm_hulls.yaml`, from `mercury_x1_web/tools/arm_hulls.py`) + 8 cm for a hand beyond
 each flange go through TF into base_footprint. If anything sticks out more than 5 cm past the
 nav2.yaml outline, `/local_costmap/footprint` and `/global_costmap/footprint` get the convex hull of
@@ -131,7 +131,7 @@ Keyboard driving: the **⌨ Drive** button (W/A/S/D or arrows, Shift = fast, Spa
 | `src/drivers/mercury_x1_driver` | C++ `base_node` (odom+TF, IMU, battery %, ultrasonic L/back/R, RGB LED, cmd_vel watchdog, rear guard) and `upper_body_node` (both arms + neck/jaw/waist: 50 Hz joint states, ArmState with flange coords, preemptible joint/Cartesian commands, power/stop services). Exclusive serial ownership. |
 | `src/core/mercury_x1_msgs` | `ArmState`, `BaseState`, `JointCommand`, `CartesianCommand` |
 | `src/core/mercury_x1_description` | URDF + calibrated sensor frames (base_footprint = drive axle) |
-| `src/bringup/mercury_x1_bringup` | `robot.launch.py`, `slam.launch.py mode:=mapping\|localization map:=<name>`, `nav.launch.py` (+ `arm_footprint.py`) |
+| `src/bringup/mercury_x1_bringup` | `robot.launch.py`, `slam.launch.py mode:=mapping\|localization map:=<name>`, `nav.launch.py` (+ `arm_footprint`, C++) |
 | `src/visualization/mercury_x1_web` | `rerun_bridge` (TF-aware Rerun scene, gRPC :9876, viewer :9090) + `web_server` (:8080) |
 
 Key topics: `/cmd_vel`, `/odom` (lidar ICP), `/wheel/odom`, `/imu/data_raw`, `/battery`, `/ultrasonic/{left,back,right}`, `/base/led`,
