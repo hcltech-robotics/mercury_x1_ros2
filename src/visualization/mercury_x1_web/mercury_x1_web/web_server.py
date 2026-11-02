@@ -45,6 +45,7 @@ from tf2_msgs.msg import TFMessage
 
 from .pose_chain import PoseChain
 from . import slam3d
+from .gpuprocs import GpuProcs
 from .sysstats import SysStats
 from .voice import VoiceChat
 from .wifi import Wifi
@@ -534,6 +535,7 @@ class App:
         threading.Thread(target=self._live3d_loop, daemon=True, name="live3d").start()
         self.head_port = head_port
         self.sysstats = SysStats()           # CPU / GPU load and temperatures for the status page
+        self.gpuprocs = GpuProcs()           # GPU memory per process (kiosk Status → GPU processes)
         self.jetson = self.jetson_versions()
         self.voice = VoiceChat(on_change=self._voice_changed)   # kiosk Chat tab
         self.voice_version = 0
@@ -606,7 +608,7 @@ class App:
                 "base": st["base"], "arms": st["arms"], "remote": st["remote"], "nav": st["nav"]["state"], "estop": st["estop"],
                 "procs": self.sup.status(), "map_name": self.map_name, "system": self.sysstats.snapshot(),
                 "nodes": self.node.node_names, "wifi": self.wifi.snapshot(), "ros": self.ros_network(),
-                "time": time.strftime("%H:%M"), "voice": self.voice.snapshot()}
+                "time": time.strftime("%H:%M"), "voice": self.voice.snapshot(), "gpu_procs": self.gpuprocs.snapshot()}
 
     async def head_ws(self, req):
         ws = web.WebSocketResponse(heartbeat=10)

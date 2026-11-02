@@ -91,6 +91,24 @@
   .temps { display: flex; gap: 22px; margin-top: 14px; font-variant-numeric: tabular-nums; }
   .temps b { font-weight: 600; }
 
+  /* right card on Status: ROS 2 nodes | GPU processes */
+  #st-tabs { display: flex; gap: 6px; margin: -4px 0 12px; }
+  #st-tabs button { min-height: 44px; padding: 0 16px; font-size: 16px; background: transparent; color: var(--muted); }
+  #st-tabs button.on { background: #134a66; border-color: var(--accent); color: var(--text); }
+  #st-tabs .count { margin-left: auto; align-self: center; font-size: 15px; color: var(--muted); }
+  .st-pane { display: none; }
+  .st-pane.on { display: block; }
+  #gpu-procs { width: 100%; border-collapse: collapse; font-size: 16px; font-variant-numeric: tabular-nums; }
+  #gpu-procs th { text-align: left; color: var(--muted); font-weight: 600; font-size: 13px; letter-spacing: .06em;
+    text-transform: uppercase; padding: 0 8px 8px; }
+  #gpu-procs td { padding: 7px 8px; border-top: 1px solid var(--line); vertical-align: middle; }
+  #gpu-procs td.num, #gpu-procs th.num { text-align: right; white-space: nowrap; }
+  #gpu-procs .what { display: block; color: var(--muted); font-size: 13px; }
+  #gpu-procs .gbar { width: 150px; }
+  #gpu-procs .gbar .bar { height: 10px; }
+  #gpu-procs .gbar .bar i { background: var(--accent); }
+  #gpu-procs tr.total td { font-weight: 600; }
+
   /* node bubbles */
   .group { margin: 2px 0 10px; }
   .group .gname { color: var(--muted); font-size: 14px; margin-bottom: 6px; }
@@ -211,8 +229,17 @@
     <div class="row small muted" id="sys-extra" style="margin-top:14px"></div>
   </div>
   <div class="card">
-    <h2>ROS 2 nodes <span id="node-count" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
-    <div id="nodes"></div>
+    <div id="st-tabs">
+      <button data-pane="nodes-pane" class="on">ROS 2 nodes</button>
+      <button data-pane="gpu-pane">GPU processes</button>
+      <span class="count" id="node-count"></span>
+    </div>
+    <div class="st-pane on" id="nodes-pane"><div id="nodes"></div></div>
+    <div class="st-pane" id="gpu-pane">
+      <table id="gpu-procs"><thead><tr><th>Process</th><th class="num">PID</th><th class="num">GPU memory</th><th></th>
+        <th class="num">RAM</th><th class="num">CPU</th></tr></thead><tbody></tbody></table>
+      <div class="small muted" id="gpu-note" style="margin-top:10px"></div>
+    </div>
   </div>
 </div>
 
@@ -308,6 +335,15 @@ for (const b of document.querySelectorAll("#tabs button")) b.onclick = () => {
   document.querySelectorAll(".page").forEach((p) => p.classList.toggle("active", p.id === b.dataset.tab));
 };
 
+// Status: right card shows ROS 2 nodes or GPU processes
+let stPane = "nodes-pane";
+for (const b of document.querySelectorAll("#st-tabs button")) b.onclick = () => {
+  stPane = b.dataset.pane;
+  document.querySelectorAll("#st-tabs button").forEach((x) => x.classList.toggle("on", x === b));
+  document.querySelectorAll(".st-pane").forEach((p) => p.classList.toggle("on", p.id === stPane));
+  renderNodes(); renderGpuProcs();
+};
+
 // ---- status socket (1 Hz), reconnects forever
 function connect() {
   const ws = new WebSocket(`ws://${location.host}/ws`);
@@ -325,7 +361,7 @@ function render() {
   const slam = S.procs.slam, nav = S.procs.nav;
   $("#state").textContent = [slam.running ? `${slam.mode} · ${slam.map}` : "SLAM off", nav.running ? `Nav ${S.nav}` : "Nav off"].join("  ·  ");
   $("#estop").classList.toggle("show", !!S.estop);
-  renderBattery(); renderWifiChip(); renderSystem(); renderNodes(); renderArms(); renderWifi(); renderRemote(); renderVoice();
+  renderBattery(); renderWifiChip(); renderSystem(); renderNodes(); renderGpuProcs(); renderArms(); renderWifi(); renderRemote(); renderVoice();
 }
 
 function renderBattery() {
@@ -376,7 +412,27 @@ function renderSystem() {
 function renderNodes() {      // groups and bubbles: nodes_ui.js (shared with the control page)
   const r = NodesUI.render(S.nodes, S.procs);
   if (r.html !== $("#nodes")._h) { $("#nodes").innerHTML = r.html; $("#nodes")._h = r.html; }
-  $("#node-count").textContent = `· ${r.running} running` + (r.missing ? ` · ${r.missing} missing` : "");
+  if (stPane === "nodes-pane") $("#node-count").textContent = `${r.running} running` + (r.missing ? ` · ${r.missing} missing` : "");
+}
+
+// GPU memory per process (nvmap via jtop; on the Jetson GPU memory is part of the RAM)
+function renderGpuProcs() {
+  const g = S.gpu_procs || {}, procs = g.procs || [];
+  if (stPane === "gpu-pane") $("#node-count").textContent = procs.length ? `${procs.length} using GPU memory` : "";
+  const top = Math.max(1, ...procs.map((p) => p.gpu_mb));
+  const fmt = (mb) => mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${mb} MB`;
+  const rows = procs.map((p) => `<tr><td>${esc(p.name)}${p.what ? `<span class="what">${esc(p.what)}</span>` : ""}</td>` +
+    `<td class="num muted">${p.pid}</td><td class="num">${fmt(p.gpu_mb)}</td>` +
+    `<td class="gbar"><div class="bar"><i style="width:${(100 * p.gpu_mb / top).toFixed(0)}%"></i></div></td>` +
+    `<td class="num">${fmt(p.ram_mb)}</td><td class="num">${p.cpu.toFixed(0)} %</td></tr>`).join("");
+  const y = S.system || {};
+  const total = procs.length ? `<tr class="total"><td>Total</td><td></td><td class="num">${fmt(g.total_mb)}</td>` +
+    `<td colspan="3" class="muted small">${y.ram_total_mb ? `of ${(y.ram_total_mb / 1024).toFixed(1)} GB shared RAM` : ""}</td></tr>` : "";
+  const html = rows + total || `<tr><td colspan="6" class="muted">${esc(g.error || "no process holds GPU memory")}</td></tr>`;
+  const body = $("#gpu-procs tbody");
+  if (html !== body._h) { body.innerHTML = html; body._h = html; }
+  $("#gpu-note").textContent = g.error ? "" : `GPU memory comes out of the shared RAM. ` +
+    (g.idle ? `${g.idle} more process${g.idle > 1 ? "es have" : " has"} a GPU context but no GPU memory.` : "");
 }
 
 // ---- switches: show the robot's state; a tap asks for a change and waits up to 8 s for it to show

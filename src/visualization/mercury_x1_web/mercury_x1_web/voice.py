@@ -1,14 +1,14 @@
-"""Hands-free voice chat for the head display: mic -> speech service (11.51) -> Qwen -> speech -> speaker.
+"""Hands-free voice chat for the head display: mic -> speech (robot) -> Qwen (11.51) -> speech -> speaker.
 
 Runs on web_server's asyncio loop (all I/O, no threads):
-  * `arecord` streams the XFM-DP mic array (16 kHz mono, beamformed on the board) to the speech service's
-    /listen WebSocket, which finds the phrases and transcribes them with Whisper.
+  * `arecord` streams the XFM-DP mic array (16 kHz mono, beamformed on the board) to the robot's own speech
+    service (`mercury-speech`, server/robot_speech, 127.0.0.1:8097, VOICE_SPEECH_URL): /listen finds the
+    phrases (Silero VAD) and transcribes them (Parakeet, CPU). No audio leaves the robot; only text goes to Qwen.
   * Each phrase goes to Qwen (the pennyroyal proxy, streamed, thinking off); the reply is cut into
     sentences, each one is synthesised by Kokoro (/tts) and played with `aplay` on the C-Media speaker
-    while the next is being made. Kokoro runs on the robot's GPU (`mercury-tts`, 127.0.0.1:8097,
-    VOICE_TTS_URL; 11.51 only does speech-to-text).
+    while the next is being made (Kokoro on the robot's GPU, same service: /tts).
   * The mic is muted while the robot talks (no echo loop) and for a short tail after it.
-Config: ~/.config/mercury_x1/voice.env (URLs, bearer token, ALSA devices; chmod 600).
+Config: ~/.config/mercury_x1/voice.env (model URL + bearer token, ALSA devices; chmod 600).
 """
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ SYSTEM_PROMPT = (
 HISTORY_TURNS = 8          # user + assistant pairs kept as context
 IDLE_RESET_S = 180         # forget the conversation after this long without speech
 UNMUTE_TAIL_S = 0.35       # keep the mic muted this long after the speaker stops
-LOCAL_TTS = "http://127.0.0.1:8097"   # server/robot_tts on the Jetson GPU
+LOCAL_SPEECH = "http://127.0.0.1:8097"   # server/robot_speech: Parakeet STT + Kokoro TTS
 SENTENCE_END = re.compile(r"(?<=[.!?;:])\s+|\n+")
 FIRST_CLAUSE = re.compile(r"^((?:\S+\s+){3,}?\S+,)\s+")   # a reply's opening clause of 4+ words, up to its comma
 
@@ -209,14 +209,17 @@ class VoiceChat:
                 await asyncio.sleep(3.0)
 
     async def _session_run(self, conf: dict) -> None:
-        if not conf.get("VOICE_STT_TTS_URL"):
+        if not conf.get("VOICE_LLM_URL"):
             raise RuntimeError(f"not configured ({CONF})")
         if not self._vol_applied:
             await self.apply_volume()
         self._session = aiohttp.ClientSession(headers={"Authorization": f"Bearer {conf.get('VOICE_API_KEY', '')}"})
-        url = conf["VOICE_STT_TTS_URL"].rstrip("/")
-        self._ws = await self._session.ws_connect(url.replace("http", "ws", 1) + "/listen", heartbeat=15,
-                                                  timeout=aiohttp.ClientWSTimeout(ws_close=5))
+        url = conf.get("VOICE_SPEECH_URL", LOCAL_SPEECH).rstrip("/")
+        try:
+            self._ws = await self._session.ws_connect(url.replace("http", "ws", 1) + "/listen", heartbeat=15,
+                                                      timeout=aiohttp.ClientWSTimeout(ws_close=5))
+        except aiohttp.ClientConnectionError as e:
+            raise RuntimeError("speech service is not running (sudo systemctl start mercury-speech)") from e
         self._arecord = await asyncio.create_subprocess_exec(
             "arecord", "-q", "-D", conf.get("VOICE_MIC", "default"), "-f", "S16_LE", "-r", "16000", "-c", "1",
             "-t", "raw", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
@@ -344,9 +347,9 @@ class VoiceChat:
             sentence = following
 
     async def _tts(self, conf: dict, text: str) -> bytes:
-        """wav from the robot's own Kokoro (Jetson GPU, mercury-tts)"""
+        """wav from the robot's own Kokoro (Jetson GPU, mercury-speech)"""
         body = {"text": text, "voice": self.settings["voice"], "speed": self.settings["speed"]}
-        base = conf.get("VOICE_TTS_URL", LOCAL_TTS).rstrip("/")
+        base = conf.get("VOICE_SPEECH_URL", LOCAL_SPEECH).rstrip("/")
         t = time.time()
         try:
             async with self._session.post(base + "/tts", json=body, timeout=aiohttp.ClientTimeout(total=15)) as r:
@@ -354,7 +357,7 @@ class VoiceChat:
                     raise RuntimeError(f"speech: HTTP {r.status}")
                 data = await r.read()
         except aiohttp.ClientConnectionError as e:
-            raise RuntimeError("speech: mercury-tts is not running (sudo systemctl start mercury-tts)") from e
+            raise RuntimeError("speech service is not running (sudo systemctl start mercury-speech)") from e
         self._last_tts_ms = round((time.time() - t) * 1000)
         self._last_tts_on = "Jetson" if urlparse(base).hostname in ("127.0.0.1", "localhost") else urlparse(base).hostname
         return data

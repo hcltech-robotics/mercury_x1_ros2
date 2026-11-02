@@ -61,14 +61,15 @@ that name goes to the trash first). Waypoints belong to a map (`<name>.waypoints
 **Delete all**, or the **✕ Waypoint** tool (click a waypoint on the 2D map or in the 3D view).
 
 ### Voice chat (head display → Chat tab)
-Tap the microphone, then just speak. Robot: `arecord` on the XFM-DP mic array (16 kHz, beamformed on the board)
-streams to the speech service on 192.168.11.51:8096 (`server/voice_service`, systemd `mercury-voice`): Silero VAD
-finds phrases, Whisper large-v3-turbo (GPU, ~2.5 GB, ~0.1 s/phrase) transcribes; `voice.py` in web_server sends the
-text to Qwen (pennyroyal proxy :11434, thinking off, ~0.2 s to first word), cuts the reply into sentences (the
-opening clause goes first), Kokoro speaks them, `aplay` plays on the C-Media speaker; the mic is muted while it talks.
-Kokoro runs on the robot's GPU: `server/robot_tts` (systemd `mercury-tts`, 127.0.0.1:8097, own venv ~/mercury-tts with
-the Jetson onnxruntime-gpu wheel; `server/robot_tts/setup.sh` installs it). ~0.35-0.8 s per sentence, ~0.9 GB of
-memory. 11.51 only transcribes (its Kokoro is off: `VOICE_TTS=0` in `mercury-voice.service`).
+Tap the microphone, then just speak. Speech runs on the robot; only text goes to Qwen on 11.51.
+`arecord` on the XFM-DP mic array (16 kHz, beamformed on the board) streams to `mercury-speech` (`server/robot_speech`,
+127.0.0.1:8097, own venv ~/mercury-speech with the Jetson onnxruntime-gpu wheel; `server/robot_speech/setup.sh`
+installs it): Silero VAD finds phrases, NVIDIA Parakeet TDT 0.6B v2 int8 transcribes them on the CPU (~0.35 s for a
+short phrase, ~1.2 s for 7 s; int8 does not fit on CUDA here), Kokoro speaks on the GPU (~0.35-0.8 s per sentence).
+`voice.py` in web_server sends the text to Qwen (pennyroyal proxy :11434, thinking off, ~0.2 s to first word), cuts
+the reply into sentences (the opening clause goes first), `aplay` plays them on the C-Media speaker; the mic is muted
+while it talks. ~0.8 GB GPU + ~1 GB RAM in all (kiosk Status → GPU processes shows it). `server/voice_service`
+(Whisper on 11.51, systemd `mercury-voice`) is the old remote speech service, disabled since 2026-11-02.
 Config + bearer token: `~/.config/mercury_x1/voice.env` (chmod 600). The room's 150-300 Hz hum made webrtcvad
 trigger 95 % of the time; Silero scores it ≤ 0.3.
 
