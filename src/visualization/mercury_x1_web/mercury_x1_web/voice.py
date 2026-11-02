@@ -5,7 +5,8 @@ Runs on web_server's asyncio loop (all I/O, no threads):
     /listen WebSocket, which finds the phrases and transcribes them with Whisper.
   * Each phrase goes to Qwen (the pennyroyal proxy, streamed, thinking off); the reply is cut into
     sentences, each one is synthesised by Kokoro (/tts) and played with `aplay` on the C-Media speaker
-    while the next is being made.
+    while the next is being made. Kokoro runs on the robot's GPU (`mercury-tts`, 127.0.0.1:8097,
+    VOICE_TTS_URL); when that is down the speech service on 11.51 speaks instead.
   * The mic is muted while the robot talks (no echo loop) and for a short tail after it.
 Config: ~/.config/mercury_x1/voice.env (URLs, bearer token, ALSA devices; chmod 600).
 """
@@ -16,6 +17,7 @@ import json
 import os
 import re
 import time
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -33,7 +35,9 @@ SYSTEM_PROMPT = (
 HISTORY_TURNS = 8          # user + assistant pairs kept as context
 IDLE_RESET_S = 180         # forget the conversation after this long without speech
 UNMUTE_TAIL_S = 0.35       # keep the mic muted this long after the speaker stops
+LOCAL_TTS = "http://127.0.0.1:8097"   # server/robot_tts on the Jetson GPU
 SENTENCE_END = re.compile(r"(?<=[.!?;:])\s+|\n+")
+FIRST_CLAUSE = re.compile(r"^((?:\S+\s+){3,}?\S+,)\s+")   # a reply's opening clause of 4+ words, up to its comma
 
 
 def load_conf() -> dict:
@@ -132,7 +136,7 @@ class VoiceChat:
         self._session = session
         try:
             await self._mute(True)
-            wav = await self._tts(conf["VOICE_STT_TTS_URL"].rstrip("/") + "/tts", TEST_PHRASE)
+            wav = await self._tts(conf, TEST_PHRASE)
             await self._play(wav, conf)
         except Exception as e:  # noqa: BLE001 - shown in the conversation
             self._say("note", f"voice test failed: {str(e)[:120] or type(e).__name__}")
@@ -275,7 +279,7 @@ class VoiceChat:
                    [{"role": "user", "content": text}]
             body = {"model": conf.get("VOICE_LLM_MODEL", "pennyroyal"), "messages": msgs, "stream": True,
                     "max_tokens": 300, "temperature": 0.7, "chat_template_kwargs": {"enable_thinking": False}}
-            pending, first = "", None
+            pending, first, spoken = "", None, False
             async with self._session.post(conf["VOICE_LLM_URL"], json=body,
                                           timeout=aiohttp.ClientTimeout(total=60)) as r:
                 if r.status != 200:
@@ -292,9 +296,15 @@ class VoiceChat:
                     answer += piece
                     pending += piece
                     parts = SENTENCE_END.split(pending)
+                    clause = FIRST_CLAUSE.match(parts[0]) if not spoken and len(parts) == 1 else None
+                    if clause and speakable(clause.group(1)):    # speak the opening clause now: earlier first word
+                        await queue.put(speakable(clause.group(1)))
+                        spoken, pending = True, pending[clause.end():]
+                        continue
                     for sentence in parts[:-1]:      # complete sentences go to speech right away
                         if speakable(sentence):
                             await queue.put(speakable(sentence))
+                            spoken = True
                     pending = parts[-1]
             if speakable(pending):
                 await queue.put(speakable(pending))
@@ -321,30 +331,42 @@ class VoiceChat:
 
     async def _speak_queue(self, queue: asyncio.Queue, conf: dict) -> None:
         """synthesise sentence n+1 while sentence n plays"""
-        url = conf["VOICE_STT_TTS_URL"].rstrip("/") + "/tts"
         nxt: asyncio.Task | None = None
         sentence = await queue.get()
         while sentence is not None:
-            wav_task = nxt or asyncio.create_task(self._tts(url, sentence))
+            wav_task = nxt or asyncio.create_task(self._tts(conf, sentence))
             following = await queue.get()
-            nxt = asyncio.create_task(self._tts(url, following)) if following is not None else None
+            nxt = asyncio.create_task(self._tts(conf, following)) if following is not None else None
             wav = await wav_task
-            self.stats["tts_ms"] = self._last_tts_ms
+            self.stats["tts_ms"], self.stats["tts_on"] = self._last_tts_ms, self._last_tts_on
             self._set("speaking")
             await self._play(wav, conf)
             sentence = following
 
-    async def _tts(self, url: str, text: str) -> bytes:
-        t = time.time()
-        async with self._session.post(url, json={"text": text, "voice": self.settings["voice"], "speed": self.settings["speed"]},
-                                      timeout=aiohttp.ClientTimeout(total=30)) as r:
-            if r.status != 200:
-                raise RuntimeError(f"speech: HTTP {r.status}")
-            data = await r.read()
-        self._last_tts_ms = round((time.time() - t) * 1000)
-        return data
+    async def _tts(self, conf: dict, text: str) -> bytes:
+        """wav from the robot's own Kokoro (GPU); the speech service on 11.51 when that one is not answering"""
+        body = {"text": text, "voice": self.settings["voice"], "speed": self.settings["speed"]}
+        local = conf.get("VOICE_TTS_URL", LOCAL_TTS).rstrip("/")
+        targets = [(local, "Jetson", aiohttp.ClientTimeout(total=15, sock_connect=1))] if local else []
+        if conf.get("VOICE_STT_TTS_URL"):
+            remote = conf["VOICE_STT_TTS_URL"].rstrip("/")
+            targets.append((remote, urlparse(remote).hostname or "server", aiohttp.ClientTimeout(total=30)))
+        err: Exception = RuntimeError("speech: no TTS configured")
+        for base, where, timeout in targets:
+            t = time.time()
+            try:
+                async with self._session.post(base + "/tts", json=body, timeout=timeout) as r:
+                    if r.status != 200:
+                        raise RuntimeError(f"speech ({where}): HTTP {r.status}")
+                    data = await r.read()
+            except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError) as e:
+                err = e
+                continue
+            self._last_tts_ms, self._last_tts_on = round((time.time() - t) * 1000), where
+            return data
+        raise err
 
-    _last_tts_ms = 0
+    _last_tts_ms, _last_tts_on = 0, ""
 
     async def _play(self, wav: bytes, conf: dict) -> None:
         self._aplay = await asyncio.create_subprocess_exec(

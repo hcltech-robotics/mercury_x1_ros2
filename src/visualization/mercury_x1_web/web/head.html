@@ -519,7 +519,7 @@ function renderVoice() {
   }
   $("#v-test").disabled = st === "thinking" || st === "speaking";
   const s = v.stats || {};
-  $("#v-stats").textContent = s.stt_ms != null ? `heard in ${s.stt_ms} ms · first word ${s.llm_first_s ?? "?"} s · voice ${s.tts_ms ?? "?"} ms` : "";
+  $("#v-stats").textContent = s.stt_ms != null ? `heard in ${s.stt_ms} ms · first word ${s.llm_first_s ?? "?"} s · voice ${s.tts_ms ?? "?"} ms${s.tts_on ? ` (${s.tts_on})` : ""}` : "";
   const h = (v.transcript || []).map((m) => `<div class="msg ${m.role}">${esc(m.text)}<span class="t">${m.t}</span></div>`).join("");
   const box = $("#convo");
   if (h && h !== box._h) { box.innerHTML = h; box._h = h; box.scrollTop = box.scrollHeight; }

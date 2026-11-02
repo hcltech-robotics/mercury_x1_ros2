@@ -64,8 +64,11 @@ that name goes to the trash first). Waypoints belong to a map (`<name>.waypoints
 Tap the microphone, then just speak. Robot: `arecord` on the XFM-DP mic array (16 kHz, beamformed on the board)
 streams to the speech service on 192.168.11.51:8096 (`server/voice_service`, systemd `mercury-voice`): Silero VAD
 finds phrases, Whisper large-v3-turbo (GPU, ~2.5 GB, ~0.1 s/phrase) transcribes; `voice.py` in web_server sends the
-text to Qwen (pennyroyal proxy :11434, thinking off, ~0.2 s to first word), cuts the reply into sentences, Kokoro
-(11.51 CPU, ~0.2 s/sentence) speaks them, `aplay` plays on the C-Media speaker; the mic is muted while it talks.
+text to Qwen (pennyroyal proxy :11434, thinking off, ~0.2 s to first word), cuts the reply into sentences (the
+opening clause goes first), Kokoro speaks them, `aplay` plays on the C-Media speaker; the mic is muted while it talks.
+Kokoro runs on the robot's GPU: `server/robot_tts` (systemd `mercury-tts`, 127.0.0.1:8097, own venv ~/mercury-tts with
+the Jetson onnxruntime-gpu wheel; `server/robot_tts/setup.sh` installs it). ~0.35-0.8 s per sentence, ~0.9 GB of
+memory; when it is down, 11.51 speaks instead (CPU, ~0.2 s). The Chat tab shows which one spoke.
 Config + bearer token: `~/.config/mercury_x1/voice.env` (chmod 600). The room's 150-300 Hz hum made webrtcvad
 trigger 95 % of the time; Silero scores it ≤ 0.3.
 
