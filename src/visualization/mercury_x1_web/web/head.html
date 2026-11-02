@@ -44,7 +44,24 @@
   #status { grid-template-columns: 420px 1fr; gap: 18px; align-content: start; }
   #settings { grid-template-columns: 1fr 1fr; gap: 18px; align-content: start; }
   /* chat: no animations (the kiosk renders on the CPU); the state shows as colour */
-  #chat { grid-template-columns: 280px 1fr 300px; gap: 18px; }
+  #chat { grid-template-columns: 300px 1fr; gap: 18px; }
+  /* voice tab: wake word + board | direction + events | voice output */
+  #voicetab { grid-template-columns: 300px 1fr 300px; gap: 18px; }
+  #vb-presets { display: flex; flex-direction: column; gap: 6px; }
+  #vb-presets button { min-height: 48px; font-size: 16px; text-align: left; padding: 0 14px; }
+  #vb-presets button.on { background: #134a66; border-color: var(--accent); }
+  #vb-thr button { min-height: 44px; }
+  #vb-thr button.on { background: #134a66; border-color: var(--accent); }
+  .kv { display: grid; grid-template-columns: 96px 1fr; gap: 4px 10px; font-size: 15px; margin-top: 10px; }
+  .kv span:nth-child(odd) { color: var(--muted); }
+  .kv span { min-width: 0; overflow-wrap: anywhere; }
+  #dir-card { display: flex; flex-direction: column; min-height: 0; }
+  #radar { width: 100%; height: 210px; display: block; }
+  #wake-last { text-align: center; font-size: 20px; margin: 4px 0 10px; min-height: 26px; }
+  #wake-list { flex: 1; overflow-y: auto; min-height: 0; }
+  #wake-list table { width: 100%; border-collapse: collapse; font-size: 15px; font-variant-numeric: tabular-nums; }
+  #wake-list td, #wake-list th { padding: 5px 6px; border-top: 1px solid var(--line); text-align: left; }
+  #wake-list th { color: var(--muted); font-weight: 600; font-size: 13px; border-top: 0; }
   #talk { display: flex; flex-direction: column; align-items: center; gap: 10px; padding-top: 16px; text-align: center; }
   #mic { flex: none; width: 170px; height: 170px; min-height: 0; border-radius: 50%; padding: 0; border: 6px solid var(--line);
     background: var(--panel2); display: flex; align-items: center; justify-content: center; }
@@ -222,6 +239,7 @@
 <div id="tabs">
   <button data-tab="status" class="active">Status</button>
   <button data-tab="settings">Settings</button>
+  <button data-tab="voicetab">Voice</button>
   <button data-tab="chat">Chat</button>
 </div>
 
@@ -266,6 +284,24 @@
   <div class="card" id="convo-card">
     <h2>Conversation</h2>
     <div id="convo"><div class="muted">Switch listening on and just speak - Mercury answers out loud.</div></div>
+  </div>
+</div>
+
+<div class="page" id="voicetab">
+  <div class="card">
+    <h2>Wake word (voice board)</h2>
+    <div id="vb-presets"></div>
+    <div class="lbl small" style="margin:12px 0 6px">Threshold</div>
+    <div class="vseg" id="vb-thr" style="grid-column:auto"><button data-t="700">700</button><button data-t="800">800</button><button data-t="900">900</button><button data-t="1100">1100</button></div>
+    <div class="muted small">lower = wakes more easily (and falsely)</div>
+    <div class="small" id="vb-job" style="margin-top:8px;min-height:20px"></div>
+    <div class="kv" id="vb-info"></div>
+  </div>
+  <div class="card" id="dir-card">
+    <h2>Direction &amp; wake events</h2>
+    <svg id="radar" viewBox="0 0 320 175"></svg>
+    <div id="wake-last" class="muted">no wake yet - say the wake word</div>
+    <div id="wake-list"></div>
   </div>
   <div class="card" id="voice-card">
     <h2>Voice</h2>
@@ -394,7 +430,7 @@ function render() {
   const slam = S.procs.slam, nav = S.procs.nav;
   $("#state").textContent = [slam.running ? `${slam.mode} · ${slam.map}` : "SLAM off", nav.running ? `Nav ${S.nav}` : "Nav off"].join("  ·  ");
   $("#estop").classList.toggle("show", !!S.estop);
-  renderBattery(); renderWifiChip(); renderSystem(); renderNodes(); renderGpuProcs(); renderArms(); renderWaist(); renderWifi(); renderRemote(); renderVoice();
+  renderBattery(); renderWifiChip(); renderSystem(); renderNodes(); renderGpuProcs(); renderArms(); renderWaist(); renderWifi(); renderRemote(); renderVoice(); renderVoiceBoard();
 }
 
 function renderBattery() {
@@ -613,6 +649,74 @@ function renderVoice() {
   const box = $("#convo");
   if (h && h !== box._h) { box.innerHTML = h; box._h = h; box.scrollTop = box.scrollHeight; }
   else if (!h && box._h) { box.innerHTML = `<div class="muted">Switch listening on and just speak - Mercury answers out loud.</div>`; box._h = ""; }
+}
+
+// ---- voice board: wake word, direction, events (Voice tab)
+let vbThr = null;
+for (const b of document.querySelectorAll("#vb-thr button")) b.onclick = () => {
+  vbThr = +b.dataset.t; document.querySelectorAll("#vb-thr button").forEach((x) => x.classList.toggle("on", x === b)); };
+$("#vb-presets").onclick = (e) => {
+  const b = e.target.closest("button[data-k]"); if (!b) return;
+  const thr = vbThr || ((S.voice_board || {}).conf || {}).threshold || 900;
+  if (!confirm(`Load the wake word "${b.textContent}" (threshold ${thr})? The board compiles it and restarts its engine (~40 s).`)) return;
+  api("wake_word", { keyword: b.dataset.k, threshold: thr });
+};
+// radar: linear array -> 0..180 deg, 0 at the right, 90 up (to be calibrated: which side is the robot's left)
+const RC = { x: 160, y: 158, r: 140 };
+const rpt = (deg, r) => [RC.x + r * Math.cos(deg * Math.PI / 180), RC.y - r * Math.sin(deg * Math.PI / 180)];
+function radarBase() {
+  let h = "";
+  const sectors = [[0, 60], [60, 120], [120, 180]];      // mic4 beams 0..2 (assumed equal sectors)
+  sectors.forEach(([a, b], i) => {
+    const [x1, y1] = rpt(a, RC.r), [x2, y2] = rpt(b, RC.r), [lx, ly] = rpt((a + b) / 2, RC.r * 0.62);
+    h += `<path id="beam${i}" d="M${RC.x},${RC.y} L${x1},${y1} A${RC.r},${RC.r} 0 0 0 ${x2},${y2} Z" fill="#1a2733" stroke="#323743"/>` +
+         `<text x="${lx}" y="${ly}" fill="#5d6576" font-size="13" text-anchor="middle">beam ${i}</text>`;
+  });
+  for (const d of [0, 45, 90, 135, 180]) {
+    const [x, y] = rpt(d, RC.r + 10);
+    h += `<text x="${x}" y="${y + 4}" fill="#959cab" font-size="12" text-anchor="middle">${d}°</text>`;
+  }
+  return h + `<circle cx="${RC.x}" cy="${RC.y}" r="5" fill="#cfd3da"/><g id="radar-dyn"></g>`;
+}
+$("#radar").innerHTML = radarBase();
+function renderVoiceBoard() {
+  const vb = S.voice_board; if (!vb) return;
+  const conf = vb.conf || {}, now = S.now || Date.now() / 1000;
+  setHTML("#vb-presets", (vb.presets || []).map((p) =>
+    `<button data-k="${esc(p.keyword)}" class="${p.keyword === conf.keyword ? "on" : ""}" ${vb.job && vb.job.busy ? "disabled" : ""}>${esc(p.label)}</button>`).join(""));
+  if (vbThr == null) document.querySelectorAll("#vb-thr button").forEach((x) => x.classList.toggle("on", +x.dataset.t === conf.threshold));
+  $("#vb-job").textContent = vb.job ? vb.job.message || "" : "";
+  $("#vb-job").style.color = vb.job && vb.job.busy ? "var(--warn)" : /failed/.test((vb.job || {}).message || "") ? "var(--bad)" : "";
+  setHTML("#vb-info", [
+    ["board", !vb.running ? "driver not running" : vb.alive ? "alive" : vb.port_open ? "port open, silent" : "not connected"],
+    ["loaded", `${esc(conf.keyword || "?")} @ ${conf.threshold || "?"}`],
+    ["wakes", `${vb.wake_count}`],
+    ["firmware", esc((vb.firmware || "—").split(";")[0])],
+  ].map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join(""));
+  const wakes = vb.wakes || [];
+  let dyn = "";
+  wakes.slice().reverse().forEach((w, i, arr) => {
+    if (w.angle == null) return;
+    const age = now - w.t, last = i === arr.length - 1;
+    if (last && age < 15) {
+      const [x, y] = rpt(w.angle, RC.r - 6);
+      dyn += `<line x1="${RC.x}" y1="${RC.y}" x2="${x}" y2="${y}" stroke="#4cc2ff" stroke-width="5" stroke-linecap="round"/>`;
+    }
+    const [x, y] = rpt(w.angle, RC.r * 0.88);
+    const op = Math.max(0.15, 1 - age / 120);
+    dyn += `<circle cx="${x}" cy="${y}" r="${last ? 9 : 6}" fill="${last ? "#4cc2ff" : "#cfd3da"}" opacity="${op.toFixed(2)}"/>`;
+  });
+  setHTML("#radar-dyn", dyn);
+  const lw = wakes[0];
+  for (let i = 0; i < 3; i++) { const e = $(`#beam${i}`); if (e) e.setAttribute("fill", lw && lw.beam === i && now - lw.t < 15 ? "#134a66" : "#1a2733"); }
+  if (lw) {
+    const ago = Math.max(0, Math.round(now - lw.t));
+    $("#wake-last").textContent = `${lw.keyword} · ${lw.angle ?? "?"}° · beam ${lw.beam} · score ${lw.score ?? "?"} · ${ago < 60 ? ago + " s" : Math.round(ago / 60) + " min"} ago`;
+    $("#wake-last").className = now - lw.t < 15 ? "" : "muted";
+  }
+  const hhmmss = (t) => new Date(t * 1000).toTimeString().slice(0, 8);
+  setHTML("#wake-list", wakes.length ? `<table><tr><th>time</th><th>wake word</th><th>angle</th><th>beam</th><th>score</th></tr>` +
+    wakes.map((w) => `<tr><td>${hhmmss(w.t)}</td><td>${esc(w.keyword)}</td><td>${w.angle ?? "—"}°</td><td>${w.beam}</td><td>${w.score ?? "—"}</td></tr>`).join("") + "</table>" : "");
 }
 
 // ---- Unitree remote

@@ -29,7 +29,8 @@ from aiohttp import web
 from ament_index_python.packages import get_package_share_directory
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import Pose, PoseArray, PoseStamped, PoseWithCovarianceStamped, Twist
-from mercury_x1_msgs.msg import ArmState, BaseState, JointCommand
+from mercury_x1_msgs.msg import ArmState, BaseState, JointCommand, VoiceBoardState, VoiceWake
+from mercury_x1_msgs.srv import SetWakeWord
 from nav2_msgs.action import FollowWaypoints, NavigateToPose
 from nav_msgs.msg import OccupancyGrid, Path
 from PIL import Image as PILImage
@@ -78,6 +79,17 @@ MAPPING_HEAD = {"head": 0.0, "eye": -5.7}
 # (the arms swing with it; cable wrap untested beyond that)
 WAIST_LIMIT_DEG = 90.0
 BODY_JOINTS = ("body", "head", "eye")     # waist, neck, jaw: positions for the pages
+# head voice board (mercury_x1_voice_board): wake words to pick on the kiosk Voice tab. The board's engine is
+# Mandarin-only; English words must come from its built-in lexicon (voice_board english_lexicon.txt), several
+# keywords can be loaded at once (";"), each wake event says which one fired.
+VOICE_BOARD_CONF = os.path.expanduser("~/.config/mercury_x1/voice_board.json")
+WAKE_PRESETS = [
+    {"keyword": "xiao3 wei1 xiao3 wei1", "label": "小微小微 (factory, Mandarin)"},
+    {"keyword": "hello computer", "label": "hello computer"},
+    {"keyword": "hey memory", "label": "hey memory"},
+    {"keyword": "hey merry carry", "label": "hey merry carry"},
+    {"keyword": "hello computer;hey memory;hey merry carry", "label": "all three English"},
+]
 VIEWER_CACHE = os.path.expanduser(f"~/.cache/mercury_x1_web/rerun-web-viewer/{VIEWER_VERSION}")
 
 
@@ -174,6 +186,14 @@ class WebNode(Node):
         self.waypoints_changed = None         # set by App: persist + republish
         self.remote: dict | None = None       # Unitree BLE remote (mercury_x1_teleop/unitree_remote)
         self.body_joints: dict[str, float] = {}   # waist / neck / jaw [deg] from /joint_states
+        self.vb_state: VoiceBoardState | None = None   # head voice board link (mercury_x1_voice_board)
+        self.vb_wakes: list[dict] = []                 # last wake events, newest first
+        try:
+            with open(VOICE_BOARD_CONF) as f:
+                self.vb_conf = json.load(f)
+        except (OSError, ValueError):
+            self.vb_conf = {"keyword": WAKE_PRESETS[0]["keyword"], "threshold": 900}
+        self.vb_job = {"busy": False, "message": ""}  # wake word change in progress / result
 
         self.chain = PoseChain()
         self.create_subscription(TFMessage, "/tf", self.chain.update, 50)
@@ -185,6 +205,9 @@ class WebNode(Node):
         for s in ("left", "right"):
             self.create_subscription(ArmState, f"/{s}_arm/state", lambda m, s=s: self.arms.__setitem__(s, m), 10)
         self.create_subscription(JointState, "/joint_states", self._on_joints, 10)
+        self.create_subscription(VoiceBoardState, "/voice_board/state", lambda m: setattr(self, "vb_state", m), 10)
+        self.create_subscription(VoiceWake, "/voice_board/wake", self._on_wake, 10)
+        self.cli_wake_word = self.create_client(SetWakeWord, "/voice_board/set_wake_word")
         self.pub_cmd = self.create_publisher(Twist, "/cmd_vel", 10)
         self.pub_init = self.create_publisher(PoseWithCovarianceStamped, "/initialpose", 10)
         self.pub_wps = self.create_publisher(PoseArray, "/web/waypoints", LATCHED)
@@ -496,6 +519,42 @@ class WebNode(Node):
         else:
             self.get_logger().info("E-stop released (base MCU back or arms powered)")
 
+    def _on_wake(self, m: VoiceWake) -> None:
+        self.vb_wakes = ([{"t": time.time(), "keyword": m.keyword, "angle": None if math.isnan(m.angle_deg) else
+                           round(m.angle_deg, 1), "beam": m.beam, "score": None if math.isnan(m.score) else round(m.score)}]
+                         + self.vb_wakes)[:30]
+
+    def set_wake_word(self, keyword: str, threshold: int) -> None:
+        """board compiles the model (~30-60 s) and reloads; result in vb_job"""
+        if self.vb_job["busy"]:
+            return
+        if not self.cli_wake_word.service_is_ready():
+            self.vb_job = {"busy": False, "message": "voice board driver is not running"}
+            return
+        n = len(keyword.split(";"))
+        req = SetWakeWord.Request(keyword=keyword, threshold=";".join([str(threshold)] * n), reload=True)
+        self.vb_job = {"busy": True, "message": f"compiling '{keyword}' on the board…", "t": time.time()}
+
+        def done(fut) -> None:
+            r = fut.result()
+            ok = r is not None and (r.success or "no reply" in r.message)   # the reply can come after the timeout
+            self.vb_job = {"busy": False, "message": ("loaded" if r and r.success else
+                                                      "sent (the board answered late); test it") if ok else
+                           f"failed: {r.message if r else 'no response'}"}
+            if ok:
+                self.vb_conf = {"keyword": keyword, "threshold": threshold}
+                os.makedirs(os.path.dirname(VOICE_BOARD_CONF), exist_ok=True)
+                with open(VOICE_BOARD_CONF, "w") as f:
+                    json.dump(self.vb_conf, f)
+        self.cli_wake_word.call_async(req).add_done_callback(done)
+
+    def voice_board_status(self) -> dict:
+        st = self.vb_state
+        return {"running": st is not None, "alive": bool(st and st.alive), "port_open": bool(st and st.port_open),
+                "firmware": st.firmware_version if st else "", "wake_count": st.wake_count if st else 0,
+                "error": st.last_error if st else "", "wakes": self.vb_wakes, "conf": self.vb_conf,
+                "job": self.vb_job, "presets": WAKE_PRESETS}
+
     def _on_joints(self, m: JointState) -> None:
         for name, pos in zip(m.name, m.position):
             if name in BODY_JOINTS and not math.isnan(pos):
@@ -623,7 +682,8 @@ class App:
                 "base": st["base"], "arms": st["arms"], "body_joints": st["body_joints"], "remote": st["remote"], "nav": st["nav"]["state"], "estop": st["estop"],
                 "procs": self.sup.status(), "map_name": self.map_name, "system": self.sysstats.snapshot(),
                 "nodes": self.node.node_names, "wifi": self.wifi.snapshot(), "ros": self.ros_network(),
-                "time": time.strftime("%H:%M"), "voice": self.voice.snapshot(), "gpu_procs": self.gpuprocs.snapshot()}
+                "time": time.strftime("%H:%M"), "voice": self.voice.snapshot(), "gpu_procs": self.gpuprocs.snapshot(),
+                "voice_board": self.node.voice_board_status(), "now": time.time()}
 
     async def head_ws(self, req):
         ws = web.WebSocketResponse(heartbeat=10)
@@ -1066,6 +1126,12 @@ class App:
         elif action == "nav_stop":
             n.post(n.cancel)
             await loop.run_in_executor(None, lambda: self.sup.stop("nav"))
+        elif action == "wake_word":       # {"keyword": pinyin/lexicon words (";" = several), "threshold": 500..2000}
+            kw = str(body.get("keyword", "")).strip()
+            thr = max(300, min(3000, int(body.get("threshold", 900))))
+            if not kw:
+                return web.json_response({"ok": False, "error": "empty keyword"})
+            n.post(lambda: n.set_wake_word(kw, thr))
         elif action == "arm_pose":        # {"name": SRDF group_state, "speed": 0.05..0.5}: MoveIt plan + execute
             name, speed = str(body.get("name", "")), float(body.get("speed", 0.3))
             n.post(lambda: n.arm_motion.goto(name, speed))
