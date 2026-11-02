@@ -1,6 +1,7 @@
 """Mercury X1 hardware bringup: drivers + description + lidar + cameras.
 
   ros2 launch mercury_x1_bringup robot.launch.py [cameras:=true] [upper_body:=true] [depth_cloud:=false]
+                                                 [voice_board:=true]
 
 depth_cloud:=true adds the CPU depth cloud (/camera/cloud) needed by nav.launch.py perception:=cpu;
 by default depth obstacles go through nvblox on the GPU (slam.launch.py nvblox:=true).
@@ -25,6 +26,8 @@ def generate_launch_description():
         DeclareLaunchArgument("cameras", default_value="true"),
         DeclareLaunchArgument("upper_body", default_value="true"),
         DeclareLaunchArgument("depth_cloud", default_value="false", description="CPU depth cloud /camera/cloud"),
+        DeclareLaunchArgument("voice_board", default_value="true",
+                              description="head voice board driver (wake word + direction, /voice_board/*)"),
         DeclareLaunchArgument("remote", default_value="true",
                               description="Unitree BLE remote over the built-in Bluetooth (connect from the web page)"),
 
@@ -36,6 +39,9 @@ def generate_launch_description():
              condition=IfCondition(LC("upper_body"))),
         IncludeLaunchDescription(PythonLaunchDescriptionSource(
             os.path.join(share("mercury_x1_description"), "launch", "description.launch.py"))),
+        IncludeLaunchDescription(PythonLaunchDescriptionSource(
+            os.path.join(share("mercury_x1_voice_board"), "launch", "voice_board.launch.py")),
+            condition=IfCondition(LC("voice_board"))),
 
         # LSLiDAR M10: native 100..260 deg is masked (it sees the robot body there)
         Node(package="lslidar_driver", executable="lslidar_driver_node", name="lslidar_driver_node",

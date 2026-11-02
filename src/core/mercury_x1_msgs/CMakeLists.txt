@@ -12,6 +12,11 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/JointCommand.msg"
   "msg/CartesianCommand.msg"
   "msg/MeshTile.msg"
+  "msg/VoiceWake.msg"
+  "msg/VoiceBoardState.msg"
+  "srv/VoiceBoardCommand.srv"
+  "srv/SetWakeWord.srv"
+  "srv/SetBeam.srv"
   DEPENDENCIES std_msgs geometry_msgs
 )
 

@@ -1,0 +1,8 @@
+# Change the board's wake word. The board compiles a new model from Chinese pinyin with tone numbers;
+# several keywords separated by ";" (thresholds likewise), e.g. "xiao3 wei1 xiao3 wei1", "900".
+string keyword
+string threshold                 # higher = stricter; "" -> 900
+bool reload                      # afterwards trigger a config reload so the engine loads the new model
+---
+bool success
+string message

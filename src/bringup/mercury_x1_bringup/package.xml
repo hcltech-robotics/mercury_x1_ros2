@@ -8,6 +8,7 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
   <exec_depend>mercury_x1_driver</exec_depend>
   <exec_depend>mercury_x1_description</exec_depend>
+  <exec_depend>mercury_x1_voice_board</exec_depend>
   <exec_depend>mercury_x1_teleop</exec_depend>
   <exec_depend>lslidar_driver</exec_depend>
   <exec_depend>orbbec_camera</exec_depend>
