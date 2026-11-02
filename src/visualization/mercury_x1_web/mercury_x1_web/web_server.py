@@ -40,7 +40,7 @@ from rcl_interfaces.srv import SetParameters
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from orbbec_camera_msgs.srv import GetDeviceInfo
 from rtabmap_msgs.msg import MapGraph
-from sensor_msgs.msg import BatteryState, PointCloud2, PointField
+from sensor_msgs.msg import BatteryState, JointState, PointCloud2, PointField
 from tf2_msgs.msg import TFMessage
 
 from .pose_chain import PoseChain
@@ -73,6 +73,10 @@ LIVE3D_PERIOD = 30.0        # [s] at most one re-export per this while the map g
 WAYPOINT_PICK_RADIUS = 0.6   # [m] a "delete" click removes the nearest waypoint within this distance
 # head pose while mapping: neck straight, Orbbec level (its pitch = -jaw - 5.7 deg, see the URDF notes)
 MAPPING_HEAD = {"head": 0.0, "eye": -5.7}
+# waist (URDF joint "body", firmware id 13): the URDF allows ±118°, the firmware ±160°; the pages keep to ±90°
+# (the arms swing with it; cable wrap untested beyond that)
+WAIST_LIMIT_DEG = 90.0
+BODY_JOINTS = ("body", "head", "eye")     # waist, neck, jaw: positions for the pages
 VIEWER_CACHE = os.path.expanduser(f"~/.cache/mercury_x1_web/rerun-web-viewer/{VIEWER_VERSION}")
 
 
@@ -168,6 +172,7 @@ class WebNode(Node):
         self.last_click: dict | None = None
         self.waypoints_changed = None         # set by App: persist + republish
         self.remote: dict | None = None       # Unitree BLE remote (mercury_x1_teleop/unitree_remote)
+        self.body_joints: dict[str, float] = {}   # waist / neck / jaw [deg] from /joint_states
 
         self.chain = PoseChain()
         self.create_subscription(TFMessage, "/tf", self.chain.update, 50)
@@ -178,6 +183,7 @@ class WebNode(Node):
         self.create_subscription(BaseState, "/base/state", lambda m: setattr(self, "base", m), 10)
         for s in ("left", "right"):
             self.create_subscription(ArmState, f"/{s}_arm/state", lambda m, s=s: self.arms.__setitem__(s, m), 10)
+        self.create_subscription(JointState, "/joint_states", self._on_joints, 10)
         self.pub_cmd = self.create_publisher(Twist, "/cmd_vel", 10)
         self.pub_init = self.create_publisher(PoseWithCovarianceStamped, "/initialpose", 10)
         self.pub_wps = self.create_publisher(PoseArray, "/web/waypoints", LATCHED)
@@ -488,6 +494,11 @@ class WebNode(Node):
         else:
             self.get_logger().info("E-stop released (base MCU back or arms powered)")
 
+    def _on_joints(self, m: JointState) -> None:
+        for name, pos in zip(m.name, m.position):
+            if name in BODY_JOINTS and not math.isnan(pos):
+                self.body_joints[name] = round(math.degrees(pos), 1)
+
     def status(self) -> dict:
         base = self.base
         arms = {s: {"powered": a.powered, "connected": a.connected, "moving": a.moving,
@@ -504,6 +515,7 @@ class WebNode(Node):
                 "obstacle_hold": base.obstacle_hold, "cmd_timeout": base.cmd_timeout,
                 "flag": base.stop_flag, "aux": list(getattr(base, "mcu_aux", []))},
             "arms": arms,
+            "body_joints": dict(self.body_joints),
             "nav": dict(self.nav),
             "map_version": self.map_version,
             "plan": self.plan,
@@ -605,7 +617,7 @@ class App:
     def head_status(self) -> dict:
         st = self.node.status()
         return {"battery": st["battery"], "battery_pct": st["battery_pct"], "charge": st["charge"],
-                "base": st["base"], "arms": st["arms"], "remote": st["remote"], "nav": st["nav"]["state"], "estop": st["estop"],
+                "base": st["base"], "arms": st["arms"], "body_joints": st["body_joints"], "remote": st["remote"], "nav": st["nav"]["state"], "estop": st["estop"],
                 "procs": self.sup.status(), "map_name": self.map_name, "system": self.sysstats.snapshot(),
                 "nodes": self.node.node_names, "wifi": self.wifi.snapshot(), "ros": self.ros_network(),
                 "time": time.strftime("%H:%M"), "voice": self.voice.snapshot(), "gpu_procs": self.gpuprocs.snapshot()}
@@ -889,7 +901,7 @@ class App:
         body = await req.json() if req.can_read_body else {}
         n = self.node
         loop = asyncio.get_running_loop()
-        if action not in ("cmd_vel", "click", "head", "led"):     # frequent ones stay out of the log
+        if action not in ("cmd_vel", "click", "head", "waist", "led"):     # frequent ones stay out of the log
             shown = {k: v for k, v in body.items() if k != "password"} if isinstance(body, dict) else body
             n.get_logger().info(f"api {action} {json.dumps(shown)[:200]}")
         if action == "cmd_vel":
@@ -1007,6 +1019,12 @@ class App:
                     jc.name.append(k)
                     jc.position.append(math.radians(float(body[k])))
             jc.speed = int(body.get("speed", 30))
+            n.post(lambda: n.pub_joint.publish(jc))
+        elif action == "waist":           # {"deg": -90..90, "speed"?: 1..100}; joint "body" (+ = left, URDF)
+            jc = JointCommand()
+            jc.name.append("body")
+            jc.position.append(math.radians(max(-WAIST_LIMIT_DEG, min(WAIST_LIMIT_DEG, float(body.get("deg", 0.0))))))
+            jc.speed = max(1, min(60, int(body.get("speed", 20))))
             n.post(lambda: n.pub_joint.publish(jc))
         elif action == "freedrive":
             on = bool(body.get("on", False))

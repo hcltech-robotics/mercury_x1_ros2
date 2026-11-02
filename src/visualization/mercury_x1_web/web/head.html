@@ -91,6 +91,13 @@
   .temps { display: flex; gap: 22px; margin-top: 14px; font-variant-numeric: tabular-nums; }
   .temps b { font-weight: 600; }
 
+  /* waist (Settings) */
+  #waist { -webkit-appearance: none; appearance: none; height: 12px; border-radius: 6px; background: var(--panel2); width: 100%;
+    direction: rtl; margin: 26px 0 22px; }
+  #waist::-webkit-slider-thumb { -webkit-appearance: none; width: 44px; height: 44px; border-radius: 50%; background: var(--accent); border: 0; }
+  .wlabels { display: flex; justify-content: space-between; color: var(--muted); font-size: 15px; }
+  #waist-now { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
   /* right card on Status: ROS 2 nodes | GPU processes */
   #st-tabs { display: flex; gap: 6px; margin: -4px 0 12px; }
   #st-tabs button { min-height: 44px; padding: 0 16px; font-size: 16px; background: transparent; color: var(--muted); }
@@ -287,6 +294,16 @@
     <div class="muted small" id="arms-info"></div>
   </div>
   <div class="card">
+    <h2>Waist</h2>
+    <div class="row" style="justify-content:space-between;flex-wrap:nowrap">
+      <span><span id="waist-now">—</span> <span class="muted small" id="waist-dir"></span></span>
+      <button id="b-waist0">Straight</button>
+    </div>
+    <input type="range" id="waist" min="-90" max="90" step="1" value="0">
+    <div class="wlabels"><span>◀ left 90°</span><span>target <b id="waist-t">0°</b></span><span>right 90° ▶</span></div>
+    <div class="muted small" style="margin-top:8px">Turns the whole upper body; the arms swing with it.</div>
+  </div>
+  <div class="card">
     <h2>LED</h2>
     <div id="swatches"></div>
   </div>
@@ -335,6 +352,22 @@ for (const b of document.querySelectorAll("#tabs button")) b.onclick = () => {
   document.querySelectorAll(".page").forEach((p) => p.classList.toggle("active", p.id === b.dataset.tab));
 };
 
+// waist: send while dragging (no "change" after a touch drag in the kiosk browser), follow the measured angle
+let waistT = null, waistTouched = 0;
+const sendWaist = () => { clearTimeout(waistT); waistT = null; api("waist", { deg: +$("#waist").value, speed: 20 }); };
+$("#waist").oninput = () => {
+  waistTouched = Date.now(); $("#waist-t").textContent = `${$("#waist").value}°`;
+  if (!waistT) waistT = setTimeout(sendWaist, 300);
+};
+for (const ev of ["change", "pointerup", "touchend", "mouseup"]) $("#waist").addEventListener(ev, sendWaist);
+$("#b-waist0").onclick = () => { waistTouched = Date.now(); $("#waist").value = 0; $("#waist-t").textContent = "0°"; sendWaist(); };
+function renderWaist() {
+  const w = (S.body_joints || {}).body;
+  $("#waist-now").textContent = w == null ? "—" : `${w.toFixed(0)}°`;
+  $("#waist-dir").textContent = w == null ? "position unknown" : Math.abs(w) < 1 ? "straight" : w > 0 ? "turned left" : "turned right";
+  if (w != null && Date.now() - waistTouched > 3000) { $("#waist").value = Math.round(w); $("#waist-t").textContent = `${Math.round(w)}°`; }
+}
+
 // Status: right card shows ROS 2 nodes or GPU processes
 let stPane = "nodes-pane";
 for (const b of document.querySelectorAll("#st-tabs button")) b.onclick = () => {
@@ -361,7 +394,7 @@ function render() {
   const slam = S.procs.slam, nav = S.procs.nav;
   $("#state").textContent = [slam.running ? `${slam.mode} · ${slam.map}` : "SLAM off", nav.running ? `Nav ${S.nav}` : "Nav off"].join("  ·  ");
   $("#estop").classList.toggle("show", !!S.estop);
-  renderBattery(); renderWifiChip(); renderSystem(); renderNodes(); renderGpuProcs(); renderArms(); renderWifi(); renderRemote(); renderVoice();
+  renderBattery(); renderWifiChip(); renderSystem(); renderNodes(); renderGpuProcs(); renderArms(); renderWaist(); renderWifi(); renderRemote(); renderVoice();
 }
 
 function renderBattery() {

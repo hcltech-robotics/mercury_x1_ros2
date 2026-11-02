@@ -319,10 +319,12 @@
         <div class="muted" style="font-size:11px">Keyboard: press ⌨ Drive (top bar), then W/A/S/D or arrows, Shift = fast, Space = stop, Esc = release. Driving cancels navigation.</div>
       </section>
       <section>
-        <h2>Head</h2>
+        <h2>Head &amp; waist</h2>
         <div class="row"><label class="switch" id="sw-hold" title="While mapping, keep the neck straight and the camera level (the depth camera feeds the map). Off: move the head freely."><input type="checkbox"><span class="track"></span>Hold level while mapping</label></div>
         <div class="row"><label style="width:70px">neck</label><input type="range" id="neck" min="-60" max="60" step="1" value="0"><span id="neck-t" style="width:45px">0°</span></div>
         <div class="row"><label style="width:70px">jaw (cam)</label><input type="range" id="jaw" min="-55" max="0" step="1" value="0"><span id="jaw-t" style="width:45px">0°</span></div>
+        <div class="row" title="Waist (joint body): turns the whole upper body - head, camera and both arms - on the base. + = left."><label style="width:70px">waist</label><input type="range" id="waist" min="-90" max="90" step="1" value="0" style="direction:rtl"><span id="waist-t" style="width:45px">0°</span><button id="b-waist0" title="turn the waist back to straight ahead">center</button></div>
+        <div class="muted" style="font-size:11px" id="waist-info">◀ left · right ▶ — the arms turn with the waist</div>
       </section>
       <section>
         <h2>Light &amp; arms</h2>
@@ -477,6 +479,7 @@ function onStatus() {
   const slam = s.procs.slam, nav = s.procs.nav;
   const headLocked = s.head_hold !== false && slam.running && slam.mode === "mapping";   // head held level while mapping
   for (const id of ["neck", "jaw"]) { $("#" + id).disabled = headLocked; $("#" + id).title = headLocked ? "held level while mapping" : ""; }
+  renderWaist(s.body_joints);
   setDot("slam", slam.running ? (slam.mode === "mapping" ? "warn" : "ok") : "",
          slam.running ? `${slam.mode === "mapping" ? "Mapping" : "Localizing"} · ${slam.map}` : "SLAM off");
   setDot("nav", nav.running ? (s.nav.state === "navigating" ? "warn" : ["error", "aborted"].includes(s.nav.state) ? "bad" : "ok") : "",
@@ -990,6 +993,22 @@ for (const id of ["neck", "jaw"]) $("#" + id).oninput = () => {
   $(`#${id}-t`).textContent = `${$("#" + id).value}°`;
   clearTimeout(headT); headT = setTimeout(() => api("head", { head: +$("#neck").value, eye: +$("#jaw").value, speed: 40 }), 150);
 };
+// waist: slider follows the measured angle unless it was touched in the last 3 s
+let waistT = null, waistTouched = 0;
+const sendWaist = () => { clearTimeout(waistT); waistT = null; api("waist", { deg: +$("#waist").value, speed: 20 }); };
+$("#waist").oninput = () => {
+  waistTouched = Date.now(); $("#waist-t").textContent = `${$("#waist").value}°`;
+  if (!waistT) waistT = setTimeout(sendWaist, 250);
+};
+$("#waist").addEventListener("change", sendWaist);
+$("#b-waist0").onclick = () => { waistTouched = Date.now(); $("#waist").value = 0; $("#waist-t").textContent = "0°"; sendWaist(); };
+function renderWaist(bj) {
+  const w = bj && bj.body;
+  $("#waist-info").textContent = w == null ? "waist position unknown (upper body driver not running?)" :
+    `now ${w.toFixed(0)}° ${Math.abs(w) < 1 ? "(straight)" : w > 0 ? "(left)" : "(right)"} · ◀ left · right ▶ — the arms turn with the waist`;
+  if (w != null && Date.now() - waistTouched > 3000) { $("#waist").value = Math.round(w); $("#waist-t").textContent = `${Math.round(w)}°`; }
+}
+
 const hex2rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
 $("#led").oninput = () => { const [r, g, b] = hex2rgb($("#led").value); api("led", { r, g, b }); };
 $("#b-ledoff").onclick = () => api("led", { r: 0, g: 0, b: 0 });
