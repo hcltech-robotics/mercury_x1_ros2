@@ -41,6 +41,25 @@
     <joint name="joint6_R" value="0.559"/>
     <joint name="joint7_R" value="0.497"/>
   </group_state>
+  <!-- hand in front at chest height, elbow bent (left: tested on the robot 2026-11-02; right: mirrored) -->
+  <group_state name="reach_forward_L" group="left_arm">
+    <joint name="joint1_L" value="0"/>
+    <joint name="joint2_L" value="0.6"/>
+    <joint name="joint3_L" value="0"/>
+    <joint name="joint4_L" value="-1.2"/>
+    <joint name="joint5_L" value="0"/>
+    <joint name="joint6_L" value="0.6"/>
+    <joint name="joint7_L" value="0"/>
+  </group_state>
+  <group_state name="reach_forward_R" group="right_arm">
+    <joint name="joint1_R" value="0"/>
+    <joint name="joint2_R" value="0.6"/>
+    <joint name="joint3_R" value="0"/>
+    <joint name="joint4_R" value="-1.2"/>
+    <joint name="joint5_R" value="0"/>
+    <joint name="joint6_R" value="0.6"/>
+    <joint name="joint7_R" value="0"/>
+  </group_state>
   <group_state name="straight" group="waist">
     <joint name="body" value="0"/>
   </group_state>

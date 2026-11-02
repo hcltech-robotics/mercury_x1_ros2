@@ -336,8 +336,15 @@
           <label class="switch warn" id="sw-free" title="Freedrive: move the arms by hand (remote: Select). Hold the arm when switching on."><input type="checkbox"><span class="track"></span>Freedrive</label>
         </div>
         <div class="row">
-          <label class="switch" id="sw-moveit" title="MoveIt move_group: arm motion planning with IK and self-collision checks (arm vs arm, arm vs body). Uses ~0.3-0.5 GB RAM, so it only runs when switched on. Planning alone moves nothing."><input type="checkbox"><span class="track"></span>Motion planning (MoveIt)</label>
+          <label class="switch" id="sw-moveit" title="MoveIt move_group: arm motion planning with IK and self-collision checks (arm vs arm, arm vs body). ~90 MB RAM. Planning alone moves nothing."><input type="checkbox"><span class="track"></span>Motion planning (MoveIt)</label>
           <span class="muted" id="moveit-st"></span>
+        </div>
+        <div class="row" id="arm-poses" title="Planned by MoveIt with self-collision checks, then executed. The arms MOVE."></div>
+        <div class="row">
+          <label style="width:70px">speed</label>
+          <select id="arm-speed"><option value="0.1">10 %</option><option value="0.2">20 %</option><option value="0.3" selected>30 %</option><option value="0.5">50 %</option></select>
+          <button class="b" id="b-arm-stop" style="background:#5a1d24;border-color:#ff5468">■ Stop arms</button>
+          <span class="muted" id="arm-st"></span>
         </div>
       </section>
       <section>
@@ -512,6 +519,7 @@ function onStatus() {
   const mv = (s.procs || {}).moveit || {};
   setMoveitSwitch(!!mv.running);
   $("#moveit-st").textContent = mv.running ? ((s.nodes || []).includes("move_group") ? "planning ready" : "starting…") : "";
+  renderArmMotion(s.arm_motion, !!mv.running);
   setFreeSwitch(armsList.some((a) => a.freedrive));
   setHoldSwitch(s.head_hold !== false);
   if (s.viz_layers && Date.now() > layersUntil) {
@@ -1042,6 +1050,28 @@ const setFreeSwitch = bindSwitch("#sw-free", (on) => {
   api("freedrive", { on }); toast(on ? "freedrive on (remote: Select toggles)" : "freedrive off - arms hold");
 });
 const setHoldSwitch = bindSwitch("#sw-hold", (on) => { api("head_hold", { on }); });
+// named arm poses (SRDF group states) through MoveIt
+let armPosesKey = "";
+function renderArmMotion(m, moveitOn) {
+  if (!m) return;
+  const key = JSON.stringify(m.poses);
+  if (key !== armPosesKey) {
+    armPosesKey = key;
+    $("#arm-poses").innerHTML = m.poses.map((p) => `<button class="b" data-pose="${p.name}">${p.label}</button>`).join("");
+    for (const b of $("#arm-poses").querySelectorAll("button")) b.onclick = () => {
+      if (!confirm(`Move to "${b.textContent}"? The arms move - keep clear.`)) return;
+      api("arm_pose", { name: b.dataset.pose, speed: +$("#arm-speed").value });
+    };
+  }
+  const busy = ["planning", "moving"].includes(m.state);
+  for (const b of $("#arm-poses").querySelectorAll("button")) b.disabled = !moveitOn || !m.ready || busy;
+  const words = { idle: "", planning: "planning…", moving: "moving…", done: "done", failed: "failed", stopped: "stopped" };
+  $("#arm-st").textContent = !moveitOn ? "switch on Motion planning to use the poses" :
+    [words[m.state] || m.state, m.state === "failed" ? m.message : busy ? m.message : m.pose].filter(Boolean).join(" · ");
+  $("#arm-st").style.color = m.state === "failed" ? "#ff5468" : busy ? "#ffb020" : "";
+}
+$("#b-arm-stop").onclick = () => { api("arm_stop", {}); toast("stopping the arms"); };
+
 const setMoveitSwitch = bindSwitch("#sw-moveit", (on) => {
   api("moveit", { on }); toast(on ? "starting MoveIt (~15 s)" : "stopping MoveIt");
 });

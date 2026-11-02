@@ -43,6 +43,7 @@ from rtabmap_msgs.msg import MapGraph
 from sensor_msgs.msg import BatteryState, JointState, PointCloud2, PointField
 from tf2_msgs.msg import TFMessage
 
+from .arm_motion import ArmMotion
 from .pose_chain import PoseChain
 from . import slam3d
 from .gpuprocs import GpuProcs
@@ -223,6 +224,7 @@ class WebNode(Node):
         self.camera_info: dict | None = None
         self.cli_cam_info = self.create_client(GetDeviceInfo, "/camera/get_device_info")
         self.cam_info_timer = self.create_timer(10.0, self._ask_camera_info)
+        self.arm_motion = ArmMotion(self)       # named arm poses through MoveIt (Robot tab)
 
     def _ask_camera_info(self) -> None:
         if self.camera_info is not None:
@@ -516,6 +518,7 @@ class WebNode(Node):
                 "flag": base.stop_flag, "aux": list(getattr(base, "mcu_aux", []))},
             "arms": arms,
             "body_joints": dict(self.body_joints),
+            "arm_motion": self.arm_motion.snapshot(),
             "nav": dict(self.nav),
             "map_version": self.map_version,
             "plan": self.plan,
@@ -1063,6 +1066,12 @@ class App:
         elif action == "nav_stop":
             n.post(n.cancel)
             await loop.run_in_executor(None, lambda: self.sup.stop("nav"))
+        elif action == "arm_pose":        # {"name": SRDF group_state, "speed": 0.05..0.5}: MoveIt plan + execute
+            name, speed = str(body.get("name", "")), float(body.get("speed", 0.3))
+            n.post(lambda: n.arm_motion.goto(name, speed))
+        elif action == "arm_stop":        # cancel the MoveIt goal and stop both arms
+            n.post(n.arm_motion.stop)
+            n.post(lambda: n.call("arms_stop", Trigger.Request()))
         elif action == "moveit":          # {"on": bool}: MoveIt move_group (arm planning; ~0.3-0.5 GB RAM)
             if body.get("on", True):
                 await loop.run_in_executor(None, lambda: self.sup.start(
