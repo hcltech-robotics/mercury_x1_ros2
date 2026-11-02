@@ -103,8 +103,8 @@ ros2 run moveit_setup_assistant collisions_updater --urdf /tmp/mx1.urdf --srdf <
 ```
 IK: KDL (pick_ik optional). Speed limits are guesses (URDF says 0): arms 1 rad/s, waist 0.5 rad/s, plans at 30 %.
 Execution: the upper-body driver serves `{left_arm,right_arm,waist}_controller/follow_joint_trajectory`: the
-trajectory is thinned to waypoints `trajectory_step_deg` (8°) apart, each segment's firmware speed comes from
-the trajectory timing (`speed_deg_s_at_100`, uncalibrated: 180 = moves slower than planned), all waypoints go
+path is reduced to its corners (Douglas-Peucker, within `trajectory_path_tolerance_deg` 2° of the plan; the firmware stops at every queued target, so fewer moves = smoother), each segment's firmware speed comes from
+the trajectory timing (`speed_deg_s_at_100` = 150, measured), all moves go
 to the firmware queue at once, done when joint_states reach the last point (`goal_tolerance_deg` 2°), stopped
 on cancel / timeout. Off-robot: `ros2 launch mercury_x1_moveit_config demo.launch.py` (mock driver) and
 `ros2 run mercury_x1_moveit_config check_moveit.py [--execute]`.

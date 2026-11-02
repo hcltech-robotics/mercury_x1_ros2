@@ -10,10 +10,11 @@
 // Services   left_arm/power, right_arm/power (std_srvs/SetBool)
 //            left_arm/stop, right_arm/stop, upper_body/stop (std_srvs/Trigger)
 // Actions    {left_arm,right_arm,waist}_controller/follow_joint_trajectory (control_msgs/FollowJointTrajectory)
-//            for MoveIt: the trajectory is thinned to waypoints ~trajectory_step_deg apart (straight joint-space
-//            moves between them stay close to the planned, collision-checked path), each segment's firmware
-//            speed is taken from the trajectory timing, and all waypoints go to the firmware motion queue at
-//            once (the first one preempts). Done when joint_states reach the last point.
+//            for MoveIt: the planned path is reduced to its corners (Douglas-Peucker in joint space: the straight
+//            joint-space moves between them stay within trajectory_path_tolerance_deg of the planned, collision-
+//            checked path), each segment's firmware speed is taken from the trajectory timing, and all moves go
+//            to the firmware motion queue at once (the first one preempts). The firmware stops at every queued
+//            target (no blending), so fewer, longer moves = smoother. Done when joint_states reach the end.
 //
 // Firmware behaviour relied on (measured, see the devlog):
 //  * motion commands queue inside the MCU rather than replacing the running motion, so a
@@ -47,6 +48,34 @@ namespace arm = mercury_x1::arm;
 
 namespace
 {
+// indices of the points to keep so that straight lines between them stay within tol of every dropped point
+// (Douglas-Peucker; distance = largest joint deviation from the chord at the projected parameter)
+void simplifyPath(const std::vector<std::vector<double>> & q, size_t a, size_t b, double tol, std::vector<size_t> & keep)
+{
+  if (b <= a + 1) {return;}
+  double len2 = 0;
+  for (size_t k = 0; k < q[a].size(); ++k) {len2 += (q[b][k] - q[a][k]) * (q[b][k] - q[a][k]);}
+  double worst = -1;
+  size_t at = a;
+  for (size_t i = a + 1; i < b; ++i) {
+    double t = 0;
+    if (len2 > 1e-12) {
+      for (size_t k = 0; k < q[a].size(); ++k) {t += (q[i][k] - q[a][k]) * (q[b][k] - q[a][k]);}
+      t = std::clamp(t / len2, 0.0, 1.0);
+    }
+    double d = 0;
+    for (size_t k = 0; k < q[a].size(); ++k) {
+      d = std::max(d, std::abs(q[i][k] - (q[a][k] + t * (q[b][k] - q[a][k]))));
+    }
+    if (d > worst) {worst = d; at = i;}
+  }
+  if (worst > tol) {
+    simplifyPath(q, a, at, tol, keep);
+    keep.push_back(at);
+    simplifyPath(q, at, b, tol, keep);
+  }
+}
+
 // firmware joint limits [deg] (pymycobot robot_info "Mercury")
 constexpr double kArmLimits[7][2] = {
   {-165, 165}, {-50, 120}, {-165, 165}, {-165, 1}, {-165, 165}, {-75, 255}, {-165, 165}};
@@ -449,8 +478,9 @@ public:
 
     // MoveIt trajectory execution (see the header). The firmware speed scale is not documented:
     // speed_deg_s_at_100 = joint speed at firmware speed 100 (too high -> moves slower than planned, safe side).
-    traj_step_deg_ = declare_parameter("trajectory_step_deg", 8.0);
-    speed_deg_s_at_100_ = declare_parameter("speed_deg_s_at_100", 180.0);
+    traj_tol_deg_ = declare_parameter("trajectory_path_tolerance_deg", 2.0);
+    // the SDK documents joint speed 1..150 deg/s; a 6.4 s plan made with 180 ran in 7.8 s -> ~150
+    speed_deg_s_at_100_ = declare_parameter("speed_deg_s_at_100", 150.0);
     goal_tol_deg_ = declare_parameter("goal_tolerance_deg", 2.0);
     traj_timeout_scale_ = declare_parameter("trajectory_timeout_scale", 3.0);
     if (declare_parameter("trajectory_controllers", true)) {
@@ -668,21 +698,24 @@ private:
     }
     std::vector<double> prev = current(c);
     if (prev.empty()) {finish(c, gh, gen, FJT::Result::INVALID_GOAL, "no joint reading"); return;}
-    // 1) thin to waypoints >= step apart (largest joint change), always keeping the last point
-    const double step = deg2rad(traj_step_deg_);
+    // 1) reduce the path to its corners (start = where the arm is now), always keeping the last point
     struct Wp {double t; std::vector<double> q;};
-    std::vector<Wp> wps;
-    std::vector<double> kept = prev;
-    for (size_t i = 0; i < tr.points.size(); ++i) {
-      const auto & p = tr.points[i];
+    std::vector<std::vector<double>> path{prev};
+    std::vector<double> times{0.0};
+    for (const auto & p : tr.points) {
       std::vector<double> q;
       for (size_t k : col) {q.push_back(p.positions.at(k));}
+      path.push_back(q);
+      times.push_back(rclcpp::Duration(p.time_from_start).seconds());
+    }
+    std::vector<size_t> keep;
+    simplifyPath(path, 0, path.size() - 1, deg2rad(traj_tol_deg_), keep);
+    keep.push_back(path.size() - 1);
+    std::vector<Wp> wps;
+    for (size_t i : keep) {
       double d = 0;
-      for (size_t k = 0; k < q.size(); ++k) {d = std::max(d, std::abs(q[k] - kept[k]));}
-      if (d >= step || (i + 1 == tr.points.size() && d > 1e-4)) {
-        wps.push_back({rclcpp::Duration(p.time_from_start).seconds(), q});
-        kept = q;
-      }
+      for (size_t k = 0; k < path[i].size(); ++k) {d = std::max(d, std::abs(path[i][k] - (wps.empty() ? prev : wps.back().q)[k]));}
+      if (d > 1e-4) {wps.push_back({times[i], path[i]});}
     }
     if (wps.empty()) {finish(c, gh, gen, FJT::Result::SUCCESSFUL, "already there"); return;}
     // 2) firmware moves, speed from each segment's timing
@@ -796,7 +829,7 @@ private:
   }
 
   int64_t default_speed_, max_speed_;
-  double traj_step_deg_{8}, speed_deg_s_at_100_{180}, goal_tol_deg_{2}, traj_timeout_scale_{3};
+  double traj_tol_deg_{2}, speed_deg_s_at_100_{150}, goal_tol_deg_{2}, traj_timeout_scale_{3};
   std::vector<std::shared_ptr<TrajController>> controllers_;
   bool freedrive_drag_teach_{true};
   std::vector<std::string> extra_names_;
