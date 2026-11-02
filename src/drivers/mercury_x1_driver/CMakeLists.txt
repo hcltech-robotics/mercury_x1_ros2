@@ -9,6 +9,8 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
+find_package(control_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -29,7 +31,7 @@ ament_target_dependencies(base_node rclcpp geometry_msgs nav_msgs sensor_msgs st
 
 add_executable(upper_body_node src/upper_body_node.cpp)
 target_link_libraries(upper_body_node mercury_x1_protocol)
-ament_target_dependencies(upper_body_node rclcpp sensor_msgs std_srvs mercury_x1_msgs)
+ament_target_dependencies(upper_body_node rclcpp rclcpp_action control_msgs sensor_msgs std_srvs mercury_x1_msgs)
 
 add_executable(image_preview_node src/image_preview_node.cpp)
 target_link_libraries(image_preview_node ${OpenCV_LIBS})

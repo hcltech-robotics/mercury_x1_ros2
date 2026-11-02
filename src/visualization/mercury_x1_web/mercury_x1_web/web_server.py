@@ -109,7 +109,7 @@ def cloud_msg(xyz: np.ndarray, rgb: np.ndarray | None, frame: str, stamp) -> Poi
 
 # ---------------------------------------------------------------------------------------------
 class Supervisor:
-    """Starts/stops `ros2 launch` children (SLAM, Nav2) in their own process groups."""
+    """Starts/stops `ros2 launch` children (SLAM, Nav2, MoveIt) in their own process groups."""
 
     def __init__(self, log_dir: str):
         self.procs: dict[str, subprocess.Popen] = {}
@@ -145,7 +145,7 @@ class Supervisor:
             pass
 
     def status(self) -> dict:
-        return {n: {"running": self.running(n), **self.args.get(n, {})} for n in ("slam", "nav")}
+        return {n: {"running": self.running(n), **self.args.get(n, {})} for n in ("slam", "nav", "moveit")}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1063,6 +1063,12 @@ class App:
         elif action == "nav_stop":
             n.post(n.cancel)
             await loop.run_in_executor(None, lambda: self.sup.stop("nav"))
+        elif action == "moveit":          # {"on": bool}: MoveIt move_group (arm planning; ~0.3-0.5 GB RAM)
+            if body.get("on", True):
+                await loop.run_in_executor(None, lambda: self.sup.start(
+                    "moveit", ["ros2", "launch", "mercury_x1_moveit_config", "move_group.launch.py"], {}))
+            else:
+                await loop.run_in_executor(None, lambda: self.sup.stop("moveit"))
         elif action == "export_map":
             if n.map_msg is None:
                 return web.json_response({"ok": False, "error": "no map yet"})
@@ -1109,7 +1115,7 @@ class App:
                 loop.add_signal_handler(sig, stop.set)
             await stop.wait()
             await self.voice.enable(False)
-            for name in ("nav", "slam"):     # rtabmap saves its database on SIGINT
+            for name in ("moveit", "nav", "slam"):     # rtabmap saves its database on SIGINT
                 await loop.run_in_executor(None, lambda n=name: self.sup.stop(n))
             for runner in runners:
                 await runner.cleanup()

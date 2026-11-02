@@ -86,6 +86,28 @@ each flange go through TF into base_footprint. If anything sticks out more than 
 nav2.yaml outline, `/local_costmap/footprint` and `/global_costmap/footprint` get the convex hull of
 the outline and those points (+4 cm); MPPI (`consider_footprint`) and the behaviours collide-check with
 it. Published only on change (a new footprint makes the costmaps re-inflate). Arms hanging: outline.
+(Different job from MoveIt below: this keeps the *driving* robot from clipping things with an arm held out;
+MoveIt plans the *arm* motions themselves.)
+
+### Arms: MoveIt (planning, IK, self-collision)
+`src/control/mercury_x1_moveit_config`, started from the page (Robot → Light & arms → Motion planning) or
+`ros2 launch mercury_x1_moveit_config move_group.launch.py`. Groups: `left_arm`, `right_arm` (7 joints off the
+torso), `both_arms`, `left_arm_waist` / `right_arm_waist` (+ the waist), `waist`; named states `rest`
+(arms hanging) and `straight` (waist). Self-collision = arm vs arm, arm vs torso/head/base, with one convex hull
+per link (`mercury_x1_description/meshes/collision`, `tools/make_collision_meshes.py`; the vendor URDF collided with
+the 125 MB visual meshes). Pairs that can never touch are disabled in the SRDF by `collisions_updater`:
+```
+xacro src/core/mercury_x1_description/urdf/mercury_x1.urdf.xacro > /tmp/mx1.urdf
+ros2 run moveit_setup_assistant collisions_updater --urdf /tmp/mx1.urdf --srdf <srdf> --output <srdf> \
+    --default --always --trials 10000 --min-collision-fraction 0.95
+```
+IK: KDL (pick_ik optional). Speed limits are guesses (URDF says 0): arms 1 rad/s, waist 0.5 rad/s, plans at 30 %.
+Execution: the upper-body driver serves `{left_arm,right_arm,waist}_controller/follow_joint_trajectory`: the
+trajectory is thinned to waypoints `trajectory_step_deg` (8°) apart, each segment's firmware speed comes from
+the trajectory timing (`speed_deg_s_at_100`, uncalibrated: 180 = moves slower than planned), all waypoints go
+to the firmware queue at once, done when joint_states reach the last point (`goal_tolerance_deg` 2°), stopped
+on cancel / timeout. Off-robot: `ros2 launch mercury_x1_moveit_config demo.launch.py` (mock driver) and
+`ros2 run mercury_x1_moveit_config check_moveit.py [--execute]`.
 
 ### 3D view layers
 The Rerun server keeps 64 MiB of history and replays it **newest first** to a new viewer (the live view shows

@@ -12,6 +12,7 @@
     ["Navigation", ["nav2_container", "controller_server", "planner_server", "bt_navigator", "behavior_server", "smoother_server",
       "velocity_smoother", "waypoint_follower", "lifecycle_manager_navigation", "local_costmap", "global_costmap",
       "arm_footprint"], (p) => p.nav.running],
+    ["Arm planning", ["move_group"], (p) => !!(p.moveit && p.moveit.running)],
     ["Web & viewer", ["mercury_web", "rerun_bridge", "preview_orbbec", "preview_bellybutton"], () => true],
   ];
 

@@ -9,6 +9,11 @@
 //            upper_body/cartesian_command (mercury_x1_msgs/CartesianCommand)
 // Services   left_arm/power, right_arm/power (std_srvs/SetBool)
 //            left_arm/stop, right_arm/stop, upper_body/stop (std_srvs/Trigger)
+// Actions    {left_arm,right_arm,waist}_controller/follow_joint_trajectory (control_msgs/FollowJointTrajectory)
+//            for MoveIt: the trajectory is thinned to waypoints ~trajectory_step_deg apart (straight joint-space
+//            moves between them stay close to the planned, collision-checked path), each segment's firmware
+//            speed is taken from the trajectory timing, and all waypoints go to the firmware motion queue at
+//            once (the first one preempts). Done when joint_states reach the last point.
 //
 // Firmware behaviour relied on (measured, see the devlog):
 //  * motion commands queue inside the MCU rather than replacing the running motion, so a
@@ -26,11 +31,13 @@
 #include <optional>
 #include <thread>
 
+#include "control_msgs/action/follow_joint_trajectory.hpp"
 #include "mercury_x1_driver/arm_protocol.hpp"
 #include "mercury_x1_msgs/msg/arm_state.hpp"
 #include "mercury_x1_msgs/msg/cartesian_command.hpp"
 #include "mercury_x1_msgs/msg/joint_command.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp_action/rclcpp_action.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "std_srvs/srv/set_bool.hpp"
 #include "std_srvs/srv/trigger.hpp"
@@ -151,6 +158,21 @@ public:
     std::lock_guard<std::mutex> lk(mtx_);
     snap_.freedrive = on;
     return ok.value_or(false);
+  }
+
+  // A trajectory: replaces the pending target; the moves go to the firmware queue back to back,
+  // the first one preempting what the arm is doing. false while in freedrive.
+  bool runSequence(const std::vector<Motion> & ms)
+  {
+    std::lock_guard<std::mutex> lk(mtx_);
+    bool moves_arm = false;
+    for (auto & m : ms) {moves_arm = moves_arm || !m.arm.empty();}
+    if (snap_.freedrive && moves_arm) {return false;}
+    target_.reset();
+    for (size_t i = 0; i < ms.size(); ++i) {
+      jobs_.push_back([this, m = ms[i], first = i == 0](arm::ArmLink & l) {execute(l, m, first);});
+    }
+    return true;
   }
 
   void clearTarget()
@@ -337,6 +359,21 @@ private:
   std::thread thread_;
 };
 
+using FJT = control_msgs::action::FollowJointTrajectory;
+using FJTGoal = rclcpp_action::ServerGoalHandle<FJT>;
+
+// one FollowJointTrajectory server: an arm (7 joints) or the waist (firmware "extra" joint on the right MCU)
+struct TrajController
+{
+  std::string name, worker;
+  std::vector<std::string> joints;     // URDF names, controller order
+  bool extra{false};
+  std::mutex mtx;
+  std::shared_ptr<FJTGoal> active;
+  uint64_t gen{0};
+  rclcpp_action::Server<FJT>::SharedPtr server;
+};
+
 class UpperBodyNode : public rclcpp::Node
 {
 public:
@@ -409,6 +446,18 @@ public:
           srvFreedrive({"left", "right"}, req->data, *res);
         }, rmw_qos_profile_services_default, cb_));
     timer_ = create_wall_timer(std::chrono::duration<double>(1.0 / rate), [this] {publish();});
+
+    // MoveIt trajectory execution (see the header). The firmware speed scale is not documented:
+    // speed_deg_s_at_100 = joint speed at firmware speed 100 (too high -> moves slower than planned, safe side).
+    traj_step_deg_ = declare_parameter("trajectory_step_deg", 8.0);
+    speed_deg_s_at_100_ = declare_parameter("speed_deg_s_at_100", 180.0);
+    goal_tol_deg_ = declare_parameter("goal_tolerance_deg", 2.0);
+    traj_timeout_scale_ = declare_parameter("trajectory_timeout_scale", 3.0);
+    if (declare_parameter("trajectory_controllers", true)) {
+      addController("left_arm_controller", "left", arm_names_["left"], false);
+      addController("right_arm_controller", "right", arm_names_["right"], false);
+      if (extra_index_.count("body")) {addController("waist_controller", "right", {"body"}, true);}
+    }
     RCLCPP_INFO(get_logger(), "upper body driver up");
   }
 
@@ -517,6 +566,188 @@ private:
     }
   }
 
+  // ---- FollowJointTrajectory --------------------------------------------------------------------------
+  void addController(const std::string & name, const std::string & worker, const std::vector<std::string> & joints,
+                     bool extra)
+  {
+    auto c = std::make_shared<TrajController>();
+    c->name = name; c->worker = worker; c->joints = joints; c->extra = extra;
+    controllers_.push_back(c);
+    TrajController * cp = c.get();
+    c->server = rclcpp_action::create_server<FJT>(this, name + "/follow_joint_trajectory",
+        [this, cp](const rclcpp_action::GoalUUID &, std::shared_ptr<const FJT::Goal> g) {return onGoal(*cp, *g);},
+        [](std::shared_ptr<FJTGoal>) {return rclcpp_action::CancelResponse::ACCEPT;},
+        [this, cp](std::shared_ptr<FJTGoal> gh) {onAccepted(*cp, gh);},
+        rcl_action_server_get_default_options(), cb_);
+  }
+
+  rclcpp_action::GoalResponse onGoal(TrajController & c, const FJT::Goal & g)
+  {
+    const auto & tr = g.trajectory;
+    for (auto & j : c.joints) {
+      if (std::find(tr.joint_names.begin(), tr.joint_names.end(), j) == tr.joint_names.end()) {
+        RCLCPP_ERROR(get_logger(), "%s: trajectory lacks joint %s", c.name.c_str(), j.c_str());
+        return rclcpp_action::GoalResponse::REJECT;
+      }
+    }
+    const auto s = workers_[c.worker]->snapshot();
+    if (tr.points.empty() || !s.connected || !s.powered || s.freedrive || (!c.extra && !s.have_q)) {
+      RCLCPP_ERROR(get_logger(), "%s: rejected (%s)", c.name.c_str(), tr.points.empty() ? "no points" :
+          !s.connected ? "arm not connected" : !s.powered ? "arm not powered" : s.freedrive ? "freedrive on" :
+          "no joint reading yet");
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+    return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+  }
+
+  // controller joint positions now [rad], empty if unknown
+  std::vector<double> current(const TrajController & c)
+  {
+    const auto s = workers_[c.worker]->snapshot();
+    std::vector<double> q;
+    for (auto & j : c.joints) {
+      if (c.extra) {
+        const size_t i = extra_index_.at(j);
+        const double deg = s.extra.count(extra_ids_[i]) ? s.extra.at(extra_ids_[i]) : NAN;
+        if (std::isnan(deg)) {return {};}
+        q.push_back(extraToUrdf(i, deg));
+      } else {
+        if (!s.have_q) {return {};}
+        const auto & names = arm_names_.at(c.worker);
+        q.push_back(deg2rad(s.q_deg[std::find(names.begin(), names.end(), j) - names.begin()]));
+      }
+    }
+    return q;
+  }
+
+  void onAccepted(TrajController & c, std::shared_ptr<FJTGoal> gh)
+  {
+    uint64_t gen;
+    {
+      std::lock_guard<std::mutex> lk(c.mtx);
+      if (c.active && c.active->is_active()) {
+        auto r = std::make_shared<FJT::Result>();
+        r->error_code = FJT::Result::INVALID_GOAL;
+        r->error_string = "preempted by a new trajectory";
+        c.active->abort(r);
+      }
+      c.active = gh;
+      gen = ++c.gen;
+    }
+    std::thread([this, &c, gh, gen] {runTrajectory(c, gh, gen);}).detach();
+  }
+
+  // ends the goal unless a newer one took over the controller
+  void finish(TrajController & c, const std::shared_ptr<FJTGoal> & gh, uint64_t gen, int code, const std::string & why,
+              bool canceled = false)
+  {
+    std::lock_guard<std::mutex> lk(c.mtx);
+    if (gen != c.gen || !gh->is_active()) {return;}
+    auto r = std::make_shared<FJT::Result>();
+    r->error_code = code;
+    r->error_string = why;
+    if (canceled) {gh->canceled(r);} else if (code == FJT::Result::SUCCESSFUL) {gh->succeed(r);} else {gh->abort(r);}
+    if (code != FJT::Result::SUCCESSFUL || canceled) {
+      RCLCPP_WARN(get_logger(), "%s: %s", c.name.c_str(), why.c_str());
+    }
+  }
+
+  void stopWorker(const std::string & side)
+  {
+    auto & w = *workers_[side];
+    w.clearTarget();
+    w.call<bool>([](arm::ArmLink & l) {return l.stop();}, 3s);
+  }
+
+  void runTrajectory(TrajController & c, std::shared_ptr<FJTGoal> gh, uint64_t gen)
+  {
+    const auto & tr = gh->get_goal()->trajectory;
+    std::vector<size_t> col;      // controller joint -> trajectory column
+    for (auto & j : c.joints) {
+      col.push_back(std::find(tr.joint_names.begin(), tr.joint_names.end(), j) - tr.joint_names.begin());
+    }
+    std::vector<double> prev = current(c);
+    if (prev.empty()) {finish(c, gh, gen, FJT::Result::INVALID_GOAL, "no joint reading"); return;}
+    // 1) thin to waypoints >= step apart (largest joint change), always keeping the last point
+    const double step = deg2rad(traj_step_deg_);
+    struct Wp {double t; std::vector<double> q;};
+    std::vector<Wp> wps;
+    std::vector<double> kept = prev;
+    for (size_t i = 0; i < tr.points.size(); ++i) {
+      const auto & p = tr.points[i];
+      std::vector<double> q;
+      for (size_t k : col) {q.push_back(p.positions.at(k));}
+      double d = 0;
+      for (size_t k = 0; k < q.size(); ++k) {d = std::max(d, std::abs(q[k] - kept[k]));}
+      if (d >= step || (i + 1 == tr.points.size() && d > 1e-4)) {
+        wps.push_back({rclcpp::Duration(p.time_from_start).seconds(), q});
+        kept = q;
+      }
+    }
+    if (wps.empty()) {finish(c, gh, gen, FJT::Result::SUCCESSFUL, "already there"); return;}
+    // 2) firmware moves, speed from each segment's timing
+    std::vector<Motion> ms;
+    double t_prev = 0;
+    for (auto & w : wps) {
+      double d_deg = 0;
+      for (size_t k = 0; k < w.q.size(); ++k) {d_deg = std::max(d_deg, rad2deg(std::abs(w.q[k] - prev[k])));}
+      const double dt = std::max(w.t - t_prev, 0.05);
+      Motion m{Motion::kJoints, std::clamp(static_cast<int>(std::ceil(100.0 * d_deg / dt / speed_deg_s_at_100_)), 1,
+          static_cast<int>(max_speed_)), {}, {}, {}, false, true};
+      for (size_t k = 0; k < c.joints.size(); ++k) {
+        if (c.extra) {
+          const size_t i = extra_index_.at(c.joints[k]);
+          const int id = extra_ids_[i];
+          auto [lo, hi] = kExtraLimits.count(id) ? kExtraLimits.at(id) : std::make_pair(-180.0, 180.0);
+          m.extra[id] = std::clamp(extraFromUrdf(i, w.q[k]), lo, hi);
+        } else {
+          m.arm[static_cast<int>(k)] = std::clamp(rad2deg(w.q[k]), kArmLimits[k][0], kArmLimits[k][1]);
+        }
+      }
+      ms.push_back(m);
+      t_prev = w.t;
+      prev = w.q;
+    }
+    if (!workers_[c.worker]->runSequence(ms)) {
+      finish(c, gh, gen, FJT::Result::INVALID_GOAL, "arm is in freedrive");
+      return;
+    }
+    RCLCPP_INFO(get_logger(), "%s: %zu points -> %zu moves over %.1f s", c.name.c_str(), tr.points.size(), ms.size(),
+        wps.back().t);
+    // 3) follow until the last point is reached
+    const double t0 = steadyNow(), t_end = wps.back().t, deadline = t0 + t_end * traj_timeout_scale_ + 5.0;
+    const double tol = deg2rad(goal_tol_deg_);
+    auto fb = std::make_shared<FJT::Feedback>();
+    fb->joint_names = c.joints;
+    while (rclcpp::ok()) {
+      std::this_thread::sleep_for(50ms);
+      {
+        std::lock_guard<std::mutex> lk(c.mtx);
+        if (gen != c.gen || !gh->is_active()) {return;}      // a newer trajectory took over (it preempts)
+      }
+      if (gh->is_canceling()) {
+        stopWorker(c.worker);
+        finish(c, gh, gen, FJT::Result::SUCCESSFUL, "canceled: arm stopped", true);
+        return;
+      }
+      const auto q = current(c);
+      if (q.empty()) {continue;}
+      double err = 0;
+      for (size_t k = 0; k < q.size(); ++k) {err = std::max(err, std::abs(q[k] - wps.back().q[k]));}
+      fb->actual.positions = q;
+      fb->desired.positions = wps.back().q;
+      gh->publish_feedback(fb);
+      if (err <= tol) {finish(c, gh, gen, FJT::Result::SUCCESSFUL, ""); return;}
+      if (steadyNow() > deadline) {
+        stopWorker(c.worker);
+        finish(c, gh, gen, FJT::Result::GOAL_TOLERANCE_VIOLATED,
+               "not at the goal after " + std::to_string(static_cast<int>(steadyNow() - t0)) + " s (off by " +
+               std::to_string(rad2deg(err)) + " deg): stopped");
+        return;
+      }
+    }
+  }
+
   void publish()
   {
     const auto stamp = now();
@@ -565,6 +796,8 @@ private:
   }
 
   int64_t default_speed_, max_speed_;
+  double traj_step_deg_{8}, speed_deg_s_at_100_{180}, goal_tol_deg_{2}, traj_timeout_scale_{3};
+  std::vector<std::shared_ptr<TrajController>> controllers_;
   bool freedrive_drag_teach_{true};
   std::vector<std::string> extra_names_;
   std::vector<int> extra_ids_;
