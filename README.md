@@ -1,5 +1,12 @@
 # mercury_x1_ros2
 
+<p align="center">
+  <img src="docs/images/control_page.png" alt="Control page: Rerun 3D map with RTAB-Map point cloud, cameras, Nav2 map and waypoints" width="100%">
+</p>
+<p align="center">
+  <img src="docs/images/kiosk_status.png" alt="Head display (kiosk): system load and the running ROS 2 nodes" width="100%">
+</p>
+
 ## New stack (2026): goalkeeper drivers + RTAB-Map + Nav2 + Rerun web UI
 
 ```bash
