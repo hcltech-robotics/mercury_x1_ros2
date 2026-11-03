@@ -1,0 +1,17 @@
+voice_board:
+  ros__parameters:
+    port: /dev/xf_mic             # udev symlink for the board's CH343 control UART (else /dev/ttyACM3)
+    frame_id: voice_board_link
+    # wake direction -> yaw: yaw = angle_sign * (angle_deg - angle_front_deg); linear array reports 0..180
+    angle_front_deg: 90.0         # board angle that points straight ahead (to be calibrated)
+    angle_sign: 1.0               # -1 if the angle grows to the robot's right
+    reply_timeout: 3.0            # s to wait for the board's reply event
+    keyword_timeout: 30.0         # s for wakeup_keywords (the board compiles a model)
+    heartbeat_period: 30.0        # s of silence before a version request (each one is logged on the board)
+    alive_timeout: 75.0
+    repeat_window: 2.0            # s; identical wake events inside this window are dropped
+    # applied after every connect / board restart; -1 = leave the board's setting
+    mic_vol: -1                   # 0..30 (board default 30)
+    ref_vol: -1                   # 0..30
+    output_vol: -1                # 0..7, board's own speaker output (unused on the Mercury)
+    beam: -1                      # lock a beam (mic4: 0..2) instead of following the wake direction

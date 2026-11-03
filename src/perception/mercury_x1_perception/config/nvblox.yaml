@@ -1,0 +1,85 @@
+# Isaac ROS nvblox (3.2, CUDA) on the Orin Nano 8 GB, fed by the Orbbec DaBai on the jaw.
+# Depth is HW-registered to colour (depth_registration:=true), so both share the colour optical frame.
+# Poses come from TF: odom (RTAB-Map icp_odometry) -> ... -> camera_color_optical_frame.
+# Based on nvblox_examples_bringup/config/nvblox/nvblox_base.yaml + nvblox_realsense.yaml.
+/**:
+  ros__parameters:
+    cuda_stream_type: 1
+    voxel_size: 0.05
+    num_cameras: 1
+    use_tf_transforms: true
+    global_frame: odom
+    pose_frame: base_footprint
+    mapping_type: "static_tsdf"
+
+    tick_period_ms: 20
+    integrate_depth_rate_hz: 15.0        # DaBai depth runs at 15 Hz over USB 2.0
+    integrate_color_rate_hz: 3.0
+    update_mesh_rate_hz: 2.0
+    update_esdf_rate_hz: 5.0
+    publish_layer_rate_hz: 2.0
+    publish_debug_vis_rate_hz: 1.0
+    decay_tsdf_rate_hz: 5.0
+    clear_map_outside_radius_rate_hz: 1.0
+
+    print_rates_to_console: false
+    print_timings_to_console: false
+    print_delays_to_console: false
+    print_queue_drops_to_console: false
+    print_statistics_on_console_period_ms: 10000
+
+    esdf_mode: "2d"
+    publish_esdf_distance_slice: true
+    use_color: true
+    use_depth: true
+    use_lidar: false                     # the M10 is a 2D LaserScan; it stays in Nav2's obstacle layer
+    maximum_input_queue_length: 5
+
+    # keep GPU memory bounded on the 8 GB board: forget voxels > 6 m from the robot
+    map_clearing_radius_m: 6.0
+    map_clearing_frame_id: "base_footprint"
+    input_qos: "SENSOR_DATA"
+
+    esdf_slice_bounds_visualization_attachment_frame_id: "base_footprint"
+    esdf_slice_bounds_visualization_side_length: 8.0
+    workspace_height_bounds_visualization_attachment_frame_id: "base_footprint"
+    layer_visualization_min_tsdf_weight: 0.1
+    layer_visualization_exclusion_height_m: 2.0
+    layer_visualization_exclusion_radius_m: 6.0
+    max_back_projection_distance: 4.0
+    back_projection_subsampling: 2
+    layer_streamer_bandwidth_limit_mbps: -1.0
+
+    multi_mapper:
+      connected_mask_component_size_threshold: 2000
+      remove_small_connected_components: true
+
+    static_mapper:
+      do_depth_preprocessing: false
+      projective_integrator_max_integration_distance_m: 4.0   # DaBai depth is noisy beyond ~4 m
+      projective_integrator_truncation_distance_vox: 4.0
+      projective_integrator_weighting_mode: "inverse_square_tsdf_distance_penalty"
+      projective_integrator_max_weight: 5.0
+      projective_tsdf_integrator_invalid_depth_decay_factor: -1.0
+      raycast_subsampling_factor: 4
+      # only voxels between the floor and the robot's height matter for the base
+      workspace_bounds_type: "height_bounds"
+      workspace_bounds_min_height_m: -0.3
+      workspace_bounds_max_height_m: 1.8
+      # 2D ESDF slice for Nav2: anything from just above the floor up to the head (odom z = floor)
+      esdf_slice_height: 0.05
+      esdf_slice_min_height: 0.08
+      esdf_slice_max_height: 1.40
+      esdf_integrator_min_weight: 0.1
+      esdf_integrator_max_site_distance_vox: 2.0
+      esdf_integrator_max_distance_m: 2.0
+      mesh_integrator_min_weight: 0.1
+      mesh_integrator_weld_vertices: true
+      tsdf_decay_factor: 0.95
+      tsdf_decayed_weight_threshold: 0.001
+      exclude_last_view_from_decay: true
+      tsdf_set_free_distance_on_decayed: false
+      tsdf_decayed_free_distance_vox: 4.0
+      decay_integrator_deallocate_decayed_blocks: true
+      layer_streamer_exclusion_height_m: 2.0
+      layer_streamer_exclusion_radius_m: 6.0

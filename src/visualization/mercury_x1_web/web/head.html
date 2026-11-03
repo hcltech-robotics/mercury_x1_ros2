@@ -1,0 +1,773 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Mercury X1 head</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231d2026'/%3E%3Cline x1='32' y1='7' x2='32' y2='16' stroke='%234cc2ff' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='32' cy='7' r='4' fill='%234cc2ff'/%3E%3Crect x='11' y='16' width='42' height='30' rx='9' fill='%234cc2ff'/%3E%3Ccircle cx='23.5' cy='31' r='5' fill='%231d2026'/%3E%3Ccircle cx='40.5' cy='31' r='5' fill='%231d2026'/%3E%3Crect x='19' y='51' width='26' height='6' rx='3' fill='%233ddc84'/%3E%3C/svg%3E">
+<!-- Head display (1280x720 touch panel, kiosk browser). Served by web_server on :8081; status arrives
+     once a second over /ws, actions go to the same /api as the control page. No external resources.
+     The kiosk renders on the CPU: no CSS transitions / shadows on things that update every second. -->
+<style>
+  :root {
+    --bg: #101216; --panel: #1a1d23; --panel2: #242830; --line: #323743; --text: #eef0f3; --muted: #959cab;
+    --accent: #4cc2ff; --ok: #3ddc84; --warn: #ffb020; --bad: #ff5468; --off: #3a3f4b;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
+    font: 18px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; user-select: none; -webkit-user-select: none; }
+  button { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 12px;
+    min-height: 56px; padding: 0 22px; cursor: pointer; }
+  button:active { filter: brightness(1.3); }
+  button:disabled { opacity: .4; }
+  button.primary { background: #134a66; border-color: var(--accent); }
+  button.on { background: #1f5a3a; border-color: var(--ok); }
+
+  /* status bar */
+  #bar { height: 64px; display: flex; align-items: center; gap: 22px; padding: 0 22px; background: var(--panel);
+    border-bottom: 1px solid var(--line); }
+  #bar .name { font-weight: 700; font-size: 22px; }
+  #bar .time { color: var(--muted); font-variant-numeric: tabular-nums; }
+  #bar .spacer { flex: 1; }
+  .chip { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+  .chip .sub { color: var(--muted); font-size: 15px; }
+  #conn-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--bad); }
+  #conn-dot.ok { background: var(--ok); }
+
+  /* tabs */
+  #tabs { display: flex; gap: 0; height: 64px; border-bottom: 1px solid var(--line); }
+  #tabs button { flex: 1; border: 0; border-radius: 0; background: transparent; color: var(--muted); font-size: 20px;
+    min-height: 64px; border-bottom: 3px solid transparent; }
+  #tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+  .page { display: none; height: calc(100% - 128px); padding: 18px 22px; overflow-y: auto; }
+  .page.active { display: grid; }
+  #status { grid-template-columns: 420px 1fr; gap: 18px; align-content: start; }
+  #settings { grid-template-columns: 1fr 1fr; gap: 18px; align-content: start; }
+  /* chat: no animations (the kiosk renders on the CPU); the state shows as colour */
+  #chat { grid-template-columns: 300px 1fr; gap: 18px; }
+  /* voice tab: wake word + board | direction + events | voice output */
+  #voicetab { grid-template-columns: 300px 1fr 300px; gap: 18px; }
+  #vb-presets { display: flex; flex-direction: column; gap: 6px; }
+  #vb-presets button { min-height: 48px; font-size: 16px; text-align: left; padding: 0 14px; }
+  #vb-presets button.on { background: #134a66; border-color: var(--accent); }
+  #vb-thr button { min-height: 44px; }
+  #vb-thr button.on { background: #134a66; border-color: var(--accent); }
+  .kv { display: grid; grid-template-columns: 96px 1fr; gap: 4px 10px; font-size: 15px; margin-top: 10px; }
+  .kv span:nth-child(odd) { color: var(--muted); }
+  .kv span { min-width: 0; overflow-wrap: anywhere; }
+  #dir-card { display: flex; flex-direction: column; min-height: 0; }
+  #radar { width: 100%; height: 210px; display: block; }
+  #wake-last { text-align: center; font-size: 20px; margin: 4px 0 10px; min-height: 26px; }
+  #wake-list { flex: 1; overflow-y: auto; min-height: 0; }
+  #wake-list table { width: 100%; border-collapse: collapse; font-size: 15px; font-variant-numeric: tabular-nums; }
+  #wake-list td, #wake-list th { padding: 5px 6px; border-top: 1px solid var(--line); text-align: left; }
+  #wake-list th { color: var(--muted); font-weight: 600; font-size: 13px; border-top: 0; }
+  #talk { display: flex; flex-direction: column; align-items: center; gap: 10px; padding-top: 16px; text-align: center; }
+  #mic { flex: none; width: 170px; height: 170px; min-height: 0; border-radius: 50%; padding: 0; border: 6px solid var(--line);
+    background: var(--panel2); display: flex; align-items: center; justify-content: center; }
+  #mic svg { width: 80px; height: 80px; fill: none; stroke: #cfd3da; stroke-width: 1.8; stroke-linecap: round; }
+  #mic.listening { border-color: var(--ok); }
+  #mic.hearing { border-color: var(--ok); background: #1d5a36; }
+  #mic.thinking { border-color: var(--accent); background: #12344a; }
+  #mic.speaking { border-color: var(--warn); background: #4a3710; }
+  #mic.error, #mic.connecting { border-color: var(--bad); }
+  #mic-state { font-size: 24px; font-weight: 600; }
+  #v-set { width: 100%; text-align: left; }
+  #v-set .lbl { color: var(--muted); font-size: 15px; }
+  .vrow { display: grid; grid-template-columns: 62px 1fr 50px; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .vrow b { text-align: right; font-variant-numeric: tabular-nums; }
+  #v-vol { -webkit-appearance: none; appearance: none; height: 10px; border-radius: 5px; background: var(--panel2); width: 100%; }
+  #v-vol::-webkit-slider-thumb { -webkit-appearance: none; width: 34px; height: 34px; border-radius: 50%; background: var(--accent); border: 0; }
+  .vseg { grid-column: 2 / 4; display: flex; gap: 5px; min-width: 0; }
+  .vseg button, #v-voices button { min-height: 46px; padding: 0 6px; font-size: 15px; flex: 1; min-width: 0; }
+  .vseg button.on, #v-voices button.on { background: #134a66; border-color: var(--accent); }
+  #v-voices { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  #convo-card { display: flex; flex-direction: column; min-height: 0; max-height: 100%; }
+  #convo { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 6px; }
+  .msg { max-width: 78%; padding: 12px 16px; border-radius: 18px; font-size: 20px; line-height: 1.35; }
+  .msg.user { align-self: flex-end; background: #134a66; border-bottom-right-radius: 4px; }
+  .msg.robot { align-self: flex-start; background: var(--panel2); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .msg.note { align-self: center; color: #ffb3bd; font-size: 15px; background: none; }
+  .msg .t { display: block; color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px 18px; }
+  .card h2 { margin: 0 0 12px; font-size: 14px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0; }
+  .muted { color: var(--muted); }
+  .small { font-size: 15px; }
+
+  /* system */
+  .meter { display: grid; grid-template-columns: 56px 1fr 118px; align-items: center; gap: 12px; margin: 10px 0; }
+  .meter .lbl { color: var(--muted); }
+  .meter .val { text-align: right; font-variant-numeric: tabular-nums; }
+  .bar { height: 14px; background: var(--panel2); border-radius: 7px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--ok); }
+  #cores { display: flex; gap: 10px; align-items: flex-end; height: 92px; margin: 6px 0 4px 68px; }
+  .core { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); }
+  .core .col { width: 30px; height: 64px; background: var(--panel2); border-radius: 6px; display: flex; align-items: flex-end; overflow: hidden; }
+  .core .col i { display: block; width: 100%; background: var(--ok); }
+  .temps { display: flex; gap: 22px; margin-top: 14px; font-variant-numeric: tabular-nums; }
+  .temps b { font-weight: 600; }
+
+  /* waist (Settings) */
+  #waist { -webkit-appearance: none; appearance: none; height: 12px; border-radius: 6px; background: var(--panel2); width: 100%;
+    direction: rtl; margin: 26px 0 22px; }
+  #waist::-webkit-slider-thumb { -webkit-appearance: none; width: 44px; height: 44px; border-radius: 50%; background: var(--accent); border: 0; }
+  .wlabels { display: flex; justify-content: space-between; color: var(--muted); font-size: 15px; }
+  #waist-now { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  /* right card on Status: ROS 2 nodes | GPU processes */
+  #st-tabs { display: flex; gap: 6px; margin: -4px 0 12px; }
+  #st-tabs button { min-height: 44px; padding: 0 16px; font-size: 16px; background: transparent; color: var(--muted); }
+  #st-tabs button.on { background: #134a66; border-color: var(--accent); color: var(--text); }
+  #st-tabs .count { margin-left: auto; align-self: center; font-size: 15px; color: var(--muted); }
+  .st-pane { display: none; }
+  .st-pane.on { display: block; }
+  #gpu-procs { width: 100%; border-collapse: collapse; font-size: 16px; font-variant-numeric: tabular-nums; }
+  #gpu-procs th { text-align: left; color: var(--muted); font-weight: 600; font-size: 13px; letter-spacing: .06em;
+    text-transform: uppercase; padding: 0 8px 8px; }
+  #gpu-procs td { padding: 7px 8px; border-top: 1px solid var(--line); vertical-align: middle; }
+  #gpu-procs td.num, #gpu-procs th.num { text-align: right; white-space: nowrap; }
+  #gpu-procs .what { display: block; color: var(--muted); font-size: 13px; }
+  #gpu-procs .gbar { width: 150px; }
+  #gpu-procs .gbar .bar { height: 10px; }
+  #gpu-procs .gbar .bar i { background: var(--accent); }
+  #gpu-procs tr.total td { font-weight: 600; }
+
+  /* node bubbles */
+  .group { margin: 2px 0 10px; }
+  .group .gname { color: var(--muted); font-size: 14px; margin-bottom: 6px; }
+  .bubbles { display: flex; flex-wrap: wrap; gap: 6px; }
+  .bubble { display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: 999px; font-size: 14px;
+    background: var(--panel2); border: 1px solid var(--line); color: var(--muted); }
+  .bubble::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--off); }
+  .bubble.up { color: var(--text); border-color: #2d6b48; background: #17301f; }
+  .bubble.up::before { background: var(--ok); }
+  .bubble.down { border-style: dashed; }
+  .bubble.down.need { color: #ffb3bd; border-color: #6b2d36; }
+  .bubble.down.need::before { background: var(--bad); }
+
+  /* switches */
+  .switch { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 64px; }
+  .switch .track { width: 76px; height: 42px; border-radius: 21px; background: var(--off); position: relative; transition: background .2s; flex: none; }
+  .switch .track::after { content: ""; position: absolute; top: 4px; left: 4px; width: 34px; height: 34px; border-radius: 50%;
+    background: #cfd3da; transition: left .2s; }
+  .switch.checked .track { background: #2f8f5a; }
+  .switch.checked.warn .track { background: #a8720f; }
+  .switch.checked .track::after { left: 38px; background: #fff; }
+  .switch.busy { opacity: .5; }
+
+  /* led */
+  #swatches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+  #swatches button { height: 64px; border-radius: 14px; border: 2px solid transparent; }
+  #swatches button.sel { border-color: #fff; }
+
+  /* lists (wifi networks, remotes) */
+  .list { display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto; margin-top: 10px; }
+  .item { display: flex; align-items: center; gap: 14px; min-height: 60px; padding: 0 16px; border-radius: 12px;
+    background: var(--panel2); border: 1px solid var(--line); }
+  .item.active { border-color: var(--ok); }
+  .item .grow { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tag { font-size: 13px; color: var(--muted); }
+
+  /* password dialog + on-screen keyboard */
+  #dlg { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; align-items: flex-end; justify-content: center; }
+  #dlg.show { display: flex; }
+  #dlg .box { width: 100%; background: var(--panel); border-top: 1px solid var(--line); padding: 16px 22px 18px; }
+  #pw { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  #pw-field { flex: 1; min-height: 56px; display: flex; align-items: center; padding: 0 16px; border-radius: 12px;
+    background: var(--bg); border: 1px solid var(--accent); font-size: 22px; letter-spacing: .04em; overflow: hidden; }
+  #kbd { display: flex; flex-direction: column; gap: 8px; }
+  #kbd .krow { display: flex; gap: 8px; justify-content: center; }
+  #kbd button { min-width: 0; flex: 1; max-width: 104px; min-height: 58px; padding: 0; font-size: 22px; }
+  #kbd button.wide { max-width: 200px; flex: 2; font-size: 17px; }
+  #kbd button.space { max-width: 520px; flex: 6; }
+
+  #estop { display: none; position: fixed; left: 0; right: 0; top: 64px; z-index: 5; padding: 14px 22px;
+    background: var(--bad); color: #fff; font-size: 22px; font-weight: 700; }
+  #estop.show { display: block; }
+  #estop span { font-weight: 400; font-size: 17px; margin-left: 12px; }
+  #toast { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); background: #000c; border: 1px solid var(--line);
+    padding: 14px 22px; border-radius: 12px; opacity: 0; transition: opacity .3s; pointer-events: none; max-width: 80%; }
+  #toast.show { opacity: 1; }
+  .rm-ic { flex: none; display: block; }
+  #remote-chip { gap: 8px; }
+  #remote-chip .gp { width: 30px; height: 30px; fill: none; stroke: #cfd3da; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  #remote-chip.off { opacity: .45; }
+  .rm-badge { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 999px; font-weight: 600;
+    font-size: 18px; border: 1px solid var(--line); background: var(--panel2); }
+  .rm-badge.ok { color: var(--ok); border-color: #2f8a57; background: #183626; }
+  .rm-badge.warn { color: var(--warn); border-color: #8a6a1f; background: #3a2d0d; }
+  .rm-badge.muted { color: var(--muted); }
+  /* fixed sizes: the changing lock text / numbers must not resize the status bar or the tile */
+  #remote-chip { width: 228px; overflow: hidden; }
+  #remote-ind { flex: none; width: 110px; justify-content: flex-end; gap: 8px; }
+  #remote-txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #r-ind { display: grid; grid-template-columns: minmax(0, 1fr) 100px 130px; align-items: center; gap: 14px; }
+  #r-ind:empty { display: none; }
+  #r-ind .rm-badge { min-width: 0; overflow: hidden; white-space: nowrap; }
+  #r-ind .rm-badge svg { flex: none; }
+  #r-ind .v { display: inline-flex; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+</style>
+<script src="/static/remote_ui.js"></script>
+<script src="/static/nodes_ui.js"></script>
+</head>
+<body>
+<div id="bar">
+  <span class="name">Mercury X1</span>
+  <span class="time" id="time">--:--</span>
+  <span class="chip"><span id="conn-dot" title="link to the robot"></span><span class="sub" id="state">connecting…</span></span>
+  <span class="spacer"></span>
+  <span class="chip off" id="remote-chip" title="Unitree remote">
+    <svg class="gp" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="11" rx="5"/><path d="M7 10.5v4M5 12.5h4"/><circle cx="15.5" cy="11.5" r=".9"/><circle cx="18" cy="14" r=".9"/></svg>
+    <span id="remote-ind" class="chip"></span><span class="sub" id="remote-txt">off</span>
+  </span>
+  <span class="chip" id="wifi-chip">
+    <svg width="30" height="24" viewBox="0 0 30 24" id="wifi-icon"></svg>
+    <span><span id="wifi-ssid">—</span> <span class="sub" id="wifi-sub"></span></span>
+  </span>
+  <span class="chip" id="batt-chip">
+    <svg width="46" height="24" viewBox="0 0 46 24">
+      <rect x="1" y="2" width="38" height="20" rx="4" fill="none" stroke="#cfd3da" stroke-width="2"/>
+      <rect x="40" y="8" width="4" height="8" rx="1" fill="#cfd3da"/>
+      <rect id="batt-fill" x="4" y="5" width="0" height="14" rx="2" fill="#3ddc84"/>
+      <path id="batt-bolt" d="M22 3 L14 13 H19 L16 21 L25 10 H20 Z" fill="#ffd400" stroke="#101216" stroke-width="1" visibility="hidden"/>
+    </svg>
+    <span><span id="batt-pct">--</span> <span class="sub" id="batt-v"></span></span>
+  </span>
+</div>
+<div id="estop">E-STOP<span>Base and arm power are cut. Release the button, then switch the arms back on (Settings → Arms).</span></div>
+<div id="tabs">
+  <button data-tab="status" class="active">Status</button>
+  <button data-tab="settings">Settings</button>
+  <button data-tab="voicetab">Voice</button>
+  <button data-tab="chat">Chat</button>
+</div>
+
+<div class="page active" id="status">
+  <div class="card">
+    <h2>System</h2>
+    <div class="meter"><span class="lbl">CPU</span><div class="bar"><i id="cpu-bar"></i></div><span class="val" id="cpu-val">—</span></div>
+    <div id="cores"></div>
+    <div class="meter"><span class="lbl">GPU</span><div class="bar"><i id="gpu-bar"></i></div><span class="val" id="gpu-val">—</span></div>
+    <div class="meter"><span class="lbl">RAM</span><div class="bar"><i id="ram-bar"></i></div><span class="val" id="ram-val">—</span></div>
+    <div class="temps"><span>CPU <b id="t-cpu">—</b></span><span>GPU <b id="t-gpu">—</b></span><span>Junction <b id="t-tj">—</b></span></div>
+    <div class="row small muted" id="sys-extra" style="margin-top:14px"></div>
+  </div>
+  <div class="card">
+    <div id="st-tabs">
+      <button data-pane="nodes-pane" class="on">ROS 2 nodes</button>
+      <button data-pane="gpu-pane">GPU processes</button>
+      <span class="count" id="node-count"></span>
+    </div>
+    <div class="st-pane on" id="nodes-pane"><div id="nodes"></div></div>
+    <div class="st-pane" id="gpu-pane">
+      <table id="gpu-procs"><thead><tr><th>Process</th><th class="num">PID</th><th class="num">GPU memory</th><th></th>
+        <th class="num">RAM</th><th class="num">CPU</th></tr></thead><tbody></tbody></table>
+      <div class="small muted" id="gpu-note" style="margin-top:10px"></div>
+    </div>
+  </div>
+</div>
+
+<div class="page" id="chat">
+  <div class="card" id="talk">
+    <button id="mic" class="off" aria-label="listen on / off">
+      <svg viewBox="0 0 24 24"><rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3.5M8.5 21.5h7"/></svg>
+    </button>
+    <div id="mic-state">Tap to talk with Mercury</div>
+    <div id="mic-sub" class="muted small"></div>
+    <div class="row" style="justify-content:center;flex-wrap:nowrap">
+      <button id="v-stop">Stop</button>
+      <button id="v-clear">Clear</button>
+    </div>
+    <div id="v-stats" class="muted small"></div>
+  </div>
+  <div class="card" id="convo-card">
+    <h2>Conversation</h2>
+    <div id="convo"><div class="muted">Switch listening on and just speak - Mercury answers out loud.</div></div>
+  </div>
+</div>
+
+<div class="page" id="voicetab">
+  <div class="card">
+    <h2>Wake word (voice board)</h2>
+    <div id="vb-presets"></div>
+    <div class="lbl small" style="margin:12px 0 6px">Threshold</div>
+    <div class="vseg" id="vb-thr" style="grid-column:auto"><button data-t="700">700</button><button data-t="800">800</button><button data-t="900">900</button><button data-t="1100">1100</button></div>
+    <div class="muted small">lower = wakes more easily (and falsely)</div>
+    <div class="small" id="vb-job" style="margin-top:8px;min-height:20px"></div>
+    <div class="kv" id="vb-info"></div>
+  </div>
+  <div class="card" id="dir-card">
+    <h2>Direction &amp; wake events</h2>
+    <svg id="radar" viewBox="0 0 320 175"></svg>
+    <div id="wake-last" class="muted">no wake yet - say the wake word</div>
+    <div id="wake-list"></div>
+  </div>
+  <div class="card" id="voice-card">
+    <h2>Voice</h2>
+    <div id="v-set">
+      <div class="vrow"><span class="lbl">Volume</span><input type="range" id="v-vol" min="0" max="100" step="1"><b id="v-vol-t">--</b></div>
+      <div class="vrow"><span class="lbl">Speed</span>
+        <div class="vseg" id="v-speed"><button data-s="0.85">Slow</button><button data-s="1">Normal</button><button data-s="1.15">Fast</button></div></div>
+      <div class="lbl" style="margin:6px 0 6px">Voice</div>
+      <div id="v-voices"></div>
+      <button id="v-test" class="primary" style="margin-top:12px;width:100%">Test voice</button>
+    </div>
+  </div>
+</div>
+
+<div class="page" id="settings">
+  <div class="card">
+    <h2>Wi-Fi</h2>
+    <div class="row"><span class="grow" id="w-current">—</span></div>
+    <div class="row"><button id="w-scan" class="primary">Scan</button><span class="muted small" id="w-msg"></span></div>
+    <div class="list" id="w-list"></div>
+  </div>
+  <div class="card">
+    <h2>Arms</h2>
+    <div class="switch" id="sw-arms"><span>Arm power</span><span class="track"></span></div>
+    <div class="switch warn" id="sw-free"><span>Freedrive <span class="muted small">(move the arms by hand)</span></span><span class="track"></span></div>
+    <div class="muted small" id="arms-info"></div>
+  </div>
+  <div class="card">
+    <h2>Waist</h2>
+    <div class="row" style="justify-content:space-between;flex-wrap:nowrap">
+      <span><span id="waist-now">—</span> <span class="muted small" id="waist-dir"></span></span>
+      <button id="b-waist0">Straight</button>
+    </div>
+    <input type="range" id="waist" min="-90" max="90" step="1" value="0">
+    <div class="wlabels"><span>◀ left 90°</span><span>target <b id="waist-t">0°</b></span><span>right 90° ▶</span></div>
+    <div class="muted small" style="margin-top:8px">Turns the whole upper body; the arms swing with it.</div>
+  </div>
+  <div class="card">
+    <h2>LED</h2>
+    <div id="swatches"></div>
+  </div>
+  <div class="card">
+    <h2>Unitree remote</h2>
+    <div class="row" id="r-ind"></div>
+    <div class="row"><span id="r-state" class="grow">—</span></div>
+    <div class="row">
+      <button id="r-scan" class="primary">Scan</button>
+      <button id="r-disconnect">Disconnect</button>
+      <button id="r-auto">Autoconnect</button>
+    </div>
+    <div class="list" id="r-list"></div>
+  </div>
+</div>
+
+<div id="dlg">
+  <div class="box">
+    <div class="row" style="margin-top:0"><b id="dlg-title">Password</b><span class="muted small" id="dlg-sub"></span></div>
+    <div id="pw"><div id="pw-field"></div>
+      <button id="pw-show">Show</button><button id="pw-cancel">Cancel</button><button id="pw-ok" class="primary">Connect</button></div>
+    <div id="kbd"></div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const esc = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+let S = null;
+const toast = (t) => { const e = $("#toast"); e.textContent = t; e.classList.add("show"); clearTimeout(e._t); e._t = setTimeout(() => e.classList.remove("show"), 3000); };
+async function api(action, body = {}) {
+  try {
+    const r = await fetch(`/api/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!j.ok) toast(j.error || `${action} failed`);
+    return j;
+  } catch (e) { toast(`${action}: ${e}`); }
+}
+document.addEventListener("contextmenu", (e) => e.preventDefault());
+
+// ---- tabs
+for (const b of document.querySelectorAll("#tabs button")) b.onclick = () => {
+  document.querySelectorAll("#tabs button").forEach((x) => x.classList.toggle("active", x === b));
+  document.querySelectorAll(".page").forEach((p) => p.classList.toggle("active", p.id === b.dataset.tab));
+};
+
+// waist: send while dragging (no "change" after a touch drag in the kiosk browser), follow the measured angle
+let waistT = null, waistTouched = 0;
+const sendWaist = () => { clearTimeout(waistT); waistT = null; api("waist", { deg: +$("#waist").value, speed: 20 }); };
+$("#waist").oninput = () => {
+  waistTouched = Date.now(); $("#waist-t").textContent = `${$("#waist").value}°`;
+  if (!waistT) waistT = setTimeout(sendWaist, 300);
+};
+for (const ev of ["change", "pointerup", "touchend", "mouseup"]) $("#waist").addEventListener(ev, sendWaist);
+$("#b-waist0").onclick = () => { waistTouched = Date.now(); $("#waist").value = 0; $("#waist-t").textContent = "0°"; sendWaist(); };
+function renderWaist() {
+  const w = (S.body_joints || {}).body;
+  $("#waist-now").textContent = w == null ? "—" : `${w.toFixed(0)}°`;
+  $("#waist-dir").textContent = w == null ? "position unknown" : Math.abs(w) < 1 ? "straight" : w > 0 ? "turned left" : "turned right";
+  if (w != null && Date.now() - waistTouched > 3000) { $("#waist").value = Math.round(w); $("#waist-t").textContent = `${Math.round(w)}°`; }
+}
+
+// Status: right card shows ROS 2 nodes or GPU processes
+let stPane = "nodes-pane";
+for (const b of document.querySelectorAll("#st-tabs button")) b.onclick = () => {
+  stPane = b.dataset.pane;
+  document.querySelectorAll("#st-tabs button").forEach((x) => x.classList.toggle("on", x === b));
+  document.querySelectorAll(".st-pane").forEach((p) => p.classList.toggle("on", p.id === stPane));
+  renderNodes(); renderGpuProcs();
+};
+
+// ---- status socket (1 Hz), reconnects forever
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onmessage = (m) => { S = JSON.parse(m.data); $("#conn-dot").classList.add("ok"); render(); };
+  ws.onclose = () => { $("#conn-dot").classList.remove("ok"); $("#state").textContent = "no link to the robot"; setTimeout(connect, 2000); };
+}
+connect();
+
+const loadColor = (p) => p > 85 ? "var(--bad)" : p > 60 ? "var(--warn)" : "var(--ok)";
+const tempColor = (t) => t >= 90 ? "var(--bad)" : t >= 75 ? "var(--warn)" : "var(--text)";
+function setBar(id, pct) { const e = $(id); e.style.width = `${Math.max(0, Math.min(100, pct || 0))}%`; e.style.background = loadColor(pct || 0); }
+
+function render() {
+  $("#time").textContent = S.time;
+  const slam = S.procs.slam, nav = S.procs.nav;
+  $("#state").textContent = [slam.running ? `${slam.mode} · ${slam.map}` : "SLAM off", nav.running ? `Nav ${S.nav}` : "Nav off"].join("  ·  ");
+  $("#estop").classList.toggle("show", !!S.estop);
+  renderBattery(); renderWifiChip(); renderSystem(); renderNodes(); renderGpuProcs(); renderArms(); renderWaist(); renderWifi(); renderRemote(); renderVoice(); renderVoiceBoard();
+}
+
+function renderBattery() {
+  const p = S.battery_pct;
+  const w = p == null ? 0 : Math.max(0, Math.min(100, p)) / 100 * 32;
+  $("#batt-fill").setAttribute("width", w.toFixed(1));
+  $("#batt-fill").setAttribute("fill", p == null ? "#959cab" : p > 30 ? "#3ddc84" : p > 15 ? "#ffb020" : "#ff5468");
+  $("#batt-bolt").setAttribute("visibility", S.charge === "charging" ? "visible" : "hidden");
+  $("#batt-pct").textContent = p == null ? "--" : `${Math.round(p)} %`;
+  $("#batt-v").textContent = S.battery == null ? "" : `${S.battery.toFixed(1)} V`;
+}
+
+function wifiBars(signal, connected) {
+  const n = !connected ? 0 : signal >= 75 ? 4 : signal >= 50 ? 3 : signal >= 25 ? 2 : 1;
+  return [0, 1, 2, 3].map((i) => `<rect x="${2 + i * 7}" y="${18 - i * 5}" width="5" height="${4 + i * 5}" rx="1" fill="${i < n ? "#eef0f3" : "#3a3f4b"}"/>`).join("");
+}
+function renderWifiChip() {
+  const w = S.wifi;
+  $("#wifi-icon").innerHTML = wifiBars(w.signal || 0, w.connected);
+  $("#wifi-ssid").textContent = w.connected ? w.ssid : "Wi-Fi off";
+  $("#wifi-sub").textContent = w.connected ? `${w.signal} %${w.ip ? " · " + w.ip : ""}` : "";
+}
+
+function renderSystem() {
+  const y = S.system || {};
+  if (y.cpu == null) return;
+  setBar("#cpu-bar", y.cpu); $("#cpu-val").textContent = `${y.cpu.toFixed(0)} %`;
+  setBar("#gpu-bar", y.gpu); $("#gpu-val").textContent = y.gpu == null ? "—" : `${y.gpu.toFixed(0)} %`;
+  const ram = y.ram_total_mb ? 100 * y.ram_used_mb / y.ram_total_mb : 0;
+  setBar("#ram-bar", ram); $("#ram-val").textContent = y.ram_total_mb ? `${(y.ram_used_mb / 1024).toFixed(1)} / ${(y.ram_total_mb / 1024).toFixed(1)} G` : "—";
+  const cores = $("#cores");
+  if (cores.children.length !== y.cores.length) {
+    cores.innerHTML = y.cores.map((_, i) => `<div class="core"><div class="col"><i></i></div><span>${i}</span></div>`).join("");
+  }
+  y.cores.forEach((c, i) => { const bar = cores.children[i].querySelector("i"); bar.style.height = `${c || 0}%`; bar.style.background = loadColor(c || 0); });
+  const t = y.temp || {};
+  for (const [k, id] of [["cpu", "#t-cpu"], ["gpu", "#t-gpu"], ["tj", "#t-tj"]]) {
+    $(id).textContent = t[k] == null ? "—" : `${t[k].toFixed(0)} °C`; $(id).style.color = tempColor(t[k] || 0);
+  }
+  const w = y.power || {}, W = w.watts || {};
+  $("#sys-extra").textContent = [w.mode ? `${w.mode}${w.clocks_pinned ? " · clocks pinned" : ""}` : "",
+    W.VDD_IN != null ? `${W.VDD_IN.toFixed(1)} W` : "", w.fan_pct != null ? `fan ${w.fan_pct} %` : "",
+    y.core_mhz && y.core_mhz[0] ? `CPU ${y.core_mhz[0]} MHz` : "", y.gpu_mhz ? `GPU ${y.gpu_mhz}/${w.gpu_mhz_max ?? "?"} MHz` : "",
+    S.ros ? `ROS domain ${S.ros.domain} · ${S.ros.network === "lan" ? "LAN" : "robot only"}` : ""].filter(Boolean).join("  ·  ");
+}
+
+// node groups: which nodes belong where, and which group must run for what
+function renderNodes() {      // groups and bubbles: nodes_ui.js (shared with the control page)
+  const r = NodesUI.render(S.nodes, S.procs);
+  if (r.html !== $("#nodes")._h) { $("#nodes").innerHTML = r.html; $("#nodes")._h = r.html; }
+  if (stPane === "nodes-pane") $("#node-count").textContent = `${r.running} running` + (r.missing ? ` · ${r.missing} missing` : "");
+}
+
+// GPU memory per process (nvmap via jtop; on the Jetson GPU memory is part of the RAM)
+function renderGpuProcs() {
+  const g = S.gpu_procs || {}, procs = g.procs || [];
+  if (stPane === "gpu-pane") $("#node-count").textContent = procs.length ? `${procs.length} using GPU memory` : "";
+  const top = Math.max(1, ...procs.map((p) => p.gpu_mb));
+  const fmt = (mb) => mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${mb} MB`;
+  const rows = procs.map((p) => `<tr><td>${esc(p.name)}${p.what ? `<span class="what">${esc(p.what)}</span>` : ""}</td>` +
+    `<td class="num muted">${p.pid}</td><td class="num">${fmt(p.gpu_mb)}</td>` +
+    `<td class="gbar"><div class="bar"><i style="width:${(100 * p.gpu_mb / top).toFixed(0)}%"></i></div></td>` +
+    `<td class="num">${fmt(p.ram_mb)}</td><td class="num">${p.cpu.toFixed(0)} %</td></tr>`).join("");
+  const y = S.system || {};
+  const total = procs.length ? `<tr class="total"><td>Total</td><td></td><td class="num">${fmt(g.total_mb)}</td>` +
+    `<td colspan="3" class="muted small">${y.ram_total_mb ? `of ${(y.ram_total_mb / 1024).toFixed(1)} GB shared RAM` : ""}</td></tr>` : "";
+  const html = rows + total || `<tr><td colspan="6" class="muted">${esc(g.error || "no process holds GPU memory")}</td></tr>`;
+  const body = $("#gpu-procs tbody");
+  if (html !== body._h) { body.innerHTML = html; body._h = html; }
+  $("#gpu-note").textContent = g.error ? "" : `GPU memory comes out of the shared RAM. ` +
+    (g.idle ? `${g.idle} more process${g.idle > 1 ? "es have" : " has"} a GPU context but no GPU memory.` : "");
+}
+
+// ---- switches: show the robot's state; a tap asks for a change and waits up to 8 s for it to show
+function bindSwitch(el, onTap) {
+  el.addEventListener("click", async () => {
+    if (el.classList.contains("busy")) return;
+    const want = !el.classList.contains("checked");
+    if (await onTap(want) === false) return;
+    el.classList.add("busy"); el._until = Date.now() + 8000; el._want = want;
+  });
+  return (state) => {
+    if (el._until && Date.now() < el._until && state !== el._want) return;
+    el._until = 0; el.classList.remove("busy"); el.classList.toggle("checked", !!state);
+  };
+}
+const setArms = bindSwitch($("#sw-arms"), (on) => {
+  if (!on && !confirm("Power the arms off? They go limp - make sure they are supported.")) return false;
+  api("arms_power", { on });
+});
+const setFree = bindSwitch($("#sw-free"), (on) => {
+  if (on && !confirm("Freedrive: the arms can be moved by hand and may sink. Hold the arms. Continue?")) return false;
+  api("freedrive", { on });
+});
+function renderArms() {
+  const arms = Object.entries(S.arms || {});
+  setArms(arms.length > 0 && arms.every(([, a]) => a.powered));
+  setFree(arms.some(([, a]) => a.freedrive));
+  $("#arms-info").textContent = arms.length ? arms.map(([s, a]) => `${s}: ${a.connected ? (a.powered ? "powered" : "off") : "no link"}`).join("  ·  ") : "arm driver not running";
+}
+
+// ---- LED
+const COLORS = [["#ffffff", "white"], ["#ff2020", "red"], ["#ff8800", "orange"], ["#ffd400", "yellow"], ["#20e060", "green"],
+                ["#00c8ff", "cyan"], ["#2050ff", "blue"], ["#a040ff", "purple"], ["#ff40a0", "pink"], ["#000000", "off"]];
+$("#swatches").innerHTML = COLORS.map(([c, n]) => `<button data-c="${c}" title="${n}" style="background:${c === "#000000" ? "var(--panel2)" : c}">${n === "off" ? "Off" : ""}</button>`).join("");
+for (const b of document.querySelectorAll("#swatches button")) b.onclick = () => {
+  const c = b.dataset.c, rgb = [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16) / 255);
+  api("led", { r: rgb[0], g: rgb[1], b: rgb[2] });
+  document.querySelectorAll("#swatches button").forEach((x) => x.classList.toggle("sel", x === b));
+};
+
+// ---- Wi-Fi
+$("#w-scan").onclick = () => api("wifi_scan");
+function renderWifi() {
+  const w = S.wifi;
+  $("#w-current").innerHTML = w.connected ? `Connected to <b>${esc(w.ssid)}</b> <span class="muted small">· ${w.signal} % · ch ${esc(w.channel)}${w.ip ? " · " + esc(w.ip) : ""}</span>` : `<span class="muted">not connected</span>`;
+  $("#w-scan").disabled = !!w.busy;
+  $("#w-msg").textContent = w.busy ? `${w.busy}…` : w.message || (w.networks.length ? "" : "tap Scan to list networks");
+  const key = JSON.stringify([w.networks, w.ssid, w.busy]);
+  if (key === $("#w-list")._k) return;
+  $("#w-list")._k = key;
+  $("#w-list").innerHTML = w.networks.map((n, i) =>
+    `<div class="item ${n.active ? "active" : ""}" data-i="${i}">
+       <svg width="30" height="24" viewBox="0 0 30 24">${wifiBars(n.signal, true)}</svg>
+       <span class="grow">${esc(n.ssid)}</span>
+       <span class="tag">${n.active ? "connected" : n.saved ? "saved" : n.secure ? "🔒" : "open"}</span>
+     </div>`).join("");
+  for (const it of $("#w-list").querySelectorAll(".item")) it.onclick = () => {
+    const n = w.networks[+it.dataset.i];
+    if (n.active || w.busy) return;
+    if (n.secure && !n.saved) askPassword(n.ssid);
+    else if (confirm(`Connect to ${n.ssid}?\nThe robot leaves its current network; the control page moves with it.`)) api("wifi_connect", { ssid: n.ssid });
+  };
+}
+
+// password entry with an on-screen keyboard
+let pw = "", pwShow = false, kbdMode = "lower", pwSsid = "";
+const KEYS = {
+  lower: ["1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm"],
+  upper: ["1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"],
+  sym: ["!@#$%^&*()", "-_=+[]{};:", "'\"\\|,.<>/?", "`~ "],
+};
+function drawKbd() {
+  const rows = KEYS[kbdMode].map((r, i) => {
+    let keys = [...r].map((k) => `<button data-k="${esc(k)}">${k === " " ? "␣" : esc(k)}</button>`).join("");
+    if (i === 3) keys = `<button class="wide" data-a="shift">${kbdMode === "upper" ? "abc" : "⇧ ABC"}</button>` + keys + `<button class="wide" data-a="bs">⌫</button>`;
+    return `<div class="krow">${keys}</div>`;
+  });
+  rows.push(`<div class="krow"><button class="wide" data-a="sym">${kbdMode === "sym" ? "abc" : "#+="}</button><button class="space" data-k=" ">space</button><button class="wide" data-a="clear">Clear</button></div>`);
+  $("#kbd").innerHTML = rows.join("");
+}
+function drawPw() { $("#pw-field").textContent = pwShow ? pw : "•".repeat(pw.length); $("#pw-ok").disabled = pw.length < 8; }
+$("#kbd").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.k !== undefined) pw += b.dataset.k;
+  else if (b.dataset.a === "bs") pw = pw.slice(0, -1);
+  else if (b.dataset.a === "clear") pw = "";
+  else if (b.dataset.a === "shift") { kbdMode = kbdMode === "upper" ? "lower" : "upper"; drawKbd(); }
+  else if (b.dataset.a === "sym") { kbdMode = kbdMode === "sym" ? "lower" : "sym"; drawKbd(); }
+  drawPw();
+});
+function askPassword(ssid) {
+  pw = ""; pwShow = false; kbdMode = "lower"; pwSsid = ssid;
+  $("#dlg-title").textContent = `Password for ${ssid}`;
+  $("#dlg-sub").textContent = "  (the robot leaves its current network; if this one fails it goes back)";
+  $("#pw-show").textContent = "Show";
+  drawKbd(); drawPw(); $("#dlg").classList.add("show");
+}
+$("#pw-show").onclick = () => { pwShow = !pwShow; $("#pw-show").textContent = pwShow ? "Hide" : "Show"; drawPw(); };
+$("#pw-cancel").onclick = () => { $("#dlg").classList.remove("show"); pw = ""; };
+$("#pw-ok").onclick = () => { api("wifi_connect", { ssid: pwSsid, password: pw }); $("#dlg").classList.remove("show"); pw = ""; };
+
+// ---- voice chat (web_server voice.py: mic -> Whisper -> Qwen -> Kokoro -> speaker)
+const VOICE_TEXT = { off: "Tap to talk with Mercury", connecting: "Connecting…", listening: "Listening - just speak",
+  hearing: "Hearing you…", thinking: "Thinking…", speaking: "Speaking", error: "Voice error" };
+$("#mic").onclick = () => api("voice", { op: "listen", on: !(S.voice && S.voice.enabled) });
+$("#v-stop").onclick = () => api("voice", { op: "stop" });
+$("#v-clear").onclick = () => api("voice", { op: "clear" });
+// voice settings: the robot's state wins unless the user just changed something (2 s)
+let vSetUntil = 0;
+const vSet = (o) => { vSetUntil = Date.now() + 2000; api("voice", { op: "settings", ...o }); };
+// the kiosk's WebKit fires no "change" after a touch drag: send while dragging (debounced) and on release
+let volTimer = null;
+const sendVol = () => { clearTimeout(volTimer); volTimer = null; vSet({ volume: +$("#v-vol").value }); };
+$("#v-vol").oninput = () => {
+  vSetUntil = Date.now() + 2000; $("#v-vol-t").textContent = `${$("#v-vol").value}%`;
+  if (!volTimer) volTimer = setTimeout(sendVol, 300);
+};
+for (const ev of ["change", "pointerup", "touchend", "mouseup"]) $("#v-vol").addEventListener(ev, sendVol);
+for (const b of document.querySelectorAll("#v-speed button")) b.onclick = () => {
+  document.querySelectorAll("#v-speed button").forEach((x) => x.classList.toggle("on", x === b)); vSet({ speed: +b.dataset.s }); };
+$("#v-voices").onclick = (e) => {
+  const b = e.target.closest("button[data-v]"); if (!b) return;
+  document.querySelectorAll("#v-voices button").forEach((x) => x.classList.toggle("on", x === b)); vSet({ voice: b.dataset.v }); };
+$("#v-test").onclick = () => api("voice", { op: "test" });
+function renderVoice() {
+  const v = S.voice;
+  if (!v) return;
+  const st = v.enabled ? v.state : "off";
+  $("#mic").className = st;
+  $("#mic-state").textContent = VOICE_TEXT[st] || st;
+  $("#mic-sub").textContent = st === "error" ? v.message : v.enabled ? "tap the microphone to stop listening" : "";
+  $("#v-stop").disabled = !(st === "speaking" || st === "thinking");
+  const set = v.settings || {};
+  if (v.voices && !$("#v-voices").children.length)
+    $("#v-voices").innerHTML = Object.entries(v.voices).map(([k, n]) => `<button data-v="${esc(k)}">${esc(n)}</button>`).join("");
+  if (Date.now() > vSetUntil && set.volume != null) {
+    $("#v-vol").value = set.volume; $("#v-vol-t").textContent = `${set.volume}%`;
+    document.querySelectorAll("#v-speed button").forEach((x) => x.classList.toggle("on", Math.abs(+x.dataset.s - set.speed) < 0.01));
+    document.querySelectorAll("#v-voices button").forEach((x) => x.classList.toggle("on", x.dataset.v === set.voice));
+  }
+  $("#v-test").disabled = st === "thinking" || st === "speaking";
+  const s = v.stats || {};
+  $("#v-stats").textContent = s.stt_ms != null ? `heard in ${s.stt_ms} ms · first word ${s.llm_first_s ?? "?"} s · voice ${s.tts_ms ?? "?"} ms${s.tts_on ? ` (${s.tts_on})` : ""}` : "";
+  const h = (v.transcript || []).map((m) => `<div class="msg ${m.role}">${esc(m.text)}<span class="t">${m.t}</span></div>`).join("");
+  const box = $("#convo");
+  if (h && h !== box._h) { box.innerHTML = h; box._h = h; box.scrollTop = box.scrollHeight; }
+  else if (!h && box._h) { box.innerHTML = `<div class="muted">Switch listening on and just speak - Mercury answers out loud.</div>`; box._h = ""; }
+}
+
+// ---- voice board: wake word, direction, events (Voice tab)
+let vbThr = null;
+for (const b of document.querySelectorAll("#vb-thr button")) b.onclick = () => {
+  vbThr = +b.dataset.t; document.querySelectorAll("#vb-thr button").forEach((x) => x.classList.toggle("on", x === b)); };
+$("#vb-presets").onclick = (e) => {
+  const b = e.target.closest("button[data-k]"); if (!b) return;
+  const thr = vbThr || ((S.voice_board || {}).conf || {}).threshold || 900;
+  if (!confirm(`Load the wake word "${b.textContent}" (threshold ${thr})? The board compiles it and restarts its engine (~40 s).`)) return;
+  api("wake_word", { keyword: b.dataset.k, threshold: thr });
+};
+// radar: linear array -> 0..180 deg, 90 up; drawn mirrored (0 on the screen's left) - matches what a person
+// standing in front of the robot sees (checked with a phone moved around the robot, 2026-11-02)
+const RC = { x: 160, y: 158, r: 140 };
+const rpt = (deg, r) => [RC.x - r * Math.cos(deg * Math.PI / 180), RC.y - r * Math.sin(deg * Math.PI / 180)];
+function radarBase() {
+  let h = "";
+  const sectors = [[0, 60], [60, 120], [120, 180]];      // mic4 beams 0..2 (assumed equal sectors)
+  sectors.forEach(([a, b], i) => {
+    const [x1, y1] = rpt(a, RC.r), [x2, y2] = rpt(b, RC.r), [lx, ly] = rpt((a + b) / 2, RC.r * 0.62);
+    h += `<path id="beam${i}" d="M${RC.x},${RC.y} L${x1},${y1} A${RC.r},${RC.r} 0 0 1 ${x2},${y2} Z" fill="#1a2733" stroke="#323743"/>` +
+         `<text x="${lx}" y="${ly}" fill="#5d6576" font-size="13" text-anchor="middle">beam ${i}</text>`;
+  });
+  for (const d of [0, 45, 90, 135, 180]) {
+    const [x, y] = rpt(d, RC.r + 10);
+    h += `<text x="${x}" y="${y + 4}" fill="#959cab" font-size="12" text-anchor="middle">${d}°</text>`;
+  }
+  return h + `<circle cx="${RC.x}" cy="${RC.y}" r="5" fill="#cfd3da"/><g id="radar-dyn"></g>`;
+}
+$("#radar").innerHTML = radarBase();
+function renderVoiceBoard() {
+  const vb = S.voice_board; if (!vb) return;
+  const conf = vb.conf || {}, now = S.now || Date.now() / 1000;
+  setHTML("#vb-presets", (vb.presets || []).map((p) =>
+    `<button data-k="${esc(p.keyword)}" class="${p.keyword === conf.keyword ? "on" : ""}" ${vb.job && vb.job.busy ? "disabled" : ""}>${esc(p.label)}</button>`).join(""));
+  if (vbThr == null) document.querySelectorAll("#vb-thr button").forEach((x) => x.classList.toggle("on", +x.dataset.t === conf.threshold));
+  $("#vb-job").textContent = vb.job ? vb.job.message || "" : "";
+  $("#vb-job").style.color = vb.job && vb.job.busy ? "var(--warn)" : /failed/.test((vb.job || {}).message || "") ? "var(--bad)" : "";
+  setHTML("#vb-info", [
+    ["board", !vb.running ? "driver not running" : vb.alive ? "alive" : vb.port_open ? "port open, silent" : "not connected"],
+    ["loaded", `${esc(conf.keyword || "?")} @ ${conf.threshold || "?"}`],
+    ["wakes", `${vb.wake_count}`],
+    ["firmware", esc((vb.firmware || "—").split(";")[0])],
+  ].map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join(""));
+  const wakes = vb.wakes || [];
+  let dyn = "";
+  wakes.slice().reverse().forEach((w, i, arr) => {
+    if (w.angle == null) return;
+    const age = now - w.t, last = i === arr.length - 1;
+    if (last && age < 15) {
+      const [x, y] = rpt(w.angle, RC.r - 6);
+      dyn += `<line x1="${RC.x}" y1="${RC.y}" x2="${x}" y2="${y}" stroke="#4cc2ff" stroke-width="5" stroke-linecap="round"/>`;
+    }
+    const [x, y] = rpt(w.angle, RC.r * 0.88);
+    const op = Math.max(0.15, 1 - age / 120);
+    dyn += `<circle cx="${x}" cy="${y}" r="${last ? 9 : 6}" fill="${last ? "#4cc2ff" : "#cfd3da"}" opacity="${op.toFixed(2)}"/>`;
+  });
+  setHTML("#radar-dyn", dyn);
+  const lw = wakes[0];
+  for (let i = 0; i < 3; i++) { const e = $(`#beam${i}`); if (e) e.setAttribute("fill", lw && lw.beam === i && now - lw.t < 15 ? "#134a66" : "#1a2733"); }
+  if (lw) {
+    const ago = Math.max(0, Math.round(now - lw.t));
+    $("#wake-last").textContent = `${lw.keyword} · ${lw.angle ?? "?"}° · beam ${lw.beam} · score ${lw.score ?? "?"} · ${ago < 60 ? ago + " s" : Math.round(ago / 60) + " min"} ago`;
+    $("#wake-last").className = now - lw.t < 15 ? "" : "muted";
+  }
+  const hhmmss = (t) => new Date(t * 1000).toTimeString().slice(0, 8);
+  setHTML("#wake-list", wakes.length ? `<table><tr><th>time</th><th>wake word</th><th>angle</th><th>beam</th><th>score</th></tr>` +
+    wakes.map((w) => `<tr><td>${hhmmss(w.t)}</td><td>${esc(w.keyword)}</td><td>${w.angle ?? "—"}°</td><td>${w.beam}</td><td>${w.score ?? "—"}</td></tr>`).join("") + "</table>" : "");
+}
+
+// ---- Unitree remote
+$("#r-scan").onclick = () => api("remote", { op: "scan" });
+$("#r-disconnect").onclick = () => api("remote", { op: "disconnect" });
+$("#r-auto").onclick = () => {
+  const r = S.remote || {}, on = !r.autoconnect;
+  api("remote", { op: "autoconnect", enabled: on, ...(on && r.saved ? { address: r.saved.address, name: r.saved.name } : {}) });
+};
+function setHTML(sel, h) { const e = $(sel); if (e._h !== h) { e.innerHTML = h; e._h = h; } }
+// status-bar chip + settings tile: drive lock, battery icon, 1-5 signal bars (remote_ui.js)
+function renderRemoteInd(r) {
+  const U = RemoteUI, conn = r && r.state === "connected", lk = U.lock(r);
+  $("#remote-chip").classList.toggle("off", !conn);
+  setHTML("#remote-ind", conn ? (lk ? U.lockIcon(lk.open, lk.color, 22) : "") + U.battery(r.battery, 20) + U.signal(r.rssi, 20) : "");
+  $("#remote-txt").textContent = conn ? (lk ? lk.short : "") : !r ? "" : r.autoconnect ? "waiting" : "off";
+  setHTML("#r-ind", !conn ? "" :
+    (lk ? `<span class="rm-badge ${lk.cls}">${U.lockIcon(lk.open, lk.color, 22)}${lk.long}</span>` : `<span class="rm-badge muted">lock state unknown</span>`) +
+    `<span class="v">${U.battery(r.battery, 22)}${r.battery ?? "?"} %</span><span class="v">${U.signal(r.rssi, 22)}${r.rssi ?? "?"} dBm</span>`);
+}
+function renderRemote() {
+  const r = S.remote;
+  for (const id of ["#r-scan", "#r-disconnect", "#r-auto"]) $(id).disabled = !r;
+  renderRemoteInd(r);
+  if (!r) { $("#r-state").textContent = "remote node not running"; $("#r-list").innerHTML = ""; return; }
+  const busy = r.state === "scanning" || r.state === "connecting";
+  const conn = r.state === "connected" ? r.connected : null;
+  $("#r-scan").disabled = busy;
+  $("#r-disconnect").disabled = !conn && !r.autoconnect;
+  $("#r-auto").classList.toggle("on", !!r.autoconnect);
+  $("#r-auto").textContent = r.autoconnect ? "Autoconnect ✓" : "Autoconnect";
+  $("#r-state").innerHTML = conn
+    ? `<b>${esc(conn.name)}</b> <span class="muted small">· connected</span>`
+    : `<span class="muted">${esc(r.state)}${r.message ? " · " + esc(r.message) : ""}</span>`;
+  const devs = [...(r.devices || [])];
+  for (const d of [conn, r.saved]) if (d && d.address && !devs.find((x) => x.address === d.address)) devs.push({ address: d.address, name: d.name, rssi: null });
+  const key = JSON.stringify([devs, conn && conn.address, busy]);
+  if (key === $("#r-list")._k) return;
+  $("#r-list")._k = key;
+  $("#r-list").innerHTML = devs.length ? devs.map((d, i) =>
+    `<div class="item ${conn && conn.address === d.address ? "active" : ""}" data-i="${i}">
+       <span class="grow">${esc(d.name || "Unitree")} <span class="tag">${esc(d.address)}</span></span>
+       <span class="tag">${conn && conn.address === d.address ? "connected" : d.rssi != null ? d.rssi + " dBm" : "saved"}</span>
+     </div>`).join("") : `<div class="muted small">switch the remote on and tap Scan</div>`;
+  for (const it of $("#r-list").querySelectorAll(".item")) it.onclick = () => {
+    const d = devs[+it.dataset.i];
+    if (busy || (conn && conn.address === d.address)) return;
+    api("remote", { op: "connect", address: d.address, name: d.name || null });
+  };
+}
+</script>
+</body>
+</html>

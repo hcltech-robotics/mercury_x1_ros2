@@ -1,0 +1,32 @@
+mercury_base:
+  ros__parameters:
+    port: /dev/wheeltec_controller
+    odom_frame: odom
+    base_frame: base_footprint
+    publish_tf: true
+    cmd_timeout: 0.3           # s without cmd_vel -> zero velocity (MCU itself coasts ~1 s)
+    max_linear: 0.5            # m/s
+    max_angular: 1.0           # rad/s
+    linear_scale: 1.0          # wheel-odometry calibration factors
+    angular_scale: 1.0
+    yaw_source: gyro           # gyro | wheel
+    ultrasonic_names: [back, right, left]   # MCU channels 0..2 (verified by hand on the robot, 2026-10-29)
+    ultrasonic_guard_distance: 0.0   # m; >0 blocks REVERSING when a guarded channel reads closer
+    ultrasonic_guard_names: [back]   # sensors that block reversing
+    battery_cells: 7                 # 7S LiFePO4 "24 V" pack (full = 23.7 V at rest, 3.38 V/cell)
+    battery_chemistry: lifepo4       # lifepo4 | li-ion: cell curve for BatteryState.percentage
+    battery_log: ~/.ros/mercury_battery.csv   # voltage once a minute ("" = off)
+
+mercury_upper_body:
+  ros__parameters:
+    left_port: /dev/left_arm
+    right_port: /dev/right_arm
+    power_on_start: true       # enable servos at start (arms hold their pose; nothing moves)
+    poll_body_coords: true
+    default_speed: 30
+    max_speed: 100
+    publish_rate: 50.0
+    extra_joint_names: [eye, head, body]      # URDF names: jaw tilt, neck pan, waist
+    extra_joint_ids: [11, 12, 13]             # firmware joint ids on the right-arm MCU
+    extra_joint_signs: [1.0, 1.0, -1.0]       # calibrated: jaw firmware<0 = camera down = URDF eye<0; waist mirrored (depth vs lidar). neck: unverified
+    extra_joint_offsets_deg: [0.0, 0.0, 0.0]

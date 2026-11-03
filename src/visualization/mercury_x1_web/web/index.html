@@ -1,0 +1,1104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mercury X1 Control</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231d2026'/%3E%3Cline x1='32' y1='7' x2='32' y2='16' stroke='%234cc2ff' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='32' cy='7' r='4' fill='%234cc2ff'/%3E%3Crect x='11' y='16' width='42' height='30' rx='9' fill='%234cc2ff'/%3E%3Ccircle cx='23.5' cy='31' r='5' fill='%231d2026'/%3E%3Ccircle cx='40.5' cy='31' r='5' fill='%231d2026'/%3E%3Crect x='19' y='51' width='26' height='6' rx='3' fill='%233ddc84'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #15171b; --panel: #1d2026; --panel2: #252931; --line: #343944; --text: #e6e8ec;
+    --muted: #9aa1ad; --accent: #4cc2ff; --ok: #3ddc84; --warn: #ffb020; --bad: #ff5468; --wp: #ffd400;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { height: 50px; display: flex; align-items: center; gap: 10px; padding: 0 12px;
+    background: var(--panel); border-bottom: 1px solid var(--line); }
+  /* header groups: Robot / Navigation / System, each chip = state-coloured icon + text */
+  .grp { display: flex; align-items: center; gap: 4px; padding: 3px 6px 3px 8px; border: 1px solid var(--line);
+    border-radius: 10px; background: #191c21; }
+  .glbl { font-size: 10px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; color: #6c7380;
+    margin: 0 3px 0 1px; line-height: 1; }
+  .ic { display: inline-flex; color: var(--muted); }
+  .ic svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .ic.ok { color: var(--ok); } .ic.warn { color: var(--warn); } .ic.bad { color: var(--bad); }
+  #live { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; font-size: 11px;
+    font-weight: 700; letter-spacing: .5px; font-variant-numeric: tabular-nums; border: 1px solid var(--line); min-width: 104px; }
+  #live.ok { color: var(--ok); border-color: #2f8a57; } #live.warn { color: var(--warn); border-color: #8a6a1f; }
+  #live.bad { color: var(--bad); border-color: #7a2b36; }
+  #live .ic { color: inherit; } #live .ic svg { transition: transform .12s; } #live.beat .ic svg { transform: scale(1.35); }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  header h1, #live, #drive, #estop, .grp, .chip { white-space: nowrap; flex-shrink: 0; }
+  #c-estop { background: var(--bad); color: #fff; font-weight: 700; letter-spacing: .06em; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px;
+    background: var(--panel2); color: var(--text); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+  .spacer { flex: 1; }
+  .sys { display: grid; grid-template-columns: 52px 1fr 92px; gap: 5px 8px; align-items: center;
+    font-variant-numeric: tabular-nums; margin-bottom: 10px; }
+  .sys .lbl { color: var(--muted); }
+  .sys .val { text-align: right; white-space: nowrap; }
+  .bar { height: 8px; background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--ok); transition: width .4s, background .4s; }
+  .cores { display: grid; grid-template-columns: repeat(auto-fit, minmax(26px, 1fr)); gap: 4px; align-items: end; }
+  .core { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10px; color: var(--muted); }
+  .core .col { width: 14px; height: 30px; background: var(--panel2); border: 1px solid var(--line); border-radius: 3px;
+    display: flex; align-items: flex-end; overflow: hidden; }
+  .core .col i { display: block; width: 100%; height: 0; background: var(--ok); transition: height .4s, background .4s; }
+  .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; color: var(--text); font-size: 12px; }
+  .switch input { display: none; }
+  .switch .track { width: 34px; height: 18px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line);
+    position: relative; transition: background .2s, border-color .2s; }
+  .switch .track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%;
+    background: var(--muted); transition: left .2s, background .2s; }
+  .switch input:checked + .track { background: #1f5a3a; border-color: var(--ok); }
+  .switch input:checked + .track::after { left: 18px; background: #fff; }
+  .switch.warn input:checked + .track { background: #5a4410; border-color: var(--warn); }
+  .switch.busy { opacity: .6; pointer-events: none; }
+  .batt { position: relative; width: 24px; height: 12px; border: 1.5px solid var(--muted); border-radius: 3px; margin-right: 3px; }
+  .batt::after { content: ""; position: absolute; right: -4.5px; top: 2.5px; width: 2.5px; height: 4px;
+    background: var(--muted); border-radius: 0 1px 1px 0; }
+  .batt i { position: absolute; left: 1px; top: 1px; bottom: 1px; width: 0; border-radius: 1px; background: var(--muted);
+    transition: width .5s, background .5s; }
+  #estop { background: var(--bad); color: #fff; border: 0; font-weight: 700; padding: 8px 18px;
+    border-radius: 8px; cursor: pointer; letter-spacing: .5px; }
+  #estop:active { transform: translateY(1px); }
+  main { display: grid; grid-template-columns: 1fr 400px; height: calc(100% - 46px); }
+  #viewer { position: relative; min-width: 0; background: #0f1114; }
+  #viewer > * { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  #hud { inset: auto 12px 12px auto !important; width: auto !important; height: auto !important; padding: 8px 10px;
+    background: rgba(20,20,30,.86); border: 1px solid var(--line); border-radius: 8px; display: none;
+    font-size: 11px; color: var(--muted); pointer-events: none; }
+  #hud.on { display: block; border-color: var(--ok); }
+  #hud .keys { display: grid; grid-template-columns: repeat(3, 28px); gap: 3px; margin: 4px auto; width: max-content; }
+  #hud .k { height: 26px; border-radius: 5px; background: #3c3c50; color: #fff; display: flex; align-items: center;
+    justify-content: center; font-weight: 600; font-size: 12px; }
+  #hud .k.on { background: #3cb44b; }
+  #drive { background: var(--panel2); color: var(--muted); border: 1px solid var(--line); border-radius: 8px;
+    padding: 7px 12px; cursor: pointer; font-size: 12px; }
+  #drive.on { background: #1f5a3a; color: #fff; border-color: var(--ok); }
+  aside { background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; }
+  .tabs { display: flex; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 2; }
+  .tabs button { flex: 1; background: none; border: 0; color: var(--muted); padding: 10px; cursor: pointer;
+    border-bottom: 2px solid transparent; font-size: 13px; }
+  .tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+  section { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted);
+    margin: 0 0 8px; font-weight: 600; }
+  .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+  button.b { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+    padding: 6px 10px; cursor: pointer; font-size: 12px; }
+  button.b:hover { border-color: var(--accent); }
+  button.b.primary { background: #1b4f6e; border-color: #2b77a3; }
+  button.b.on { background: #1f5a3a; border-color: #2f8a57; }
+  button.b.danger { border-color: #7a2b36; color: #ff8a99; }
+  button.b:disabled { opacity: .45; cursor: default; }
+  input[type=text], select { background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 8px; font-size: 12px; min-width: 0; }
+  label { color: var(--muted); font-size: 12px; display: inline-flex; gap: 5px; align-items: center; }
+  .muted { color: var(--muted); }
+  #mapwrap { position: relative; height: 300px; background: #0f1114; border: 1px solid var(--line);
+    border-radius: 6px; overflow: hidden; touch-action: none; }
+  #map { width: 100%; height: 100%; display: block; cursor: crosshair; }
+  #mapmsg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: var(--muted); pointer-events: none; text-align: center; padding: 20px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .seg button { background: var(--panel2); color: var(--muted); border: 0; padding: 5px 9px; cursor: pointer; font-size: 12px; }
+  .seg button.active { background: #1b4f6e; color: var(--text); }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  td { padding: 3px 4px; border-bottom: 1px solid var(--line); }
+  td:first-child { color: var(--wp); width: 22px; }
+  td.act { text-align: right; white-space: nowrap; }
+  td.act button { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0 3px; font-size: 13px; }
+  td.act button:hover { color: var(--text); }
+  tr.cur td { background: rgba(255,212,0,.08); }
+  #wptable tr[data-k] { cursor: pointer; }
+  #wptable tr.sel td { background: rgba(76,194,255,.16); }
+  td.act button.del { color: #ff8a99; font-size: 15px; padding: 0 6px; }
+  table.maps td:first-child { color: var(--text); width: auto; font-weight: 600; }
+  table.maps td.meta { color: var(--muted); font-size: 11px; }
+  table.maps tr.active td { background: rgba(76,194,255,.10); }
+  table.maps td.act button { font-size: 14px; padding: 0 5px; }
+  details > summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 8px; }
+  #exp3d-files div { display: flex; gap: 6px; align-items: center; }
+  #exp3d-files button { background: none; border: 0; color: #ff8a99; cursor: pointer; font-size: 13px; padding: 0 4px; margin-left: auto; }
+  .badge { display: inline-block; font-size: 10px; font-weight: 600; padding: 0 6px; border-radius: 999px;
+    background: #1b4f6e; color: #fff; margin-left: 4px; vertical-align: 1px; }
+  .badge.mapping { background: #5a4410; }
+  #navstate { font-size: 12px; }
+  .pad { display: grid; grid-template-columns: repeat(3, 52px); gap: 6px; justify-content: center; margin: 4px 0 8px; }
+  .pad button { height: 44px; background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; font-size: 18px; cursor: pointer; user-select: none; touch-action: none; }
+  .pad button.held { background: #1b4f6e; border-color: var(--accent); }
+  input[type=range] { flex: 1; accent-color: var(--accent); }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-variant-numeric: tabular-nums; }
+  .kv span:nth-child(odd) { color: var(--muted); }
+  .hidden { display: none !important; }
+  #toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); background: #2a2f39;
+    border: 1px solid var(--line); padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  #toast.show { opacity: 1; }
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; grid-template-rows: 45vh auto; height: auto; }
+    aside { border-left: 0; }
+    header { flex-wrap: wrap; height: auto; padding: 8px 12px; }
+  }
+  /* ROS 2 node bubbles (nodes_ui.js) */
+  #nodes .group { margin: 2px 0 9px; }
+  #nodes .gname { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+  #nodes .bubbles { display: flex; flex-wrap: wrap; gap: 4px; }
+  #nodes .bubble { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; font-size: 11px;
+    background: var(--panel2); border: 1px solid var(--line); color: var(--muted); }
+  #nodes .bubble::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #3a3f4b; }
+  #nodes .bubble.up { color: var(--text); border-color: #2d6b48; background: #17301f; }
+  #nodes .bubble.up::before { background: var(--ok); }
+  #nodes .bubble.down { border-style: dashed; }
+  #nodes .bubble.down.need { color: #ffb3bd; border-color: #6b2d36; }
+  #nodes .bubble.down.need::before { background: var(--bad); }
+  .rm-ic { flex: none; display: block; }
+  .rm-ind { display: inline-flex; align-items: center; gap: 6px; }
+  .rm-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-weight: 600;
+    font-size: 12px; border: 1px solid var(--line); background: var(--panel2); }
+  .rm-badge.ok { color: var(--ok); border-color: #2f8a57; background: #183626; }
+  .rm-badge.warn { color: var(--warn); border-color: #8a6a1f; background: #3a2d0d; }
+  .rm-badge.muted { color: var(--muted); }
+  /* fixed sizes: the changing lock text / numbers must not resize the header chip or the tile row */
+  #c-remote { width: 150px; overflow: hidden; }
+  #t-remote { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #rm-hdr { flex: none; width: 62px; justify-content: flex-end; gap: 4px; }
+  #r-ind { display: grid; grid-template-columns: minmax(0, 1fr) 70px 98px; align-items: center; gap: 10px; margin-bottom: 6px; }
+  #r-ind:empty { display: none; }
+  #r-ind .rm-badge { min-width: 0; overflow: hidden; white-space: nowrap; }
+  #r-ind .rm-badge svg { flex: none; }
+  #r-ind .v { font-variant-numeric: tabular-nums; color: var(--text); font-size: 12px; white-space: nowrap; }
+</style>
+<script src="/static/remote_ui.js"></script>
+<script src="/static/nodes_ui.js"></script>
+</head>
+<body>
+<header>
+  <h1>Mercury X1</h1>
+  <span id="live" class="bad" title="Status stream from the robot: updates per second, or how long since the last one"><span class="ic"><svg viewBox="0 0 24 24"><polyline points="2 12 6 12 9 4 15 20 18 12 22 12"/></svg></span><span id="t-live">connecting</span></span>
+  <div class="grp"><span class="glbl">Robot</span>
+    <span class="chip hidden" id="c-estop" title="Physical E-stop pressed: base MCU and arm servo power are cut. Release the button, then switch the arms back on."><span class="ic"><svg viewBox="0 0 24 24"><path d="M8 2h8l6 6v8l-6 6H8l-6-6V8z"/><path d="M12 7v6M12 16.5v.5"/></svg></span>E-STOP</span>
+    <span class="chip" id="c-batt"><span class="batt"><i id="batt-fill"></i></span><span id="t-batt">-- %</span></span>
+    <span class="chip" title="Arm servo power (Robot tab)"><span class="ic" id="d-arms"><svg viewBox="0 0 24 24"><path d="M5 21h10M10 21v-5"/><circle cx="10" cy="14" r="2"/><path d="M11.5 12.5L16 7"/><circle cx="17" cy="6" r="2"/><path d="M18.5 7.5l2.5 3M15.5 4.5L18 2"/></svg></span><span id="t-arms">arms</span></span>
+    <span class="chip" id="c-remote" title="Unitree BLE remote (Robot tab)"><span class="ic" id="d-remote"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="11" rx="5"/><path d="M7 10.5v4M5 12.5h4"/><circle cx="15.5" cy="11.5" r=".9"/><circle cx="18" cy="14" r=".9"/></svg></span><span id="t-remote">remote</span><span class="rm-ind" id="rm-hdr"></span></span>
+  </div>
+  <div class="grp"><span class="glbl">Nav</span>
+    <span class="chip" title="RTAB-Map: mapping / localizing, on which map"><span class="ic" id="d-slam"><svg viewBox="0 0 24 24"><path d="M3 6.5l6-2.5 6 2.5 6-2.5v13.5l-6 2.5-6-2.5-6 2.5z"/><path d="M9 4v13.5M15 6.5V20"/></svg></span><span id="t-slam">SLAM off</span></span>
+    <span class="chip" title="Nav2"><span class="ic" id="d-nav"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg></span><span id="t-nav">Nav2 off</span></span>
+  </div>
+  <div class="grp" id="c-sys" title="Jetson load, hottest temperature, module power (details: Status tab)"><span class="glbl">Jetson</span>
+    <span class="chip"><span class="ic" id="d-sys"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg></span><span id="t-sys">CPU -- · GPU --</span></span>
+    <span class="chip"><span class="ic" id="d-temp"><svg viewBox="0 0 24 24"><path d="M14 14.8V5a2 2 0 0 0-4 0v9.8a4 4 0 1 0 4 0z"/></svg></span><span id="t-temp">--°C</span></span>
+    <span class="chip"><span class="ic" id="d-watt"><svg viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg></span><span id="t-watt">-- W</span></span>
+  </div>
+  <span class="spacer"></span>
+  <button id="drive" title="Engage keyboard driving: W/A/S/D or arrows, Shift = fast, Space = stop, Esc = release">⌨ Drive</button>
+  <button id="estop" title="Cancel navigation and stop the base (Space)">STOP</button>
+</header>
+<main>
+  <div id="viewer"><div id="hud"><div style="text-align:center;color:var(--ok)">DRIVING · Esc to release</div>
+    <div class="keys"><span></span><span class="k" data-k="1,0">W</span><span></span>
+    <span class="k" data-k="0,1">A</span><span class="k" data-k="-1,0">S</span><span class="k" data-k="0,-1">D</span></div>
+    <div id="hud-speed" style="text-align:center">⇧ shift = fast</div></div></div>
+  <aside>
+    <div class="tabs"><button class="active" data-tab="nav">Navigate</button><button data-tab="robot">Robot</button><button data-tab="status">Status</button></div>
+
+    <div data-pane="nav">
+      <section>
+        <h2>Maps</h2>
+        <div id="slamline" class="row" style="font-size:12px"></div>
+        <table id="maptable" class="maps"></table>
+        <div class="row" style="margin-top:8px">
+          <input type="text" id="newmap" placeholder="new map name" style="width:130px" title="letters, digits, - and _ (~/maps/&lt;name&gt;.db)">
+          <button class="b primary" id="b-newmap" title="Start an empty map with this name, head held level. Drive the area once and finish where you started.">New map</button>
+          <span class="spacer"></span>
+          <button class="b danger" id="b-slamstop" title="Stop mapping / localization (the map is saved)">Stop SLAM</button>
+        </div>
+        <div class="muted" style="font-size:11px">▶ localize on a map (Nav2 uses it) · ✎ continue mapping it (only links up if the robot re-finds a known place; else the map splits into pieces) · ✕ delete (kept 7 days in ~/maps/.trash).</div>
+      </section>
+      <section>
+        <h2>Localization &amp; navigation</h2>
+        <div class="row">
+          <button class="b primary" id="b-nav">Start Nav2</button>
+          <button class="b danger" id="b-navstop">Stop Nav2</button>
+          <span class="spacer"></span>
+          <button class="b" id="b-export" title="Save a .pgm/.yaml copy of the 2D map in ~/maps">Save 2D map</button>
+        </div>
+        <div class="row">
+          <div class="seg" id="tool">
+            <button data-tool="waypoint" class="active" title="click = waypoint, drag = heading">+ Waypoint</button>
+            <button data-tool="delete" title="click a waypoint (map or 3D view) to delete it">✕ Waypoint</button>
+            <button data-tool="goto" title="click/drag: navigate here now">Go to</button>
+            <button data-tool="pose" title="click/drag: tell the localizer where the robot is">Set pose</button>
+            <button data-tool="off" title="clicks only select / inspect">View</button>
+          </div>
+        </div>
+        <div id="mapwrap"><canvas id="map"></canvas><div id="mapmsg">No map yet. Start mapping or localization.</div></div>
+        <div class="row muted" style="margin-top:6px;font-size:11px">Clicks in the map and in the 3D view follow the tool above · select a waypoint (its row, or View + click) and press Delete · wheel: zoom · right/shift-drag: pan · double-click: center on robot</div>
+        <h2 style="margin-top:12px">Waypoints <span id="wpmap" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
+        <table id="wptable"></table>
+        <div class="row" style="margin-top:8px">
+          <button class="b primary" id="b-runonce">Run once</button>
+          <button class="b primary" id="b-cruise">Cruise ⟳</button>
+          <span class="spacer"></span>
+          <button class="b danger" id="b-clear">Delete all</button>
+        </div>
+        <div id="navstate" class="muted">idle</div>
+      </section>
+      <section>
+        <h2>3D view</h2>
+        <div class="row" id="view-layers">
+          <label class="switch" data-layer="camera" title="Camera frustums in the 3D view with the live image on them (jaw Orbbec + bellybutton, 2 Hz)"><input type="checkbox"><span class="track"></span>Cameras in 3D</label>
+        </div>
+        <div class="muted" style="font-size:11px;margin-bottom:8px">To look through the jaw camera: the "Orbbec (jaw)" panel on the right of the viewer; the depth points / mesh below show what it sees in 3D.</div>
+        <h2>nvblox · local 3D</h2>
+        <div class="row" id="nvblox-layers">
+          <label class="switch" data-layer="mesh" title="Surface mesh (TSDF marching cubes), coloured by the camera"><input type="checkbox"><span class="track"></span>Mesh</label>
+          <label class="switch" data-layer="esdf" title="ESDF slice: distance to the nearest obstacle at the costmap slice height (red = touching, blue = 1.5 m+) - what Nav2 sees"><input type="checkbox"><span class="track"></span>ESDF slice</label>
+          <label class="switch" data-layer="depth" title="Live depth image back-projected to 3D, shown as 5 cm voxels (mapping uses the full depth)"><input type="checkbox"><span class="track"></span>Depth points</label>
+          <label class="switch" data-layer="tsdf" title="TSDF voxels near the surface (5 cm cubes)"><input type="checkbox"><span class="track"></span>TSDF voxels</label>
+          <label class="switch" data-layer="color" title="Colour voxels (5 cm cubes)"><input type="checkbox"><span class="track"></span>Colour voxels</label>
+          <label class="switch" data-layer="occupancy" title="nvblox 2D occupancy grid from the depth camera"><input type="checkbox"><span class="track"></span>Occupancy</label>
+        </div>
+        <div class="muted" style="font-size:11px">Layers that are off are not streamed (no CPU / GPU cost). Local map: ~6 m around the robot.</div>
+        <h2 style="margin-top:12px">SLAM 3D map</h2>
+        <div class="row" id="slam-layers">
+          <label class="switch" data-layer="slam3d" title="The whole RTAB-Map map as voxels in its camera colours, aligned to the live map (re-sent only where the map changed)"><input type="checkbox"><span class="track"></span>Voxel map</label>
+          <div class="seg" id="vox-shape" title="Round = points (lighter for the browser), square = solid cubes">
+            <button data-shape="round">● Round</button><button data-shape="square">■ Square</button>
+          </div>
+          <select id="vox-size" title="Voxel size (smaller = more detail, more data for the viewer)">
+            <option value="0.03">3 cm</option><option value="0.04">4 cm</option><option value="0.05">5 cm</option>
+            <option value="0.08">8 cm</option><option value="0.1">10 cm</option><option value="0.15">15 cm</option><option value="0.2">20 cm</option>
+          </select>
+        </div>
+        <div class="muted" style="font-size:11px" id="vox-msg"></div>
+        <details id="exp3d">
+          <summary>Export 3D files <span class="muted" id="exp3d-count"></span></summary>
+          <div class="muted" style="font-size:11px;margin:6px 0">The whole map as a file for other 3D programs (MeshLab, CloudCompare, Blender). Not used by the robot.</div>
+          <div class="row">
+            <button class="b" id="b-exp-cloud" title="Coloured point cloud of the whole map (.ply, a few seconds)">Export cloud (.ply)</button>
+            <button class="b" id="b-exp-mesh" title="Textured mesh of the whole map (.obj + texture, zipped; about a minute)">Export mesh (.obj)</button>
+          </div>
+          <div class="muted" style="font-size:11px" id="exp3d-msg"></div>
+          <div id="exp3d-files" style="font-size:12px"></div>
+        </details>
+      </section>
+    </div>
+
+    <div data-pane="robot" class="hidden">
+      <section>
+        <h2>Unitree remote · Bluetooth</h2>
+        <div class="row">
+          <select id="r-dev" style="flex:1"><option value="">press Scan (switch the remote on)</option></select>
+          <button class="b" id="r-scan">Scan</button>
+        </div>
+        <div class="row">
+          <button class="b primary" id="r-connect">Connect</button>
+          <button class="b danger" id="r-disconnect">Disconnect</button>
+          <button class="b" id="r-auto" title="Keep looking for the selected / saved remote and reconnect whenever it drops or is switched on">Autoconnect</button>
+        </div>
+        <div id="r-ind"></div>
+        <div id="r-state" class="muted" style="min-height:18px"></div>
+        <div class="muted" style="font-size:11px"><b>Start</b> = unlock / lock driving · left stick = drive, right stick = turn · <b>B</b> = stop (locks) · <b>Select</b> = freedrive arms. Driving cancels navigation.</div>
+      </section>
+      <section>
+        <h2>Drive</h2>
+        <div class="pad">
+          <span></span><button data-v="1,0">▲</button><span></span>
+          <button data-v="0,1">◀</button><button data-v="0,0">■</button><button data-v="0,-1">▶</button>
+          <span></span><button data-v="-1,0">▼</button><span></span>
+        </div>
+        <div class="row"><label style="width:70px">linear</label><input type="range" id="vlin" min="0.05" max="0.4" step="0.01" value="0.15"><span id="vlin-t" style="width:60px">0.15 m/s</span></div>
+        <div class="row"><label style="width:70px">angular</label><input type="range" id="vang" min="0.1" max="1.0" step="0.05" value="0.4"><span id="vang-t" style="width:60px">0.40 r/s</span></div>
+        <div class="muted" style="font-size:11px">Keyboard: press ⌨ Drive (top bar), then W/A/S/D or arrows, Shift = fast, Space = stop, Esc = release. Driving cancels navigation.</div>
+      </section>
+      <section>
+        <h2>Head &amp; waist</h2>
+        <div class="row"><label class="switch" id="sw-hold" title="While mapping, keep the neck straight and the camera level (the depth camera feeds the map). Off: move the head freely."><input type="checkbox"><span class="track"></span>Hold level while mapping</label></div>
+        <div class="row"><label style="width:70px">neck</label><input type="range" id="neck" min="-60" max="60" step="1" value="0"><span id="neck-t" style="width:45px">0°</span></div>
+        <div class="row"><label style="width:70px">jaw (cam)</label><input type="range" id="jaw" min="-55" max="0" step="1" value="0"><span id="jaw-t" style="width:45px">0°</span></div>
+        <div class="row" title="Waist (joint body): turns the whole upper body - head, camera and both arms - on the base. + = left."><label style="width:70px">waist</label><input type="range" id="waist" min="-90" max="90" step="1" value="0" style="direction:rtl"><span id="waist-t" style="width:45px">0°</span><button id="b-waist0" title="turn the waist back to straight ahead">center</button></div>
+        <div class="muted" style="font-size:11px" id="waist-info">◀ left · right ▶ — the arms turn with the waist</div>
+      </section>
+      <section>
+        <h2>Light &amp; arms</h2>
+        <div class="row">
+          <input type="color" id="led" value="#00aaff" style="width:44px;height:28px;border:0;background:none">
+          <button class="b" id="b-ledoff">LED off</button>
+          <span class="spacer"></span>
+          <label class="switch" id="sw-arms" title="Arm servo power (both arms)"><input type="checkbox"><span class="track"></span>Arms</label>
+          <label class="switch warn" id="sw-free" title="Freedrive: move the arms by hand (remote: Select). Hold the arm when switching on."><input type="checkbox"><span class="track"></span>Freedrive</label>
+        </div>
+        <div class="row">
+          <label class="switch" id="sw-moveit" title="MoveIt move_group: arm motion planning with IK and self-collision checks (arm vs arm, arm vs body). ~90 MB RAM. Planning alone moves nothing."><input type="checkbox"><span class="track"></span>Motion planning (MoveIt)</label>
+          <span class="muted" id="moveit-st"></span>
+        </div>
+        <div class="row" id="arm-poses" title="Planned by MoveIt with self-collision checks, then executed. The arms MOVE."></div>
+        <div class="row">
+          <label style="width:70px">speed</label>
+          <select id="arm-speed"><option value="0.1">10 %</option><option value="0.2">20 %</option><option value="0.3" selected>30 %</option><option value="0.5">50 %</option></select>
+          <button class="b" id="b-arm-stop" style="background:#5a1d24;border-color:#ff5468">■ Stop arms</button>
+          <span class="muted" id="arm-st"></span>
+        </div>
+      </section>
+      <section>
+        <h2>ROS 2 network</h2>
+        <div class="row">
+          <label class="switch" id="sw-lan" title="Off: ROS traffic stays on the robot (no DDS multicast on the WiFi). On: other machines on the LAN can join. Switching restarts the stack."><input type="checkbox"><span class="track"></span>LAN</label>
+          <span class="muted" id="ros-net">—</span>
+        </div>
+      </section>
+
+    </div>
+
+    <div data-pane="status" class="hidden">
+      <section>
+        <h2>Jetson</h2>
+        <div class="sys" id="sys">
+          <span class="lbl">CPU</span><div class="bar"><i id="sys-cpu"></i></div><span class="val" id="sys-cpu-t">—</span>
+          <span class="lbl">cores</span><div class="cores" id="sys-cores"></div><span class="val muted" id="sys-mhz">—</span>
+          <span class="lbl">GPU</span><div class="bar"><i id="sys-gpu"></i></div><span class="val" id="sys-gpu-t">—</span>
+          <span class="lbl">RAM</span><div class="bar"><i id="sys-ram"></i></div><span class="val" id="sys-ram-t">—</span>
+        </div>
+        <div class="kv" id="power" style="margin-bottom:10px"></div>
+      </section>
+      <section>
+        <h2>Robot</h2>
+        <div class="kv" id="kv"></div>
+      </section>
+      <section>
+        <h2>Versions</h2>
+        <div class="kv" id="versions"></div>
+      </section>
+      <section>
+        <h2>ROS 2 nodes <span id="node-count" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
+        <div id="nodes"></div>
+      </section>
+    </div>
+  </aside>
+</main>
+<div id="toast"></div>
+
+<script type="module">
+const $ = (s) => document.querySelector(s);
+const host = location.hostname;
+let ST = null;           // latest status from /ws
+const LAYER_SEL = "#view-layers [data-layer], #nvblox-layers [data-layer], #slam-layers [data-layer]";
+let MAP = null;          // {info, img}
+let WAYPOINTS = [];
+let tool = "waypoint";
+const toast = (t) => { const e = $("#toast"); e.textContent = t; e.classList.add("show"); clearTimeout(e._t); e._t = setTimeout(() => e.classList.remove("show"), 2400); };
+const api = async (action, body = {}) => {
+  try {
+    const r = await fetch(`/api/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!j.ok) toast(j.error || `${action} failed`);
+    return j;
+  } catch (e) { toast(`${action}: ${e}`); }
+};
+
+// ---------------- Rerun viewer ----------------
+const cfg = await (await fetch("/config")).json();
+const grpcUrl = `rerun+http://${host}:${cfg.grpc_port}/proxy`;
+let viewer = null, viewerStarting = false, hideTimer = null;
+async function startViewer() {
+  const el = $("#viewer");
+  if (viewer || viewerStarting) return;
+  if (cfg.viewer_local) {
+    viewerStarting = true;
+    try {
+      const { WebViewer } = await import("/vendor/rerun/index.js");
+      const v = new WebViewer();
+      await v.start(grpcUrl, el, { hide_welcome_screen: true, width: "100%", height: "100%", theme: "dark" });
+      viewer = v;
+      // a plain click on any 3D point is sent to the robot,
+      // which turns it into a waypoint / goal / pose according to the current click mode
+      let lastClick = 0;
+      v.on("selection_change", (ev) => {
+        if (tool === "off") return;
+        const it = (ev.items || []).find((i) => i.type === "entity" && i.position);
+        if (!it || Date.now() - lastClick < 150) return;
+        lastClick = Date.now();
+        const [x, y, z] = it.position;
+        api("click", { x, y, z, entity: it.entity_path });
+      });
+      return;
+    } catch (e) { console.warn("embedded viewer failed, falling back to iframe", e); }
+    finally { viewerStarting = false; }
+  }
+  toast("3D clicks need the embedded viewer (still downloading on the robot?) - using the plain viewer");
+  const f = document.createElement("iframe");
+  f.src = `http://${host}:${cfg.viewer_port}/?url=${encodeURIComponent(grpcUrl)}`;
+  el.appendChild(f);
+}
+startViewer();
+// The robot's Rerun gRPC server feeds all viewers in lockstep: a throttled background tab stops
+// reading and stalls the live stream for every other viewer. Disconnect while hidden, reconnect on return.
+document.addEventListener("visibilitychange", () => {
+  clearTimeout(hideTimer);
+  if (document.hidden) {
+    hideTimer = setTimeout(() => {
+      if (!viewer) return;
+      try { viewer.stop(); } catch (e) { console.warn(e); }
+      viewer = null;
+      for (const c of [...$("#viewer").children]) if (c.id !== "hud") c.remove();
+    }, 5000);
+  } else {
+    startViewer();
+  }
+});
+
+// ---------------- status websocket ----------------
+// heartbeat: every status message (5/s) pulses the LIVE chip; it turns amber / red when updates stop
+let wsOpen = false, lastMsg = 0; const msgTimes = [];
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onmessage = (m) => {
+    ST = JSON.parse(m.data); lastMsg = Date.now(); msgTimes.push(lastMsg);
+    const l = $("#live"); l.classList.add("beat"); setTimeout(() => l.classList.remove("beat"), 120);
+    onStatus();
+  };
+  ws.onopen = () => { wsOpen = true; };
+  ws.onclose = () => { wsOpen = false; setTimeout(connect, 1500); };
+}
+connect();
+setInterval(() => {
+  const now = Date.now(), age = (now - lastMsg) / 1000;
+  while (msgTimes.length && now - msgTimes[0] > 3000) msgTimes.shift();
+  let cls, text;
+  if (!wsOpen) { cls = "bad"; text = lastMsg ? `OFFLINE ${age.toFixed(0)} s` : "connecting"; }
+  else if (age > 5) { cls = "bad"; text = `STALE ${age.toFixed(0)} s`; }
+  else if (age > 1.5) { cls = "warn"; text = `SLOW ${age.toFixed(1)} s`; }
+  else { cls = "ok"; text = `LIVE ${(msgTimes.length / 3).toFixed(1)}/s`; }
+  $("#live").className = cls + ($("#live").classList.contains("beat") ? " beat" : ""); $("#t-live").textContent = text;
+}, 250);
+function setHTML(sel, h) { const e = $(sel); if (e._h !== h) { e.innerHTML = h; e._h = h; } }
+function setDot(id, cls, text) { $(`#d-${id}`).className = `ic ${cls}`; $(`#t-${id}`).textContent = text; }
+
+let mapVersion = -1, lastClickT = null, toolChanged = 0;
+function onStatus() {
+  const s = ST;
+  renderBattery(s);
+  renderSys(s.system);
+  renderPower(s.system && s.system.power);
+  const slam = s.procs.slam, nav = s.procs.nav;
+  const headLocked = s.head_hold !== false && slam.running && slam.mode === "mapping";   // head held level while mapping
+  for (const id of ["neck", "jaw"]) { $("#" + id).disabled = headLocked; $("#" + id).title = headLocked ? "held level while mapping" : ""; }
+  renderWaist(s.body_joints);
+  setDot("slam", slam.running ? (slam.mode === "mapping" ? "warn" : "ok") : "",
+         slam.running ? `${slam.mode === "mapping" ? "Mapping" : "Localizing"} · ${slam.map}` : "SLAM off");
+  setDot("nav", nav.running ? (s.nav.state === "navigating" ? "warn" : ["error", "aborted"].includes(s.nav.state) ? "bad" : "ok") : "",
+         nav.running ? `Nav2 ${s.nav.state}` : "Nav2 off");
+  const arms = Object.values(s.arms || {});
+  const powered = arms.filter((a) => a.powered).length;
+  setDot("arms", arms.length && powered === arms.length ? "ok" : powered ? "warn" : "bad", `arms ${powered}/${arms.length || 2} on`);
+  renderMaps(s);
+  $("#wpmap").textContent = s.map_name ? `· map ${s.map_name}` : "";
+  if (JSON.stringify(s.waypoints) !== JSON.stringify(WAYPOINTS) && !dragging) { WAYPOINTS = s.waypoints; renderTable(); }
+  if (s.map_version !== mapVersion) { mapVersion = s.map_version; loadMap(); }
+  if (s.click_mode && s.click_mode !== tool && Date.now() - toolChanged > 1500) setTool(s.click_mode, false);
+  if (s.last_click && s.last_click.t !== lastClickT) {
+    if (lastClickT !== null) toast(`${s.last_click.source} click (${s.last_click.x}, ${s.last_click.y}): ${s.last_click.result}`);
+    lastClickT = s.last_click.t;
+  }
+  const n = s.nav;
+  $("#navstate").textContent = n.state + (n.loop ? " · cruising" : "") + (n.current != null && n.state === "navigating" ? ` · to #${n.current + 1}` : "") + (n.message ? ` · ${n.message}` : "");
+  $("#navstate").style.color = n.state === "error" || n.state === "aborted" ? "var(--bad)" : n.state === "navigating" ? "var(--warn)" : "var(--muted)";
+  renderTable(true);
+  renderKV();
+  renderNodesAndVersions(s);
+  renderRemote();
+  const armsList = Object.values(s.arms || {});
+  setArmsSwitch(armsList.length > 0 && armsList.every((a) => a.powered));
+  const mv = (s.procs || {}).moveit || {};
+  setMoveitSwitch(!!mv.running);
+  $("#moveit-st").textContent = mv.running ? ((s.nodes || []).includes("move_group") ? "planning ready" : "starting…") : "";
+  renderArmMotion(s.arm_motion, !!mv.running);
+  setFreeSwitch(armsList.some((a) => a.freedrive));
+  setHoldSwitch(s.head_hold !== false);
+  if (s.viz_layers && Date.now() > layersUntil) {
+    for (const el of document.querySelectorAll(LAYER_SEL))
+      el.querySelector("input").checked = s.viz_layers.nvblox.includes(el.dataset.layer);
+  }
+  const vx = s.viz_layers && s.viz_layers.voxel;
+  if (vx && Date.now() > voxUntil) {
+    document.querySelectorAll("#vox-shape button").forEach((b) => b.classList.toggle("active", b.dataset.shape === vx.shape));
+    if (document.activeElement !== $("#vox-size")) $("#vox-size").value = String(vx.size);
+  }
+  $("#c-estop").classList.toggle("hidden", !s.estop);
+  if (s.export3d) {
+    const e = s.export3d;
+    $("#b-exp-cloud").disabled = $("#b-exp-mesh").disabled = !!e.busy;
+    $("#exp3d-msg").textContent = e.busy ? `${e.busy}…` : e.message;
+    $("#vox-msg").textContent = s.viz_layers && s.viz_layers.nvblox.includes("slam3d") ? e.live : "";
+    $("#exp3d-count").textContent = e.files.length ? `· ${e.files.length} file${e.files.length > 1 ? "s" : ""}` : "";
+    const h = e.files.map((f) => `<div><a href="/exports/${encodeURIComponent(f.name)}" download>${f.name}</a> <span class="muted">${f.size_mb} MB · ${f.time}</span><button data-f="${f.name}" title="delete this file">✕</button></div>`).join("");
+    if (h !== $("#exp3d-files")._h) { $("#exp3d-files").innerHTML = h; $("#exp3d-files")._h = h; }
+  }
+  if (s.ros) {
+    setLanSwitch(s.ros.network === "lan");
+    const pending = s.ros.configured !== s.ros.network ? ` → ${s.ros.configured === "lan" ? "LAN" : "robot only"} on restart` : "";
+    $("#ros-net").textContent = `domain ${s.ros.domain} · ${s.ros.network === "lan" ? "LAN" : "robot only"}${s.ros.restarting ? " · restarting…" : pending}`;
+  }
+  drawMap();
+}
+
+const loadColor = (p) => p > 85 ? "var(--bad)" : p > 60 ? "var(--warn)" : "var(--ok)";
+const tempColor = (t) => t >= 90 ? "var(--bad)" : t >= 75 ? "var(--warn)" : "var(--text)";
+function renderSys(y) {
+  if (!y || y.cpu == null) return;
+  const t = y.temp || {}, hot = Math.max(t.cpu ?? 0, t.gpu ?? 0, t.tj ?? 0);
+  const fill = (id, p) => { const e = $(id); e.style.width = `${Math.min(100, p)}%`; e.style.background = loadColor(p); };
+  fill("#sys-cpu", y.cpu);
+  $("#sys-cpu-t").innerHTML = `${y.cpu.toFixed(0)} %` + (t.cpu != null ? ` · <span style="color:${tempColor(t.cpu)}">${t.cpu.toFixed(0)}°C</span>` : "");
+  const cores = $("#sys-cores");
+  if (cores.children.length !== y.cores.length) {
+    cores.innerHTML = y.cores.map((_, i) => `<div class="core" title="core ${i}"><div class="col"><i></i></div><span>0</span></div>`).join("");
+  }
+  y.cores.forEach((p, i) => {
+    const c = cores.children[i], bar = c.querySelector("i");
+    bar.style.height = `${Math.min(100, p ?? 0)}%`; bar.style.background = loadColor(p ?? 0);
+    c.querySelector("span").textContent = p == null ? "–" : p.toFixed(0);
+    c.title = `core ${i}: ${p ?? "?"} % @ ${y.core_mhz?.[i] ?? "?"} MHz`;
+  });
+  const mhz = (y.core_mhz || []).filter((f) => f != null);
+  $("#sys-mhz").textContent = mhz.length ? `${Math.max(...mhz)} MHz` : "—";
+  if (y.gpu != null) {
+    fill("#sys-gpu", y.gpu);
+    $("#sys-gpu-t").innerHTML = `${y.gpu.toFixed(0)} %` + (t.gpu != null ? ` · <span style="color:${tempColor(t.gpu)}">${t.gpu.toFixed(0)}°C</span>` : "");
+    $("#sys-gpu").parentElement.title = `GPU ${y.gpu_mhz ?? "?"} MHz`;
+  }
+  if (y.ram_used_mb != null && y.ram_total_mb) {
+    const p = 100 * y.ram_used_mb / y.ram_total_mb;
+    fill("#sys-ram", p);
+    $("#sys-ram-t").textContent = `${(y.ram_used_mb / 1024).toFixed(1)} / ${(y.ram_total_mb / 1024).toFixed(1)} GB`;
+  }
+  setDot("sys", y.cpu > 90 ? "bad" : y.cpu > 75 ? "warn" : "ok", `CPU ${y.cpu.toFixed(0)}% · GPU ${y.gpu != null ? y.gpu.toFixed(0) : "--"}%`);
+  setDot("temp", hot >= 90 ? "bad" : hot >= 75 ? "warn" : "ok", hot ? `${hot.toFixed(0)}°C` : "--°C");
+  const W = (y.power && y.power.watts) || {};
+  setDot("watt", W.VDD_IN == null ? "" : W.VDD_IN > 20 ? "warn" : "ok", W.VDD_IN != null ? `${W.VDD_IN.toFixed(1)} W` : "-- W");
+  $("#c-sys").title = `CPU ${t.cpu ?? "?"}°C · GPU ${t.gpu ?? "?"}°C · junction ${t.tj ?? "?"}°C (throttles at 95°C)` +
+    (y.power ? ` · ${y.power.mode} · CPU+GPU ${W.VDD_CPU_GPU_CV ?? "?"} W · SoC ${W.VDD_SOC ?? "?"} W` : "");
+}
+
+// Jetson power mode, rail power, clock limits, fan (sysstats.power)
+function renderPower(w) {
+  if (!w) return;
+  const W = w.watts || {}, mhz = (lo, hi) => lo == null ? "—" : lo === hi ? `${hi} MHz (pinned)` : `${lo}–${hi} MHz`;
+  const rows = [
+    ["power mode", `<b>${w.mode || "?"}</b>${w.clocks_pinned ? " · jetson_clocks on" : " · jetson_clocks off"}`],
+    ["power", W.VDD_IN != null ? `<b>${W.VDD_IN.toFixed(1)} W</b> module · CPU+GPU+CV ${(W.VDD_CPU_GPU_CV ?? 0).toFixed(1)} W · SoC ${(W.VDD_SOC ?? 0).toFixed(1)} W` : "—"],
+    ["CPU clock", mhz(w.cpu_mhz_min, w.cpu_mhz_max)],
+    ["GPU clock", `${mhz(w.gpu_mhz_min, w.gpu_mhz_max)}${w.gpu_mhz_top && w.gpu_mhz_max !== w.gpu_mhz_top ? ` (chip max ${w.gpu_mhz_top})` : ""}`],
+    ["fan", w.fan_pct != null ? `${w.fan_pct} %${w.fan_rpm != null ? ` · ${w.fan_rpm} rpm` : ""}` : "—"]];
+  const h = rows.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
+  if (h !== $("#power")._h) { $("#power").innerHTML = h; $("#power")._h = h; }
+}
+
+function renderBattery(s) {
+  const fill = $("#batt-fill"), pct = s.battery_pct;
+  if (pct != null) {
+    const p = Math.max(0, Math.min(100, pct));
+    fill.style.width = `calc(${p}% - 2px)`;
+    fill.style.background = p > 30 ? "var(--ok)" : p > 15 ? "var(--warn)" : "var(--bad)";
+    $("#t-batt").textContent = (s.charge === "charging" ? "⚡ " : "") + `${Math.round(p)} %` + (s.battery != null ? ` · ${s.battery.toFixed(1)} V` : "");
+  } else {
+    fill.style.width = "0";
+    $("#t-batt").textContent = s.battery != null ? `${s.battery.toFixed(1)} V` : "-- %";
+  }
+  $("#c-batt").title = s.battery != null ? `battery ${s.battery.toFixed(2)} V (7S LiFePO4, full ≈ 23.7 V) · ${s.charge} (estimated from the voltage trend)` : "battery: no data from the base";
+}
+
+// ---------------- Unitree BLE remote ----------------
+function renderRemote() {
+  const r = ST.remote, sel = $("#r-dev");
+  const btns = ["#r-scan", "#r-connect", "#r-disconnect", "#r-auto"];
+  if (!r) {
+    setDot("remote", "", "remote");
+    setHTML("#rm-hdr", ""); setHTML("#r-ind", "");
+    $("#r-state").textContent = "remote node not running (mercury_x1_teleop/unitree_remote)";
+    btns.forEach((b) => ($(b).disabled = true));
+    return;
+  }
+  const busy = r.state === "scanning" || r.state === "connecting";
+  const conn = r.state === "connected" ? r.connected : null;
+  // device list: scan results + the saved / connected remote
+  const devs = [...(r.devices || [])];
+  for (const d of [conn, r.saved]) {
+    if (d && d.address && !devs.find((x) => x.address === d.address)) devs.push({ address: d.address, name: d.name, rssi: null });
+  }
+  const key = JSON.stringify(devs.map((d) => [d.address, d.name, d.rssi]));
+  if (key !== sel._key && document.activeElement !== sel) {
+    const keep = sel.value || (conn && conn.address) || (r.saved && r.saved.address) || (devs[0] && devs[0].address) || "";
+    sel.innerHTML = devs.length
+      ? devs.map((d) => `<option value="${d.address}" data-name="${d.name || ""}">${d.name || "Unitree"} · ${d.address}` +
+          (d.rssi != null ? ` · ${d.rssi} dBm` : r.saved && d.address === r.saved.address ? " · saved" : "") + "</option>").join("")
+      : `<option value="">press Scan (switch the remote on)</option>`;
+    if (devs.find((d) => d.address === keep)) sel.value = keep;
+    sel._key = key;
+  }
+  $("#r-scan").disabled = busy;
+  $("#r-connect").disabled = busy || !sel.value || (conn && conn.address === sel.value);
+  $("#r-disconnect").disabled = !conn && !r.autoconnect;
+  $("#r-auto").disabled = false;
+  $("#r-auto").classList.toggle("on", !!r.autoconnect);
+  $("#r-auto").textContent = r.autoconnect ? "Autoconnect ✓" : "Autoconnect";
+  let text;
+  if (conn) {
+    text = `connected · ${conn.name}`;
+    if (r.pressed && r.pressed.length) text += ` · ${r.pressed.join(" ")}`;
+  } else {
+    text = r.state + (r.message ? ` · ${r.message}` : "");
+  }
+  $("#r-state").textContent = text;
+  $("#r-state").style.color = conn ? (r.driving ? "var(--ok)" : "var(--text)") : r.message.includes("fail") ? "var(--bad)" : "var(--muted)";
+  // header chip + tile: lock state, battery icon, signal bars
+  const lk = RemoteUI.lock(r), U = RemoteUI;
+  if (conn) {
+    setDot("remote", lk ? (lk.cls === "muted" ? "ok" : lk.cls) : "ok", lk ? lk.short : "remote");
+    setHTML("#rm-hdr", (lk ? U.lockIcon(lk.open, lk.color, 13) : "") + U.battery(r.battery, 12) + U.signal(r.rssi, 12));
+    $("#rm-hdr").parentElement.title = `Unitree remote ${conn.name} · battery ${r.battery ?? "?"} % · ${r.rssi ?? "?"} dBm` + (lk ? ` · ${lk.long}` : "");
+    setHTML("#r-ind", (lk ? `<span class="rm-badge ${lk.cls}">${U.lockIcon(lk.open, lk.color, 14)}${lk.long}</span>`
+                                : `<span class="rm-badge muted">lock state unknown</span>`) +
+      `<span class="rm-ind">${U.battery(r.battery, 14)}<span class="v">${r.battery ?? "?"} %</span></span>` +
+      `<span class="rm-ind">${U.signal(r.rssi, 14)}<span class="v">${r.rssi ?? "?"} dBm</span></span>`);
+  } else {
+    setDot("remote", busy ? "warn" : "", r.autoconnect ? (busy ? `remote ${r.state}` : "remote · waiting") : "remote off");
+    setHTML("#rm-hdr", ""); setHTML("#r-ind", "");
+  }
+}
+const selectedRemote = () => {
+  const o = $("#r-dev").selectedOptions[0];
+  return o && o.value ? { address: o.value, name: o.dataset.name || null } : null;
+};
+$("#r-scan").onclick = () => api("remote", { op: "scan" });
+$("#r-connect").onclick = () => { const d = selectedRemote(); if (d) api("remote", { op: "connect", ...d }); };
+$("#r-disconnect").onclick = () => api("remote", { op: "disconnect" });
+$("#r-auto").onclick = () => {
+  const on = !(ST.remote && ST.remote.autoconnect);
+  api("remote", { op: "autoconnect", enabled: on, ...(on ? selectedRemote() || {} : {}) });
+};
+
+function renderKV() {
+  const s = ST, b = s.base || {};
+  const rows = [["base", b.connected ? "connected" : "no link"],
+    ["battery", `${s.charge || "—"} (estimated)`],
+    ["MCU flag / aux", b.connected ? `${b.flag} / ${(b.aux || []).join(", ")}` : "—"]];
+  for (const [side, a] of Object.entries(s.arms || {})) rows.push([`${side} arm`, `${a.powered ? "powered" : "off"} · ${a.rate} Hz${a.moving ? " · moving" : ""}`]);
+  $("#kv").innerHTML = rows.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
+}
+
+function renderNodesAndVersions(s) {
+  if (s.nodes) {
+    const r = NodesUI.render(s.nodes, s.procs);
+    setHTML("#nodes", r.html);
+    $("#node-count").textContent = `· ${r.running} running` + (r.missing ? ` · ${r.missing} missing` : "");
+  }
+  const v = s.versions;
+  if (!v) return;
+  const cam = v.camera;
+  const arm = (side) => {
+    const a = (v.arms || {})[side];
+    if (!a || !a.firmware) return `<span class="muted">— (not read yet)</span>`;
+    return `<b>${a.firmware}</b> <span class="muted">· end board ${a.atom ?? "?"} · board ${a.board ?? "?"}</span>`;
+  };
+  const rows = [
+    ["base MCU", v.base || "— (no link)"],
+    ["left arm MCU", arm("left")],
+    ["right arm MCU", arm("right")],
+    ["depth camera", cam ? `${cam.name} · fw ${cam.firmware} <span class="muted">· s/n ${cam.serial}</span>` : "—"],
+    ["Jetson", [v.l4t ? `L4T ${v.l4t}` : "", v.jetpack ? `JetPack ${v.jetpack}` : ""].filter(Boolean).join(" · ") || "—"]];
+  setHTML("#versions", rows.map(([k, x]) => `<span>${k}</span><span>${x}</span>`).join(""));
+}
+
+// ---------------- map canvas ----------------
+const cv = $("#map"), ctx = cv.getContext("2d");
+let view = { s: 2, ox: 0, oy: 0, fitted: false };   // screen = map_px * s + o
+async function loadMap() {
+  const info = await (await fetch("/map.json")).json();
+  if (!info) { MAP = null; $("#mapmsg").style.display = "flex"; return; }
+  const img = new Image();
+  img.onload = () => { MAP = { info, img }; $("#mapmsg").style.display = "none"; if (!view.fitted) fitView(); drawMap(); };
+  img.src = `/map.png?v=${info.version}`;
+}
+function resize() { const r = cv.getBoundingClientRect(); cv.width = r.width * devicePixelRatio; cv.height = r.height * devicePixelRatio; drawMap(); }
+new ResizeObserver(resize).observe(cv);
+function fitView() {
+  if (!MAP) return;
+  const { width, height } = MAP.info, s = Math.min(cv.width / width, cv.height / height) * 0.95;
+  view = { s, ox: (cv.width - width * s) / 2, oy: (cv.height - height * s) / 2, fitted: true };
+}
+const w2s = (x, y) => { const i = MAP.info; const px = (x - i.origin[0]) / i.resolution, py = i.height - (y - i.origin[1]) / i.resolution; return [px * view.s + view.ox, py * view.s + view.oy]; };
+const s2w = (sx, sy) => { const i = MAP.info; const px = (sx - view.ox) / view.s, py = (sy - view.oy) / view.s; return [px * i.resolution + i.origin[0], (i.height - py) * i.resolution + i.origin[1]]; };
+function arrow(x, y, yaw, len, color, width = 2) {
+  const [sx, sy] = w2s(x, y), dx = Math.cos(yaw) * len, dy = -Math.sin(yaw) * len;
+  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = width * devicePixelRatio;
+  ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(sx + dx, sy + dy); ctx.stroke();
+  const a = Math.atan2(dy, dx), h = 7 * devicePixelRatio;
+  ctx.beginPath(); ctx.moveTo(sx + dx, sy + dy);
+  ctx.lineTo(sx + dx - h * Math.cos(a - 0.5), sy + dy - h * Math.sin(a - 0.5));
+  ctx.lineTo(sx + dx - h * Math.cos(a + 0.5), sy + dy - h * Math.sin(a + 0.5)); ctx.fill();
+}
+let preview = null;
+function drawMap() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = "#0f1114"; ctx.fillRect(0, 0, cv.width, cv.height);
+  if (!MAP) return;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(MAP.img, view.ox, view.oy, MAP.info.width * view.s, MAP.info.height * view.s);
+  const dpr = devicePixelRatio;
+  if (ST && ST.plan && ST.plan.length > 1) {
+    ctx.strokeStyle = "#4cc2ff"; ctx.lineWidth = 2 * dpr; ctx.beginPath();
+    ST.plan.forEach(([x, y], k) => { const [sx, sy] = w2s(x, y); k ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); }); ctx.stroke();
+  }
+  if (WAYPOINTS.length > 1) {
+    ctx.setLineDash([4 * dpr, 4 * dpr]); ctx.strokeStyle = "rgba(255,212,0,.5)"; ctx.lineWidth = 1.5 * dpr; ctx.beginPath();
+    WAYPOINTS.forEach((w, k) => { const [sx, sy] = w2s(w.x, w.y); k ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); });
+    if (ST && ST.nav.loop) { const [sx, sy] = w2s(WAYPOINTS[0].x, WAYPOINTS[0].y); ctx.lineTo(sx, sy); }
+    ctx.stroke(); ctx.setLineDash([]);
+  }
+  const cur = ST && ST.nav.state === "navigating" ? ST.nav.current : null;
+  WAYPOINTS.forEach((w, k) => {
+    const [sx, sy] = w2s(w.x, w.y);
+    arrow(w.x, w.y, w.yaw, 16 * dpr, "#ffd400");
+    ctx.fillStyle = k === cur ? "#ff8c00" : "#ffd400"; ctx.beginPath(); ctx.arc(sx, sy, 8 * dpr, 0, 7); ctx.fill();
+    if (k === selWp) { ctx.strokeStyle = "#4cc2ff"; ctx.lineWidth = 2.5 * dpr; ctx.beginPath(); ctx.arc(sx, sy, 12 * dpr, 0, 7); ctx.stroke(); }
+    ctx.fillStyle = "#111"; ctx.font = `${10 * dpr}px system-ui`; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(k + 1, sx, sy + 0.5);
+  });
+  if (ST && ST.pose && ST.pose.frame === "map") {
+    const p = ST.pose, [sx, sy] = w2s(p.x, p.y), r = 0.30 / MAP.info.resolution * view.s;
+    ctx.fillStyle = "rgba(61,220,132,.25)"; ctx.strokeStyle = "#3ddc84"; ctx.lineWidth = 2 * dpr;
+    ctx.beginPath(); ctx.arc(sx, sy, Math.max(r, 5 * dpr), 0, 7); ctx.fill(); ctx.stroke();
+    arrow(p.x, p.y, p.yaw, Math.max(r * 1.4, 14 * dpr), "#3ddc84", 2.5);
+  }
+  if (preview) arrow(preview.x, preview.y, preview.yaw, 22 * dpr, preview.color, 3);
+}
+
+// interactions
+let dragging = null, panning = null;
+const evPt = (e) => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * devicePixelRatio, (e.clientY - r.top) * devicePixelRatio]; };
+cv.addEventListener("contextmenu", (e) => e.preventDefault());
+cv.addEventListener("pointerdown", (e) => {
+  if (!MAP) return;
+  cv.setPointerCapture(e.pointerId);
+  const [sx, sy] = evPt(e);
+  if (e.button === 2 || e.shiftKey) { panning = { sx, sy, ox: view.ox, oy: view.oy }; return; }
+  const [x, y] = s2w(sx, sy);
+  dragging = { x, y, sx, sy };
+  if (tool === "off") { dragging = null; selWp = nearestWaypoint(sx, sy); renderTable(); drawMap(); return; }
+  if (tool === "delete") return;
+  preview = { x, y, yaw: 0, color: tool === "waypoint" ? "#ffd400" : tool === "goto" ? "#4cc2ff" : "#ff5ec4" };
+  drawMap();
+});
+cv.addEventListener("pointermove", (e) => {
+  const [sx, sy] = evPt(e);
+  if (panning) { view.ox = panning.ox + sx - panning.sx; view.oy = panning.oy + sy - panning.sy; drawMap(); return; }
+  if (!dragging || !preview) return;
+  if (Math.hypot(sx - dragging.sx, sy - dragging.sy) > 6 * devicePixelRatio) preview.yaw = Math.atan2(-(sy - dragging.sy), sx - dragging.sx);
+  drawMap();
+});
+cv.addEventListener("pointerup", (e) => {
+  if (panning) { panning = null; return; }
+  if (!dragging) return;
+  const { x, y, sx, sy } = dragging, yaw = preview ? preview.yaw : 0;
+  dragging = null; preview = null;
+  if (tool === "off") { /* view only */ }
+  else if (tool === "delete") deleteWaypointAt(sx, sy);
+  else if (tool === "waypoint") addWaypoint(x, y, yaw);
+  else if (tool === "goto") { api("goto", { x, y, yaw }); toast(`navigating to ${x.toFixed(2)}, ${y.toFixed(2)}`); }
+  else if (tool === "pose") { api("initialpose", { x, y, yaw }); toast("initial pose sent"); }
+  drawMap();
+});
+cv.addEventListener("wheel", (e) => {
+  e.preventDefault(); const [sx, sy] = evPt(e), k = Math.exp(-e.deltaY * 0.0015);
+  view.ox = sx - (sx - view.ox) * k; view.oy = sy - (sy - view.oy) * k; view.s *= k; drawMap();
+}, { passive: false });
+cv.addEventListener("dblclick", () => {
+  if (!ST || !ST.pose || !MAP) return; const [sx, sy] = w2s(ST.pose.x, ST.pose.y);
+  view.ox += cv.width / 2 - sx; view.oy += cv.height / 2 - sy; drawMap();
+});
+function setTool(t, tellRobot = true) {
+  tool = t;
+  document.querySelectorAll("#tool button").forEach((x) => x.classList.toggle("active", x.dataset.tool === t));
+  if (tellRobot) { toolChanged = Date.now(); api("click_mode", { mode: t }); }
+}
+document.querySelectorAll("#tool button").forEach((b) => b.onclick = () => setTool(b.dataset.tool));
+
+// ---------------- waypoints ----------------
+function pushWaypoints() { api("waypoints", { waypoints: WAYPOINTS }); renderTable(); drawMap(); }
+function addWaypoint(x, y, yaw) { WAYPOINTS.push({ x, y, yaw }); pushWaypoints(); }
+let selWp = null;           // selected waypoint (table row / map click with View) -> Delete key
+window.addEventListener("keydown", (e) => {
+  if (driving || selWp == null || !["Delete", "Backspace"].includes(e.key)) return;
+  if (e.target.closest && e.target.closest("input, textarea, select")) return;
+  e.preventDefault(); const k = selWp; selWp = null; deleteWaypoint(k); toast(`deleted waypoint ${k + 1}`);
+});
+function deleteWaypoint(k) {
+  WAYPOINTS.splice(k, 1); if (selWp === k) selWp = null; renderTable(); drawMap();
+  api("waypoint_delete", { index: k });
+}
+function nearestWaypoint(sx, sy) {         // marker within ~18 px of a map click, or null
+  let best = null, bd = 18 * devicePixelRatio;
+  WAYPOINTS.forEach((w, k) => { const [wx, wy] = w2s(w.x, w.y), d = Math.hypot(wx - sx, wy - sy); if (d < bd) { bd = d; best = k; } });
+  return best;
+}
+function deleteWaypointAt(sx, sy) {
+  const best = nearestWaypoint(sx, sy);
+  if (best == null) { toast("no waypoint there"); return; }
+  deleteWaypoint(best); toast(`deleted waypoint ${best + 1}`);
+}
+let lastTableKey = "";
+function renderTable(onlyIfChanged = false) {
+  const cur = ST && ST.nav.state === "navigating" ? ST.nav.current : null;
+  if (selWp != null && selWp >= WAYPOINTS.length) selWp = null;
+  const key = JSON.stringify([WAYPOINTS, cur, selWp]);
+  if (onlyIfChanged && key === lastTableKey) return;
+  lastTableKey = key;
+  $("#wptable").innerHTML = WAYPOINTS.length ? WAYPOINTS.map((w, k) => `<tr data-k="${k}" class="${k === cur ? "cur" : ""}${k === selWp ? " sel" : ""}"><td>${k + 1}</td><td>${w.x.toFixed(2)}, ${w.y.toFixed(2)}</td><td>${(w.yaw * 180 / Math.PI).toFixed(0)}°</td>
+    <td class="act"><button data-a="go" data-k="${k}" title="go here">➜</button><button data-a="up" data-k="${k}" title="move up">↑</button><button data-a="del" class="del" data-k="${k}" title="delete">✕</button></td></tr>`).join("")
+    : `<tr><td></td><td class="muted" colspan="3">Click the map to add waypoints (drag to set heading).</td></tr>`;
+}
+$("#wptable").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) {                                   // click on a row: select it (Delete key removes it)
+    const tr = e.target.closest("tr[data-k]"); if (!tr) return;
+    selWp = selWp === +tr.dataset.k ? null : +tr.dataset.k; renderTable(); drawMap(); return;
+  }
+  const k = +b.dataset.k;
+  if (b.dataset.a === "del") { deleteWaypoint(k); return; }
+  if (b.dataset.a === "up" && k > 0) [WAYPOINTS[k - 1], WAYPOINTS[k]] = [WAYPOINTS[k], WAYPOINTS[k - 1]];
+  if (b.dataset.a === "go") { const w = WAYPOINTS[k]; api("goto", w); return; }
+  pushWaypoints();
+});
+$("#b-clear").onclick = () => { if (WAYPOINTS.length && confirm(`Delete all ${WAYPOINTS.length} waypoints of this map?`)) { WAYPOINTS = []; pushWaypoints(); } };
+$("#b-runonce").onclick = () => api("run", { loop: false });
+$("#b-cruise").onclick = () => api("run", { loop: true });
+
+// ---------------- SLAM / Nav ----------------
+// saved maps (~/maps/*.db), newest first; the status carries the list
+let mapsKey = "";
+function renderMaps(s) {
+  const slam = s.procs.slam, maps = s.maps || [];
+  $("#slamline").innerHTML = slam.running
+    ? `<span class="dot ${slam.mode === "mapping" ? "warn" : "ok"}"></span> ${slam.mode === "mapping" ? "Mapping" : "Localizing on"} <b>${slam.map}</b>`
+    : `<span class="dot"></span> SLAM off · pick a map below`;
+  const key = JSON.stringify([maps, slam.running, slam.map, slam.mode]);
+  if (key === mapsKey) return;
+  mapsKey = key;
+  $("#maptable").innerHTML = maps.length ? maps.map((m) => {
+    const act = m.active ? `<span class="badge ${m.active}">${m.active === "mapping" ? "mapping" : "in use"}</span>` : "";
+    return `<tr class="${m.active ? "active" : ""}"><td>${m.name}${act}</td>
+      <td class="meta">${m.time} · ${m.size_mb} MB${m.waypoints ? ` · ${m.waypoints} wp` : ""}</td>
+      <td class="act"><button data-a="loc" data-m="${m.name}" title="localize on this map">▶</button><button data-a="extend" data-m="${m.name}" title="continue mapping this map">✎</button><button data-a="del" class="del" data-m="${m.name}" title="delete this map">✕</button></td></tr>`;
+  }).join("") : `<tr><td class="muted" colspan="3">No saved maps yet - name one below and press New map.</td></tr>`;
+}
+async function deleteMap(m) {
+  const slam = ST.procs.slam, inUse = slam.running && slam.map === m;
+  const msg = inUse ? `'${m}' is in use (${slam.mode}). Stop SLAM${ST.procs.nav.running ? " and Nav2" : ""} and delete it with its waypoints?`
+                    : `Delete map '${m}' and its waypoints?`;
+  if (!confirm(`${msg}\n\nIt is kept in ~/maps/.trash for 7 days.`)) return;
+  if (inUse) {
+    toast("stopping SLAM (saving map)…");
+    if (ST.procs.nav.running) await api("nav_stop");
+    await api("slam_stop");
+  }
+  const j = await api("map_delete", { name: m });
+  if (j && j.ok) toast(`deleted '${m}'`);
+}
+async function startSlam(mode, map, fresh = false) {
+  toast(mode === "mapping" ? `mapping '${map}'…` : `localizing on '${map}'…`);
+  const j = await api("slam", { mode, map, fresh });
+  if (j && j.ok) view.fitted = false;
+}
+$("#maptable").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b || b.disabled) return; const m = b.dataset.m;
+  if (b.dataset.a === "loc") startSlam("localization", m);
+  if (b.dataset.a === "extend" && confirm(`Continue mapping '${m}'?\n\nStart where the map was recorded: the new drive only joins the map once RTAB-Map recognises a known place, otherwise it becomes a separate piece.`)) startSlam("mapping", m);
+  if (b.dataset.a === "del") deleteMap(m);
+});
+$("#b-newmap").onclick = () => {
+  const name = $("#newmap").value.trim().replace(/[^A-Za-z0-9_-]/g, "");
+  if (!name) { toast("type a map name (letters, digits, - _)"); $("#newmap").focus(); return; }
+  if ((ST.maps || []).some((m) => m.name === name) && !confirm(`A map '${name}' exists. Replace it with a new, empty map?`)) return;
+  $("#newmap").value = "";
+  startSlam("mapping", name, true);
+};
+$("#b-slamstop").onclick = async () => { toast("stopping SLAM (saving map)…"); await api("slam_stop"); toast("SLAM stopped, map saved"); };
+$("#b-exp-cloud").onclick = () => api("export3d", { kind: "cloud" });
+$("#exp3d-files").addEventListener("click", (ev) => {
+  const b = ev.target.closest("button[data-f]");
+  if (b && confirm(`Delete ${b.dataset.f}?`)) api("export3d_delete", { name: b.dataset.f });
+});
+$("#b-exp-mesh").onclick = () => api("export3d", { kind: "mesh" });
+$("#b-export").onclick = async () => { const j = await api("export_map"); if (j && j.ok) toast(`saved ${j.file}`); };
+$("#b-nav").onclick = async () => { toast("starting Nav2…"); await api("nav"); };
+$("#b-navstop").onclick = async () => { await api("nav_stop"); toast("Nav2 stopped"); };
+const stopAll = () => { api("stop"); toast("STOP"); };
+$("#estop").onclick = stopAll;
+
+// ---------------- tabs ----------------
+document.querySelectorAll(".tabs button").forEach((b) => b.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("active", x === b));
+  document.querySelectorAll("[data-pane]").forEach((p) => p.classList.toggle("hidden", p.dataset.pane !== b.dataset.tab));
+});
+
+// ---------------- teleop ----------------
+const held = new Set(); let teleTimer = null;
+const vl = () => +$("#vlin").value, va = () => +$("#vang").value;
+$("#vlin").oninput = () => $("#vlin-t").textContent = `${vl().toFixed(2)} m/s`;
+$("#vang").oninput = () => $("#vang-t").textContent = `${va().toFixed(2)} r/s`;
+function teleVec() {
+  let lin = 0, ang = 0;
+  for (const k of held) { const [a, b] = k.split(",").map(Number); lin += a; ang += b; }
+  const k = fast ? 2 : 1;   // server clamps to the base limits
+  return [Math.sign(lin) * vl() * k, Math.sign(ang) * va() * k];
+}
+function teleUpdate() {
+  if (held.size && !teleTimer) teleTimer = setInterval(() => { const [vx, wz] = teleVec(); api("cmd_vel", { vx, wz }); }, 100);
+  if (!held.size && teleTimer) { clearInterval(teleTimer); teleTimer = null; api("cmd_vel", { vx: 0, wz: 0 }); }
+}
+document.querySelectorAll(".pad button").forEach((b) => {
+  const v = b.dataset.v;
+  if (v === "0,0") { b.onclick = stopAll; return; }
+  b.addEventListener("pointerdown", (e) => { b.setPointerCapture(e.pointerId); held.add(v); b.classList.add("held"); teleUpdate(); });
+  const up = () => { held.delete(v); b.classList.remove("held"); teleUpdate(); };
+  b.addEventListener("pointerup", up); b.addEventListener("pointercancel", up);
+});
+const keymap = { w: "1,0", arrowup: "1,0", s: "-1,0", arrowdown: "-1,0", a: "0,1", arrowleft: "0,1", d: "0,-1", arrowright: "0,-1" };
+let driving = false, fast = false;
+function setDriving(on) {
+  driving = on; $("#drive").classList.toggle("on", on); $("#hud").classList.toggle("on", on);
+  $("#drive").textContent = on ? "⌨ Driving (Esc)" : "⌨ Drive";
+  if (!on) { held.clear(); teleUpdate(); }
+  if (on && document.activeElement) document.activeElement.blur();
+}
+$("#drive").onclick = () => setDriving(!driving);
+function hudUpdate() {
+  document.querySelectorAll("#hud .k").forEach((k) => k.classList.toggle("on", held.has(k.dataset.k)));
+  $("#hud-speed").textContent = fast ? "⇧ FAST" : "⇧ shift = fast";
+}
+// capture phase: while driving, the keys never reach the Rerun canvas (WASD would fly its camera)
+window.addEventListener("keydown", (e) => {
+  if (!driving) return;
+  const k = e.key.toLowerCase();
+  if (k === "escape") { setDriving(false); e.preventDefault(); e.stopPropagation(); return; }
+  if (e.code === "Space") { held.clear(); teleUpdate(); stopAll(); }
+  else if (k === "shift") fast = true;
+  else if (keymap[k]) { if (!e.repeat) { held.add(keymap[k]); teleUpdate(); } }
+  else return;
+  e.preventDefault(); e.stopPropagation(); hudUpdate();
+}, true);
+window.addEventListener("keyup", (e) => {
+  if (!driving) return;
+  const k = e.key.toLowerCase();
+  if (k === "shift") fast = false; else if (keymap[k]) { held.delete(keymap[k]); teleUpdate(); } else return;
+  e.preventDefault(); e.stopPropagation(); hudUpdate();
+}, true);
+window.addEventListener("blur", () => { held.clear(); fast = false; teleUpdate(); hudUpdate(); });
+
+// ---------------- head / led / arms ----------------
+let headT = null;
+for (const id of ["neck", "jaw"]) $("#" + id).oninput = () => {
+  $(`#${id}-t`).textContent = `${$("#" + id).value}°`;
+  clearTimeout(headT); headT = setTimeout(() => api("head", { head: +$("#neck").value, eye: +$("#jaw").value, speed: 40 }), 150);
+};
+// waist: slider follows the measured angle unless it was touched in the last 3 s
+let waistT = null, waistTouched = 0;
+const sendWaist = () => { clearTimeout(waistT); waistT = null; api("waist", { deg: +$("#waist").value, speed: 20 }); };
+$("#waist").oninput = () => {
+  waistTouched = Date.now(); $("#waist-t").textContent = `${$("#waist").value}°`;
+  if (!waistT) waistT = setTimeout(sendWaist, 250);
+};
+$("#waist").addEventListener("change", sendWaist);
+$("#b-waist0").onclick = () => { waistTouched = Date.now(); $("#waist").value = 0; $("#waist-t").textContent = "0°"; sendWaist(); };
+function renderWaist(bj) {
+  const w = bj && bj.body;
+  $("#waist-info").textContent = w == null ? "waist position unknown (upper body driver not running?)" :
+    `now ${w.toFixed(0)}° ${Math.abs(w) < 1 ? "(straight)" : w > 0 ? "(left)" : "(right)"} · ◀ left · right ▶ — the arms turn with the waist`;
+  if (w != null && Date.now() - waistTouched > 3000) { $("#waist").value = Math.round(w); $("#waist-t").textContent = `${Math.round(w)}°`; }
+}
+
+const hex2rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+$("#led").oninput = () => { const [r, g, b] = hex2rgb($("#led").value); api("led", { r, g, b }); };
+$("#b-ledoff").onclick = () => api("led", { r: 0, g: 0, b: 0 });
+// switches follow the robot state; a click asks for the change and waits for the state to confirm it
+function bindSwitch(id, onChange, holdMs = 8000) {
+  const el = $(id), cb = el.querySelector("input");
+  cb.addEventListener("change", async () => {
+    const want = cb.checked;
+    cb.checked = !want;                         // shown state = robot state until it reports back
+    if (await onChange(want) === false) return;
+    el.classList.add("busy"); el._until = Date.now() + holdMs;
+  });
+  return (state) => {
+    if (el._until && Date.now() < el._until && state !== !cb.checked) return;   // still switching
+    el._until = 0; el.classList.remove("busy"); cb.checked = !!state;
+  };
+}
+const setArmsSwitch = bindSwitch("#sw-arms", (on) => {
+  if (!on && !confirm("Power the arms off? They go limp - make sure they are supported.")) return false;
+  api("arms_power", { on }); toast(on ? "powering arms on" : "powering arms off");
+});
+const setFreeSwitch = bindSwitch("#sw-free", (on) => {
+  if (on && !confirm("Freedrive: the arms can be moved by hand. Hold the arms - they may sink. Continue?")) return false;
+  api("freedrive", { on }); toast(on ? "freedrive on (remote: Select toggles)" : "freedrive off - arms hold");
+});
+const setHoldSwitch = bindSwitch("#sw-hold", (on) => { api("head_hold", { on }); });
+// named arm poses (SRDF group states) through MoveIt
+let armPosesKey = "";
+function renderArmMotion(m, moveitOn) {
+  if (!m) return;
+  const key = JSON.stringify(m.poses);
+  if (key !== armPosesKey) {
+    armPosesKey = key;
+    $("#arm-poses").innerHTML = m.poses.map((p) => `<button class="b" data-pose="${p.name}">${p.label}</button>`).join("");
+    for (const b of $("#arm-poses").querySelectorAll("button")) b.onclick = () => {
+      if (!confirm(`Move to "${b.textContent}"? The arms move - keep clear.`)) return;
+      api("arm_pose", { name: b.dataset.pose, speed: +$("#arm-speed").value });
+    };
+  }
+  const busy = ["planning", "moving"].includes(m.state);
+  for (const b of $("#arm-poses").querySelectorAll("button")) b.disabled = !moveitOn || !m.ready || busy;
+  const words = { idle: "", planning: "planning…", moving: "moving…", done: "done", failed: "failed", stopped: "stopped" };
+  $("#arm-st").textContent = !moveitOn ? "switch on Motion planning to use the poses" :
+    [words[m.state] || m.state, m.state === "failed" ? m.message : busy ? m.message : m.pose].filter(Boolean).join(" · ");
+  $("#arm-st").style.color = m.state === "failed" ? "#ff5468" : busy ? "#ffb020" : "";
+}
+$("#b-arm-stop").onclick = () => { api("arm_stop", {}); toast("stopping the arms"); };
+
+const setMoveitSwitch = bindSwitch("#sw-moveit", (on) => {
+  api("moveit", { on }); toast(on ? "starting MoveIt (~15 s)" : "stopping MoveIt");
+});
+// nvblox layers in the 3D view: the bridge subscribes only to the layers that are on
+let layersUntil = 0;
+for (const el of document.querySelectorAll(LAYER_SEL)) {
+  el.querySelector("input").addEventListener("change", () => {
+    layersUntil = Date.now() + 1500;           // keep the click until the status reports it back
+    const on = [...document.querySelectorAll(LAYER_SEL)]
+      .filter((e) => e.querySelector("input").checked).map((e) => e.dataset.layer);
+    api("viz_layers", { nvblox: on });
+  });
+}
+// voxel map look: the bridge re-draws its kept copy of the map, no re-export
+let voxUntil = 0;
+document.querySelectorAll("#vox-shape button").forEach((b) => b.onclick = () => {
+  voxUntil = Date.now() + 1500;
+  document.querySelectorAll("#vox-shape button").forEach((x) => x.classList.toggle("active", x === b));
+  api("viz_voxel", { shape: b.dataset.shape });
+});
+$("#vox-size").onchange = () => { voxUntil = Date.now() + 1500; api("viz_voxel", { size: +$("#vox-size").value }); };
+const setLanSwitch = bindSwitch("#sw-lan", (lan) => {
+  const what = lan ? "LAN: other machines can see the robot's ROS topics (DDS traffic on the WiFi)"
+                   : "Robot only: ROS traffic stays on the robot";
+  if (!confirm(`${what}.\n\nThis restarts every ROS node (~30 s): the base stops, navigation is cancelled, SLAM / Nav2 come back as they are now. Continue?`)) return false;
+  api("ros_network", { network: lan ? "lan" : "localhost" }); toast("restarting the stack…");
+}, 90000);
+</script>
+</body>
+</html>

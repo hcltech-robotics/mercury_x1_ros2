@@ -1,0 +1,4 @@
+# Mercury X1 head voice board (iFlytek AIUI, XFM-DP): control UART behind a WCH CH343 (1a86:55d4).
+# The serial number tells it apart from the other CH343s in the robot (arms, base).
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", ATTRS{serial}=="5A37020735", MODE="0666", SYMLINK+="xf_mic"
+# Its USB audio (2207:0001) is the ALSA card XFMDPV0018 and needs no rule.

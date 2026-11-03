@@ -1,0 +1,227 @@
+{
+ "base_link": {
+  "files": [
+   "base_link_0.glb",
+   "base_link_1.glb",
+   "base_link_2.glb",
+   "base_link_3.glb"
+  ],
+  "faces": 149999,
+  "faces_orig": 216666,
+  "color": [
+   222,
+   225,
+   230
+  ]
+ },
+ "link_body": {
+  "files": [
+   "link_body_0.glb",
+   "link_body_1.glb",
+   "link_body_2.glb",
+   "link_body_3.glb"
+  ],
+  "faces": 149999,
+  "faces_orig": 365707,
+  "color": [
+   222,
+   225,
+   230
+  ]
+ },
+ "link_head": {
+  "files": [
+   "link_head_0.glb",
+   "link_head_1.glb",
+   "link_head_2.glb",
+   "link_head_3.glb"
+  ],
+  "faces": 150000,
+  "faces_orig": 396684,
+  "color": [
+   222,
+   225,
+   230
+  ]
+ },
+ "link_eye": {
+  "files": [
+   "link_eye.glb"
+  ],
+  "faces": 1996,
+  "faces_orig": 1996,
+  "color": [
+   222,
+   225,
+   230
+  ]
+ },
+ "link1_L": {
+  "files": [
+   "link1_L.glb"
+  ],
+  "faces": 21058,
+  "faces_orig": 21058,
+  "color": [
+   222,
+   225,
+   230
+  ]
+ },
+ "link2_L": {
+  "files": [
+   "link2_L.glb"
+  ],
+  "faces": 3038,
+  "faces_orig": 3038,
+  "color": [
+   222,
+   225,
+   230
+  ]
+ },
+ "link3_L": {
+  "files": [
+   "link3_L.glb"
+  ],
+  "faces": 15310,
+  "faces_orig": 15310,
+  "color": [
+   222,
+   225,
+   230
+  ]
+ },
+ "link4_L": {
+  "files": [
+   "link4_L.glb"
+  ],
+  "faces": 7170,
+  "faces_orig": 7170,
+  "color": [
+   222,
+   225,
+   230
+  ]
+ },
+ "link5_L": {
+  "files": [
+   "link5_L.glb"
+  ],
+  "faces": 8462,
+  "faces_orig": 8462,
+  "color": [
+   222,
+   225,
+   230
+  ]
+ },
+ "link6_L": {
+  "files": [
+   "link6_L.glb"
+  ],
+  "faces": 11176,
+  "faces_orig": 11176,
+  "color": [
+   222,
+   225,
+   230
+  ]
+ },
+ "link7_L": {
+  "files": [
+   "link7_L.glb"
+  ],
+  "faces": 252,
+  "faces_orig": 252,
+  "color": [
+   222,
+   225,
+   230
+  ]
+ },
+ "link1_R": {
+  "files": [
+   "link1_R.glb"
+  ],
+  "faces": 21058,
+  "faces_orig": 21058,
+  "color": [
+   222,
+   225,
+   230
+  ]
+ },
+ "link2_R": {
+  "files": [
+   "link2_R.glb"
+  ],
+  "faces": 3038,
+  "faces_orig": 3038,
+  "color": [
+   222,
+   225,
+   230
+  ]
+ },
+ "link3_R": {
+  "files": [
+   "link3_R.glb"
+  ],
+  "faces": 15310,
+  "faces_orig": 15310,
+  "color": [
+   222,
+   225,
+   230
+  ]
+ },
+ "link4_R": {
+  "files": [
+   "link4_R.glb"
+  ],
+  "faces": 7170,
+  "faces_orig": 7170,
+  "color": [
+   222,
+   225,
+   230
+  ]
+ },
+ "link5_R": {
+  "files": [
+   "link5_R.glb"
+  ],
+  "faces": 8462,
+  "faces_orig": 8462,
+  "color": [
+   222,
+   225,
+   230
+  ]
+ },
+ "link6_R": {
+  "files": [
+   "link6_R.glb"
+  ],
+  "faces": 11176,
+  "faces_orig": 11176,
+  "color": [
+   222,
+   225,
+   230
+  ]
+ },
+ "link7_R": {
+  "files": [
+   "link7_R.glb"
+  ],
+  "faces": 252,
+  "faces_orig": 252,
+  "color": [
+   222,
+   225,
+   230
+  ]
+ }
+}

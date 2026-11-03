@@ -1,0 +1,5 @@
+# Lock the board's output beam (manual wakeup). mic4 linear array: 0..2.
+int32 beam
+---
+bool success
+string message

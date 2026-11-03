@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>mercury_x1_driver</name>
+  <version>0.1.0</version>
+  <description>Low-level "goalkeeper" drivers for the Mercury X1: wheeled base (odom, IMU, ultrasonic, LED, cmd_vel) and upper body (both arms, neck, jaw, waist).</description>
+  <maintainer email="legion1581@gmail.com">Konstantin Severov</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
+  <depend>control_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>tf2_ros</depend>
+  <depend>mercury_x1_msgs</depend>
+  <depend>libopencv-dev</depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>mercury_x1_web</name>
+  <version>0.1.0</version>
+  <description>Mercury X1 web UI: Rerun bridge (TF-aware 3D scene) + control page (map, waypoints, cruise, teleop, SLAM/Nav2 supervisor).</description>
+  <maintainer email="legion1581@gmail.com">Konstantin Severov</maintainer>
+  <license>Apache-2.0</license>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>tf2_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>action_msgs</exec_depend>
+  <exec_depend>mercury_x1_msgs</exec_depend>
+  <exec_depend>nav2_map_server</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>rtabmap_msgs</exec_depend>
+  <exec_depend>orbbec_camera_msgs</exec_depend>
+  <exec_depend>moveit_msgs</exec_depend>
+  <!-- pip: rerun-sdk==0.39.0 aiohttp -->
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

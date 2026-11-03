@@ -1,0 +1,21 @@
+# Mercury X1 speech for the head display's voice chat: Parakeet STT + Kokoro TTS (Jetson GPU) + Silero VAD
+# on http://127.0.0.1:8097 (/listen, /tts). Install / remove with server/robot_speech/setup.sh.
+# Logs: journalctl -u mercury-speech
+[Unit]
+Description=Mercury X1 speech (Parakeet STT, Kokoro TTS)
+After=network.target
+
+[Service]
+User=elephant
+WorkingDirectory=/home/elephant/mercury-speech
+# models are on disk: no Hugging Face network check at start
+Environment=HF_HUB_OFFLINE=1
+# the GPU driver (nvmap) needs large physically contiguous blocks: after long uptime the RAM is fragmented and
+# Parakeet's GPU allocations fail (nvmap error 12) with GBs free. Compact it first (as root: the "+" prefix).
+ExecStartPre=+/bin/sh -c 'sync; echo 1 > /proc/sys/vm/compact_memory'
+ExecStart=/home/elephant/mercury-speech/.venv/bin/python /home/elephant/mercury_x1_ros2/server/robot_speech/speech_service.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

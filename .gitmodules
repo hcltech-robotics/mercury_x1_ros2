@@ -1,0 +1,4 @@
+[submodule "src/perception/mercury_orbbec_ros2"]
+	path = src/perception/mercury_orbbec_ros2
+	url = https://github.com/orbbec/OrbbecSDK_ROS2.git
+	branch = main

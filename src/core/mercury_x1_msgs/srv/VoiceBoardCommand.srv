@@ -1,0 +1,9 @@
+# Send any control message to the voice board and return its reply event.
+# e.g. {"type":"version"}, {"type":"manual_wakeup","content":{"beam":1}}, {"type":"mic_vol","content":{"volume":20}}
+string json                      # control message (JSON object with "type")
+float32 timeout                  # seconds to wait for the reply event, <= 0: node default
+---
+bool success                     # reply received and code == 0
+int32 code                       # board reply "code" (-1 if no reply)
+string content                   # board reply "content"
+string reply                     # full reply event JSON ("" if none)

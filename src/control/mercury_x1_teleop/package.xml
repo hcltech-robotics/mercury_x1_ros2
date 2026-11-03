@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>mercury_x1_teleop</name>
+  <version>0.1.0</version>
+  <description>Teleoperation for the Mercury X1: Unitree BLE handheld remote (R3 and older) over the robot's built-in Bluetooth -> /joy and /cmd_vel, controlled from the web page.</description>
+  <maintainer email="legion1581@gmail.com">Konstantin Severov</maintainer>
+  <license>Apache-2.0</license>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>bluez</exec_depend>
+  <!-- pip: bleak>=0.22 (BlueZ over D-Bus, no root needed) -->
+  <test_depend>python3-pytest</test_depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
