@@ -75,6 +75,25 @@ while it talks. ~2.3 GB of GPU memory in all (kiosk Status → GPU processes sho
 Config + bearer token: `~/.config/mercury_x1/voice.env` (chmod 600). The room's 150-300 Hz hum made webrtcvad
 trigger 95 % of the time; Silero scores it ≤ 0.3.
 
+### Voice board (iFlytek XFM-DP 4-mic array in the head)
+`src/drivers/mercury_x1_voice_board` talks the AIUI serial protocol on `/dev/xf_mic` (udev rule in
+`scripts/install_voice_board_udev.sh`): acks the handshake, publishes wake events (`VoiceWake`: keyword, beam 0-2,
+angle 0-180°, score) and board state, services to set the wake word / fix the beam. Kiosk → **Voice** tab: wake-word
+presets (factory 小微小微 `xiao3 wei1 xiao3 wei1`, threshold 700-1100, persisted in
+`~/.config/mercury_x1/voice_board.json`), a direction radar with the last wakes, and the voice-output settings.
+What the board is (Allwinner R818, Tina Linux, root ADB over its USB): one closed iFlytek library does beamforming/AEC/NS
+(language-independent) and the wake word (IVW 3.8, `res.bin` = a **Mandarin-only** acoustic model + the keyword as
+state IDs). The on-board keyword compiler maps English text to Chinese-accented approximations; "hello computer",
+"hey memory" etc. never trigger, and no English `res.bin` exists publicly (Hiwonder's "hello hiwonder" firmware is
+this same image; an English resource is a custom order from iFlytek). So: 小微小微 on the board for wake + direction;
+an English detector would have to run on the Orin.
+Raw mics: the board's USB audio is a configfs UAC1 gadget (`/etc/rc.local` on the board); `p_chmask` can be raised so
+the Orin receives the AC107 channels directly (slots 1-4 = the 4 mics, 35 mm pitch; 5-8 are delayed copies). UAC1 in
+that kernel caps packets at 200 B/ms, so at most 6 channels at 16 kHz (8 ch gave zero-filled samples); use `0x0f`.
+Switching the function to UAC2 made the gadget fail to bind and took ADB down with it (a board power cycle restores
+the stock config), so any board-side change must verify the bind and revert by itself. Host-side DOA/beamforming/
+English wake word on those 4 channels is the planned replacement for the board's closed stack.
+
 ### Nav2 in one process
 `nav.launch.py` runs all Nav2 servers in one `component_container_isolated` (`/nav2_container`, one executor
 thread per server; `composition:=false` for separate processes): idle CPU 72 % → 51 % of a core.
