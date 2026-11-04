@@ -10,8 +10,10 @@ rm -f /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_* 2>/dev/null || true   # stale 
 # extra robot.launch.py arguments, e.g. MX1_ROBOT_ARGS="voice_board:=false" in ~/.config/mercury_x1/autostart.env
 AUTOSTART_ENV="${XDG_CONFIG_HOME:-$HOME/.config}/mercury_x1/autostart.env"
 [ -z "${MX1_ROBOT_ARGS+x}" ] && [ -f "$AUTOSTART_ENV" ] && MX1_ROBOT_ARGS="$(. "$AUTOSTART_ENV"; echo "${MX1_ROBOT_ARGS:-}")"
+# `setsid -f`, not `... &`: a non-interactive bash starts `&` jobs with SIGINT ignored, every child inherits that, and
+# then SIGINT (mx1_stop.sh, the page's SLAM stop: rtabmap saves its database on SIGINT) did nothing until SIGKILL
 # shellcheck disable=SC2086
-setsid nohup ros2 launch mercury_x1_bringup robot.launch.py ${MX1_ROBOT_ARGS:-} > /tmp/mx1_robot.log 2>&1 < /dev/null &
+setsid -f nohup ros2 launch mercury_x1_bringup robot.launch.py ${MX1_ROBOT_ARGS:-} > /tmp/mx1_robot.log 2>&1 < /dev/null
 sleep 6
-setsid nohup ros2 launch mercury_x1_web web.launch.py > /tmp/mx1_web.log 2>&1 < /dev/null &
+setsid -f nohup ros2 launch mercury_x1_web web.launch.py > /tmp/mx1_web.log 2>&1 < /dev/null
 echo "up (ROS domain $ROS_DOMAIN_ID, network $MX1_ROS_NETWORK): http://$(hostname -I | awk '{print $1}'):8080  (viewer only: :9090)"

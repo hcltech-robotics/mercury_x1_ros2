@@ -85,10 +85,11 @@ BODY_JOINTS = ("body", "head", "eye")     # waist, neck, jaw: positions for the 
 # The threshold buttons only matter for the stock demo.
 VOICE_BOARD_CONF = os.path.expanduser("~/.config/mercury_x1/voice_board.json")
 WAKE_PRESETS = [
-    {"keyword": "hey mercury", "label": "hey mercury (voicefront)"},
-    {"keyword": "hey mercury;hello mercury;ok mercury", "label": "hey / hello / ok mercury (voicefront)"},
-    {"keyword": "xiao3 wei1 xiao3 wei1", "label": "小微小微 (stock demo, Mandarin)"},
-    {"keyword": "hello computer;hey memory;hey merry carry", "label": "stock demo English lexicon words"},
+    {"keyword": "hey mercury", "label": "hey mercury", "fw": "voicefront"},
+    {"keyword": "hey mercury;hello mercury;ok mercury", "label": "hey / hello / ok mercury", "fw": "voicefront"},
+    {"keyword": "hey mercury;hey robot", "label": "hey mercury / hey robot", "fw": "voicefront"},
+    {"keyword": "xiao3 wei1 xiao3 wei1", "label": "小微小微 (factory, Mandarin)", "fw": "stock"},
+    {"keyword": "hello computer;hey memory;hey merry carry", "label": "lexicon English words", "fw": "stock"},
 ]
 VIEWER_CACHE = os.path.expanduser(f"~/.cache/mercury_x1_web/rerun-web-viewer/{VIEWER_VERSION}")
 
@@ -139,8 +140,11 @@ class Supervisor:
         self.stop(name)
         with self.lock:
             log = open(os.path.join(self.log_dir, f"{name}.log"), "w")
+            # SIGINT back to default: if we were started with it ignored (a background job of a script), the
+            # children would inherit that and stop() could only SIGKILL them (rtabmap saves its database on SIGINT)
             self.procs[name] = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT,
-                                                stdin=subprocess.DEVNULL, start_new_session=True)
+                                                stdin=subprocess.DEVNULL, start_new_session=True,
+                                                preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
             self.args[name] = meta
 
     def stop(self, name: str, timeout: float = 25.0) -> None:
@@ -194,6 +198,7 @@ class WebNode(Node):
         except (OSError, ValueError):
             self.vb_conf = {"keyword": WAKE_PRESETS[0]["keyword"], "threshold": 900}
         self.vb_job = {"busy": False, "message": ""}  # wake word change in progress / result
+        self.vb_live: dict = {}                        # voicefront: last direction / voice activity / status
 
         self.chain = PoseChain()
         self.create_subscription(TFMessage, "/tf", self.chain.update, 50)
@@ -207,6 +212,7 @@ class WebNode(Node):
         self.create_subscription(JointState, "/joint_states", self._on_joints, 10)
         self.create_subscription(VoiceBoardState, "/voice_board/state", lambda m: setattr(self, "vb_state", m), 10)
         self.create_subscription(VoiceWake, "/voice_board/wake", self._on_wake, 10)
+        self.create_subscription(String, "/voice_board/events", self._on_vb_event, 50)
         self.cli_wake_word = self.create_client(SetWakeWord, "/voice_board/set_wake_word")
         self.pub_cmd = self.create_publisher(Twist, "/cmd_vel", 10)
         self.pub_init = self.create_publisher(PoseWithCovarianceStamped, "/initialpose", 10)
@@ -525,6 +531,28 @@ class WebNode(Node):
                            "score": None if math.isnan(m.score) else (round(m.score, 2) if m.score < 1.5 else round(m.score))}]
                          + self.vb_wakes)[:30]
 
+    def _on_vb_event(self, m: String) -> None:
+        """voicefront JSON lines: keep the latest direction, voice activity and status for the Voice tab"""
+        try:
+            ev = json.loads(m.data)
+        except ValueError:
+            return
+        kind, now = ev.get("type"), time.time()
+        if kind == "doa":
+            self.vb_live["doa"] = {"angle": ev.get("angle"), "conf": ev.get("conf"), "t": now}
+            self.vb_live["beam"] = ev.get("beam")
+        elif kind == "vad":
+            self.vb_live["speech"], self.vb_live["speech_t"] = bool(ev.get("speech")), now
+        elif kind == "status":
+            self.vb_live["status"] = {k: ev.get(k) for k in ("cpu", "mode", "beam", "playback", "snr_db", "keywords",
+                                                             "kw_threshold", "erle_db", "beamformer")}
+            self.vb_live["beam"] = ev.get("beam")
+            self.vb_live["status_t"] = now
+
+    def vb_kind(self) -> str:
+        st = self.vb_state
+        return "voicefront" if st and st.firmware_version.startswith("voicefront") else "stock"
+
     def set_wake_word(self, keyword: str, threshold: int) -> None:
         """board compiles the model (~30-60 s) and reloads; result in vb_job"""
         if self.vb_job["busy"]:
@@ -533,8 +561,11 @@ class WebNode(Node):
             self.vb_job = {"busy": False, "message": "voice board driver is not running"}
             return
         n = len(keyword.split(";"))
-        req = SetWakeWord.Request(keyword=keyword, threshold=";".join([str(threshold)] * n), reload=True)
-        self.vb_job = {"busy": True, "message": f"loading '{keyword}' on the board…", "t": time.time()}
+        vf = self.vb_kind() == "voicefront"   # voicefront: plain English, loads in ~1 s, the threshold stays
+        req = SetWakeWord.Request(keyword=keyword, threshold="" if vf else ";".join([str(threshold)] * n),
+                                  reload=not vf)
+        self.vb_job = {"busy": True, "message": f"loading '{keyword}'…" if vf else
+                       f"compiling '{keyword}' on the board…", "t": time.time()}
 
         def done(fut) -> None:
             r = fut.result()
@@ -554,7 +585,8 @@ class WebNode(Node):
         return {"running": st is not None, "alive": bool(st and st.alive), "port_open": bool(st and st.port_open),
                 "firmware": st.firmware_version if st else "", "wake_count": st.wake_count if st else 0,
                 "error": st.last_error if st else "", "wakes": self.vb_wakes, "conf": self.vb_conf,
-                "job": self.vb_job, "presets": WAKE_PRESETS}
+                "job": self.vb_job, "kind": self.vb_kind(),
+                "presets": [p for p in WAKE_PRESETS if p["fw"] == self.vb_kind()], "live": self.vb_live}
 
     def _on_joints(self, m: JointState) -> None:
         for name, pos in zip(m.name, m.position):

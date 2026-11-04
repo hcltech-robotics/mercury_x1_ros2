@@ -285,9 +285,11 @@
   <div class="card">
     <h2>Wake word (voice board)</h2>
     <div id="vb-presets"></div>
+    <div id="vb-thr-box">
     <div class="lbl small" style="margin:12px 0 6px">Threshold</div>
     <div class="vseg" id="vb-thr" style="grid-column:auto"><button data-t="700">700</button><button data-t="800">800</button><button data-t="900">900</button><button data-t="1100">1100</button></div>
     <div class="muted small">lower = wakes more easily (and falsely)</div>
+    </div>
     <div class="small" id="vb-job" style="margin-top:8px;min-height:20px"></div>
     <div class="kv" id="vb-info"></div>
   </div>
@@ -629,7 +631,9 @@ for (const b of document.querySelectorAll("#vb-thr button")) b.onclick = () => {
 $("#vb-presets").onclick = async (e) => {
   const b = e.target.closest("button[data-k]"); if (!b) return;
   const thr = vbThr || ((S.voice_board || {}).conf || {}).threshold || 900;
-  if (!await ask(`Load the wake word "${b.textContent}" (threshold ${thr})? The board compiles it and restarts its engine (~40 s).`, { ok: "Load" })) return;
+  const vf = (S.voice_board || {}).kind === "voicefront";
+  if (!await ask(vf ? `Load the wake word "${b.textContent}"? It takes about a second.` :
+    `Load the wake word "${b.textContent}" (threshold ${thr})? The board compiles it and restarts its engine (~40 s).`, { ok: "Load" })) return;
   api("wake_word", { keyword: b.dataset.k, threshold: thr });
 };
 // radar: linear array -> 0..180 deg, 90 up; drawn mirrored (0 on the screen's left) - matches what a person
@@ -637,12 +641,13 @@ $("#vb-presets").onclick = async (e) => {
 const RC = { x: 160, y: 158, r: 140 };
 const rpt = (deg, r) => [RC.x - r * Math.cos(deg * Math.PI / 180), RC.y - r * Math.sin(deg * Math.PI / 180)];
 function radarBase() {
-  let h = "";
+  const [ax, ay] = rpt(0, RC.r), [bx, by] = rpt(180, RC.r);   // voicefront: one plain half disc, no beams
+  let h = `<path id="radar-half" d="M${RC.x},${RC.y} L${ax},${ay} A${RC.r},${RC.r} 0 0 1 ${bx},${by} Z" fill="#1a2733" stroke="#323743" style="display:none"/>`;
   const sectors = [[0, 60], [60, 120], [120, 180]];      // mic4 beams 0..2 (assumed equal sectors)
   sectors.forEach(([a, b], i) => {
     const [x1, y1] = rpt(a, RC.r), [x2, y2] = rpt(b, RC.r), [lx, ly] = rpt((a + b) / 2, RC.r * 0.62);
-    h += `<path id="beam${i}" d="M${RC.x},${RC.y} L${x1},${y1} A${RC.r},${RC.r} 0 0 1 ${x2},${y2} Z" fill="#1a2733" stroke="#323743"/>` +
-         `<text x="${lx}" y="${ly}" fill="#5d6576" font-size="13" text-anchor="middle">beam ${i}</text>`;
+    h += `<g class="beam-sector"><path id="beam${i}" d="M${RC.x},${RC.y} L${x1},${y1} A${RC.r},${RC.r} 0 0 1 ${x2},${y2} Z" fill="#1a2733" stroke="#323743"/>` +
+         `<text x="${lx}" y="${ly}" fill="#5d6576" font-size="13" text-anchor="middle">beam ${i}</text></g>`;
   });
   for (const d of [0, 45, 90, 135, 180]) {
     const [x, y] = rpt(d, RC.r + 10);
@@ -654,19 +659,41 @@ $("#radar").innerHTML = radarBase();
 function renderVoiceBoard() {
   const vb = S.voice_board; if (!vb) return;
   const conf = vb.conf || {}, now = S.now || Date.now() / 1000;
+  const vf = vb.kind === "voicefront", live = vb.live || {}, lst = live.status || {};
+  $("#vb-thr-box").style.display = vf ? "none" : "";
+  $("#radar-half").style.display = vf ? "" : "none";
+  document.querySelectorAll(".beam-sector").forEach((g) => { g.style.display = vf ? "none" : ""; });
   setHTML("#vb-presets", (vb.presets || []).map((p) =>
     `<button data-k="${esc(p.keyword)}" class="${p.keyword === conf.keyword ? "on" : ""}" ${vb.job && vb.job.busy ? "disabled" : ""}>${esc(p.label)}</button>`).join(""));
   if (vbThr == null) document.querySelectorAll("#vb-thr button").forEach((x) => x.classList.toggle("on", +x.dataset.t === conf.threshold));
   $("#vb-job").textContent = vb.job ? vb.job.message || "" : "";
   $("#vb-job").style.color = vb.job && vb.job.busy ? "var(--warn)" : /failed/.test((vb.job || {}).message || "") ? "var(--bad)" : "";
-  setHTML("#vb-info", [
-    ["board", !vb.running ? "driver not running" : vb.alive ? "alive" : vb.port_open ? "port open, silent" : "not connected"],
+  const board = !vb.running ? "driver not running" : vb.alive ? "alive" : vb.port_open ? "port open, silent" : "not connected";
+  setHTML("#vb-info", (vf ? [
+    ["board", board],
+    ["wake words", esc((lst.keywords || [conf.keyword || "?"]).join(" · "))],
+    ["listening", live.speech && now - (live.speech_t || 0) < 30 ? "voice" : "quiet"],
+    ["beam", lst.mode ? `${lst.mode} · ${live.beam ?? "?"}°` : "—"],
+    ["board CPU", lst.cpu != null ? `${Math.round(lst.cpu)} % of one core` : "—"],
+    ["wakes", `${vb.wake_count}`],
+    ["firmware", esc(vb.firmware || "—")],
+  ] : [
+    ["board", board],
     ["loaded", `${esc(conf.keyword || "?")} @ ${conf.threshold || "?"}`],
     ["wakes", `${vb.wake_count}`],
     ["firmware", esc((vb.firmware || "—").split(";")[0])],
-  ].map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join(""));
+  ]).map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join(""));
   const wakes = vb.wakes || [];
   let dyn = "";
+  if (vf && live.beam != null) {   // where the beam points (dashed)
+    const [x, y] = rpt(live.beam, RC.r);
+    dyn += `<line x1="${RC.x}" y1="${RC.y}" x2="${x}" y2="${y}" stroke="#959cab" stroke-width="2" stroke-dasharray="6 6"/>`;
+  }
+  if (vf && live.doa && live.doa.angle != null && now - live.doa.t < 2.5) {   // someone is speaking from there
+    const [x, y] = rpt(live.doa.angle, RC.r - 4);
+    dyn += `<line x1="${RC.x}" y1="${RC.y}" x2="${x}" y2="${y}" stroke="#ffb347" stroke-width="4" stroke-linecap="round"/>` +
+           `<circle cx="${x}" cy="${y}" r="7" fill="#ffb347"/>`;
+  }
   wakes.slice().reverse().forEach((w, i, arr) => {
     if (w.angle == null) return;
     const age = now - w.t, last = i === arr.length - 1;
@@ -683,12 +710,17 @@ function renderVoiceBoard() {
   for (let i = 0; i < 3; i++) { const e = $(`#beam${i}`); if (e) e.setAttribute("fill", lw && lw.beam === i && now - lw.t < 15 ? "#134a66" : "#1a2733"); }
   if (lw) {
     const ago = Math.max(0, Math.round(now - lw.t));
-    $("#wake-last").textContent = `${lw.keyword} · ${lw.angle ?? "?"}° · beam ${lw.beam} · score ${lw.score ?? "?"} · ${ago < 60 ? ago + " s" : Math.round(ago / 60) + " min"} ago`;
+    const when = ago < 60 ? ago + " s" : Math.round(ago / 60) + " min";
+    $("#wake-last").textContent = vf ? `${lw.keyword} · ${lw.angle ?? "?"}° · confidence ${lw.score ?? "?"} · ${when} ago` :
+      `${lw.keyword} · ${lw.angle ?? "?"}° · beam ${lw.beam} · score ${lw.score ?? "?"} · ${when} ago`;
     $("#wake-last").className = now - lw.t < 15 ? "" : "muted";
   }
   const hhmmss = (t) => new Date(t * 1000).toTimeString().slice(0, 8);
-  setHTML("#wake-list", wakes.length ? `<table><tr><th>time</th><th>wake word</th><th>angle</th><th>beam</th><th>score</th></tr>` +
-    wakes.map((w) => `<tr><td>${hhmmss(w.t)}</td><td>${esc(w.keyword)}</td><td>${w.angle ?? "—"}°</td><td>${w.beam}</td><td>${w.score ?? "—"}</td></tr>`).join("") + "</table>" : "");
+  setHTML("#wake-list", !wakes.length ? "" : vf ?
+    `<table><tr><th>time</th><th>wake word</th><th>angle</th><th>confidence</th></tr>` +
+    wakes.map((w) => `<tr><td>${hhmmss(w.t)}</td><td>${esc(w.keyword)}</td><td>${w.angle ?? "—"}°</td><td>${w.score ?? "—"}</td></tr>`).join("") + "</table>" :
+    `<table><tr><th>time</th><th>wake word</th><th>angle</th><th>beam</th><th>score</th></tr>` +
+    wakes.map((w) => `<tr><td>${hhmmss(w.t)}</td><td>${esc(w.keyword)}</td><td>${w.angle ?? "—"}°</td><td>${w.beam}</td><td>${w.score ?? "—"}</td></tr>`).join("") + "</table>");
 }
 
 // ---- Unitree remote
