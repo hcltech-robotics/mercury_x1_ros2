@@ -591,10 +591,13 @@ function renderSys(y) {
 // Jetson power mode, rail power, clock limits, fan (sysstats.power)
 function renderPower(w) {
   if (!w) return;
-  const W = w.watts || {}, mhz = (lo, hi) => lo == null ? "—" : lo === hi ? `${hi} MHz (pinned)` : `${lo}–${hi} MHz`;
+  const W = w.watts || {}, V = w.volts || {}, A = w.amps || {}, mhz = (lo, hi) => lo == null ? "—" : lo === hi ? `${hi} MHz (pinned)` : `${lo}–${hi} MHz`;
   const rows = [
     ["power mode", `<b>${w.mode || "?"}</b>${w.clocks_pinned ? " · jetson_clocks on" : " · jetson_clocks off"}`],
     ["power", W.VDD_IN != null ? `<b>${W.VDD_IN.toFixed(1)} W</b> module · CPU+GPU+CV ${(W.VDD_CPU_GPU_CV ?? 0).toFixed(1)} W · SoC ${(W.VDD_SOC ?? 0).toFixed(1)} W` : "—"],
+    // module input rail (INA3221 VDD_IN): nominal 5 V from the carrier; a sag = the robot's 24->12 V converter folding
+    ["input", V.VDD_IN != null ? `<b style="color:${V.VDD_IN < 4.75 ? "var(--bad)" : V.VDD_IN < 4.9 ? "var(--warn)" : "inherit"}">${V.VDD_IN.toFixed(2)} V</b> · ${(A.VDD_IN ?? 0).toFixed(2)} A` +
+        (w.vin_min != null ? ` · min ${w.vin_min.toFixed(2)} V` : "") : "—"],
     ["CPU clock", mhz(w.cpu_mhz_min, w.cpu_mhz_max)],
     ["GPU clock", `${mhz(w.gpu_mhz_min, w.gpu_mhz_max)}${w.gpu_mhz_top && w.gpu_mhz_max !== w.gpu_mhz_top ? ` (chip max ${w.gpu_mhz_top})` : ""}`],
     ["fan", w.fan_pct != null ? `${w.fan_pct} %${w.fan_rpm != null ? ` · ${w.fan_rpm} rpm` : ""}` : "—"]];

@@ -76,6 +76,7 @@ class SysStats:
         self.modes = _power_modes()
         ina = _hwmon("ina3221")
         self.rails = {}                       # label -> (mV path, mA path)
+        self.vin_min = None
         if ina:
             for lbl in glob.glob(os.path.join(ina, "in*_label")):
                 k = lbl[len(os.path.join(ina, "in")):-len("_label")]
@@ -91,11 +92,19 @@ class SysStats:
         st = _read(NVPMODEL_STATUS) or ""
         m = re.search(r"pmode:(\d+)", st)
         mode_id = int(m.group(1)) if m else None
-        watts = {}
+        watts, volts, amps = {}, {}, {}
         for label, (mv, ma) in self.rails.items():
             v, i = _int(mv), _int(ma)
             if label and v is not None and i is not None and "sum" not in label:
                 watts[label] = round(v * i / 1e6, 2)
+                volts[label] = round(v / 1000, 3)
+                amps[label] = round(i / 1000, 2)
+        # module input (VDD_IN = the carrier's 5 V): its lowest reading since the page started. The robot's 24 V ->
+        # 12 V converter for the Jetson carrier (RT7272B, 3 A) folds under the arms' switching / a MAXN start-up
+        # step and resets the module; a sag here is the early sign.
+        vin = volts.get("VDD_IN")
+        if vin is not None and (self.vin_min is None or vin < self.vin_min):
+            self.vin_min = vin
         cpu_min = _int("/sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq")
         cpu_max = _int("/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq")
         gpu_min, gpu_max = _int(os.path.join(GPU_DEVFREQ, "min_freq")), _int(os.path.join(GPU_DEVFREQ, "max_freq"))
@@ -104,6 +113,7 @@ class SysStats:
         return {
             "mode": self.modes.get(mode_id, f"mode {mode_id}") if mode_id is not None else None,
             "watts": watts,                                     # VDD_IN = whole module
+            "volts": volts, "amps": amps, "vin_min": self.vin_min,
             "cpu_mhz_min": cpu_min // 1000 if cpu_min else None, "cpu_mhz_max": cpu_max // 1000 if cpu_max else None,
             "gpu_mhz_min": gpu_min // 1_000_000 if gpu_min else None,
             "gpu_mhz_max": gpu_max // 1_000_000 if gpu_max else None,
