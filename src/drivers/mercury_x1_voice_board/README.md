@@ -4,8 +4,9 @@ Driver for the Mercury X1 head voice board: an iFlytek AIUI far-field mic-array 
 firmware "XFM-DP-V0.0.18", USB `2207:0001`). The board runs wake word, direction of arrival, beamforming and
 noise suppression itself and gives the Orin:
 
-- **processed 16 kHz mono audio** as a plain USB microphone — ALSA `plughw:CARD=XFMDPV0018` (used by the
-  web voice chat; not touched by this node);
+- **6-channel 16 kHz USB audio** as a plain USB sound card (4 raw mics, speaker echo reference, the board's processed
+  beam; ALSA names `mx1_array` / `mx1_mics` / `mx1_beam`, set up by `scripts/install_voice_board_audio.sh` from
+  `board/` + `alsa/`; see the main README "Multi-channel USB audio"). Not touched by this node;
 - a **control UART** (WCH CH343 `1a86:55d4`, serial `5A37020735`, `/dev/ttyACM3`) with iFlytek's AIUI frame
   protocol — this node.
 

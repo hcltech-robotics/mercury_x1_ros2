@@ -193,7 +193,7 @@ footprint makes the costmaps re-inflate). Arms hanging: outline. (Different job 
 ### Voice chat (head display → Chat tab)
 Tap the microphone, then just speak. Speech runs on the robot; only text goes to Qwen on 11.51.
 
-- **Input:** `arecord` on the XFM-DP mic array (16 kHz, beamformed on the board) streams to `mercury-speech`
+- **Input:** `arecord` on the XFM-DP mic array (`mx1_beam` = the board's processed beam, 16 kHz) streams to `mercury-speech`
   (`server/robot_speech`, 127.0.0.1:8097, own venv `~/mercury-speech` with the Jetson onnxruntime-gpu wheel;
   `server/robot_speech/setup.sh` installs it).
 - **ASR:** Silero VAD finds phrases; NVIDIA Parakeet TDT 0.6B v2 transcribes them on the GPU (fp16 made on a PC with
@@ -222,13 +222,31 @@ the keyword as state IDs). The on-board keyword compiler maps English text to Ch
 "hello hiwonder" firmware is this same image; an English resource is a custom order from iFlytek). So: 小微小微 on
 the board for wake + direction; an English detector would have to run on the Orin.
 
-**Raw mics:** the board's USB audio is a configfs UAC1 gadget (`/etc/rc.local` on the board); `p_chmask` can be
-raised so the Orin receives the AC107 channels directly (slots 1-4 = the 4 mics, 35 mm pitch; 5-8 are delayed
-copies). UAC1 in that kernel caps packets at 200 B/ms, so at most 6 channels at 16 kHz (8 ch gave zero-filled
-samples); use `0x0f`. Switching the function to UAC2 made the gadget fail to bind and took ADB down with it (a board
-power cycle restores the stock config), so any board-side change must verify the bind and revert by itself.
-Host-side DOA / beamforming / English wake word on those 4 channels is the planned replacement for the board's
-closed stack.
+**Multi-channel USB audio (since 2026-11-04):** the board's USB audio is a configfs UAC1 gadget; with
+`p_chmask 0x3f` it sends **6 channels at 16 kHz** as a plain USB sound card, read with stock ALSA on the Orin:
+
+| ch | content | ALSA name on the Orin |
+|---|---|---|
+| 0-3 | the 4 mics, raw (AC107 slots 0-3, linear array, 35 mm pitch) | `mx1_mics` (0-3 + 4) / `mx1_array` (all 6) |
+| 4 | speaker echo reference (AC107 slot 6 = an analog loopback of the robot's speaker) | |
+| 5 | the board's processed beam (its AEC/beamforming; what the mono stream used to be) | `mx1_beam` (voice chat) |
+
+Board side, stock ALSA plugins only (`src/drivers/mercury_x1_voice_board/board/`): `asound.conf` shares the AC107
+capture via dsnoop (the board app and `rawmic.sh`) and feeds one 6-channel dmix on the gadget; `rawmic.sh` is an
+`arecord | aplay` loop; `rc.local` sets the channel mask. On the Orin `/etc/alsa/conf.d/60-mercury-voice-board.conf`
+defines the three names over a dsnoop, so several programs can capture at once. Install / undo (once, on the robot;
+uses the board's ADB only to copy the files, keeps the stock files as `*.stock` on the board):
+
+```bash
+scripts/install_voice_board_audio.sh            # or: ... revert
+```
+
+Limits found on the way: the kernel's `f_uac1` uses a fixed 200-byte packet, so 8 channels (256 B/ms) split frames
+across packets (channels shifted by 4 in every other packet); 6 channels (192 B/ms) fit. The kernel's `f_uac2` is
+the Linux 4.9 driver that always needs an iso IN *and* OUT endpoint while the board's UDC has one iso endpoint, which
+is why an earlier UAC2 attempt failed to bind and took ADB down until a power cycle. AC107 slots 4, 5, 7 carry only
+noise. Host-side DOA / beamforming / echo cancellation / English wake word on channels 0-4 is the planned
+replacement for the board's closed stack; the board's own wake word + angle keep working meanwhile.
 
 ## Packages and interfaces
 

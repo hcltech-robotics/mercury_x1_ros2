@@ -1,7 +1,7 @@
 """Hands-free voice chat for the head display: mic -> speech (robot) -> Qwen (11.51) -> speech -> speaker.
 
 Runs on web_server's asyncio loop (all I/O, no threads):
-  * `arecord` streams the XFM-DP mic array (16 kHz mono, beamformed on the board) to the robot's own speech
+  * `arecord` streams the XFM-DP mic array (VOICE_MIC, `mx1_beam` = the board's beam, 16 kHz mono) to the robot's own speech
     service (`mercury-speech`, server/robot_speech, 127.0.0.1:8097, VOICE_SPEECH_URL): /listen finds the
     phrases (Silero VAD) and transcribes them (Parakeet, CPU). No audio leaves the robot; only text goes to Qwen.
   * Each phrase goes to Qwen (the pennyroyal proxy, streamed, thinking off); the reply is cut into
