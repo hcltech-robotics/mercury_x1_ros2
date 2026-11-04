@@ -96,3 +96,18 @@ TEST(BaseProtocol, CommandFrames)
   EXPECT_EQ(l[5], 10);
   EXPECT_EQ(base::ledFrame(0, 0, 0)[2], 0);
 }
+
+TEST(ArmProtocol, GripperFramesLikePymycobot)
+{
+  // pymycobot ForceGripper: _mesg(0xD9, 14, [12]) -> data 0e 00 0c ; _mesg(0xD8, 14, [11], [100]) -> 0e 00 0b 00 64
+  EXPECT_EQ(arm::encodeGripperGet(14, arm::gripper::kGetAngle), hex("0e 00 0c"));
+  EXPECT_EQ(arm::encodeGripperSet(14, arm::gripper::kSetAngle, 100), hex("0e 00 0b 00 64"));
+  const auto f = arm::encode(arm::op::kGetToolGripper, arm::encodeGripperGet(14, arm::gripper::kGetStatus));
+  EXPECT_EQ(std::vector<uint8_t>(f.begin(), f.begin() + 7), hex("fe fe 06 d9 0e 00 0e"));
+  // replies: [id] [int16 register] [value]
+  EXPECT_EQ(arm::decodeGripperValue(hex("0e 00 0c 00 37"), arm::gripper::kGetAngle), 55);
+  EXPECT_EQ(arm::decodeGripperValue(hex("0e 00 0c 37"), arm::gripper::kGetAngle), 55);
+  EXPECT_EQ(arm::decodeGripperValue(hex("01"), arm::gripper::kGetStatus), 1);
+  EXPECT_FALSE(arm::decodeGripperValue(hex("0e 00 0e 00 01"), arm::gripper::kGetAngle).has_value());
+  EXPECT_FALSE(arm::decodeGripperValue(hex("0e 00"), arm::gripper::kGetAngle).has_value());
+}

@@ -308,6 +308,9 @@
       <div class="lbl" style="margin:6px 0 6px">Voice</div>
       <div id="v-voices"></div>
       <button id="v-test" class="primary" style="margin-top:12px;width:100%">Test voice</button>
+      <div class="lbl" style="margin:14px 0 2px">Voice actions</div>
+      <div class="switch warn" id="sw-vdrive"><span>Drive by voice <span class="muted small">("take me to the kitchen")</span></span><span class="track"></span></div>
+      <div class="switch warn" id="sw-vgest"><span>Gestures <span class="muted small">(waist, head, arms)</span></span><span class="track"></span></div>
     </div>
   </div>
 </div>
@@ -599,6 +602,14 @@ $("#v-voices").onclick = (e) => {
   const b = e.target.closest("button[data-v]"); if (!b) return;
   document.querySelectorAll("#v-voices button").forEach((x) => x.classList.toggle("on", x === b)); vSet({ voice: b.dataset.v }); };
 $("#v-test").onclick = () => api("voice", { op: "test" });
+const setVDrive = bindSwitch($("#sw-vdrive"), async (on) => {
+  if (on && !await ask("Let people send the robot to named places by voice? It drives with Nav2; keep the way clear and the e-stop at hand.", { ok: "Allow", danger: true })) return false;
+  api("voice", { op: "settings", drive: on });
+});
+const setVGest = bindSwitch($("#sw-vgest"), async (on) => {
+  if (on && !await ask("Let the robot move its waist, head and arms for gestures while talking? Keep clear of the arms.", { ok: "Allow", danger: true })) return false;
+  api("voice", { op: "settings", gestures: on });
+});
 function renderVoice() {
   const v = S.voice;
   if (!v) return;
@@ -616,8 +627,9 @@ function renderVoice() {
     document.querySelectorAll("#v-voices button").forEach((x) => x.classList.toggle("on", x.dataset.v === set.voice));
   }
   $("#v-test").disabled = st === "thinking" || st === "speaking";
+  setVDrive(!!set.drive); setVGest(!!set.gestures);
   const s = v.stats || {};
-  $("#v-stats").textContent = s.stt_ms != null ? `heard in ${s.stt_ms} ms · first word ${s.llm_first_s ?? "?"} s · voice ${s.tts_ms ?? "?"} ms${s.tts_on ? ` (${s.tts_on})` : ""}` : "";
+  $("#v-stats").textContent = s.stt_ms != null ? `heard in ${s.stt_ms} ms · first word ${s.llm_first_s ?? "?"} s · voice ${s.tts_ms ?? "?"} ms${s.tts_on ? ` (${s.tts_on})` : ""}${s.facts ? ` · ${s.facts} facts` : ""}${s.last_tool ? ` · tool ${s.last_tool}` : ""}` : "";
   const h = (v.transcript || []).map((m) => `<div class="msg ${m.role}">${esc(m.text)}<span class="t">${m.t}</span></div>`).join("");
   const box = $("#convo");
   if (h && h !== box._h) { box.innerHTML = h; box._h = h; box.scrollTop = box.scrollHeight; }

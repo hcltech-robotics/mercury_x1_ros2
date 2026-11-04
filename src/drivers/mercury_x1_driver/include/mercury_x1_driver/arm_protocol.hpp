@@ -54,6 +54,9 @@ constexpr uint8_t kReleaseAllServos = 0x13;
 constexpr uint8_t kFocusAllServos = 0x18;
 constexpr uint8_t kDragTeachSave = 0x70;    // start recording -> arm can be dragged
 constexpr uint8_t kDragTeachPause = 0x72;   // stop recording -> joints hold again
+// end-effector tool port: Elephant "pro"/force gripper (F100), pymycobot end_control.ForceGripper
+constexpr uint8_t kSetToolGripper = 0xD8;   // gripper id, int16 register, int16 value
+constexpr uint8_t kGetToolGripper = 0xD9;   // gripper id, int16 register -> id, int16 register, value
 }  // namespace op
 
 using Bytes = std::vector<uint8_t>;
@@ -89,6 +92,21 @@ private:
   size_t crc_errors_{0};
 };
 
+// F100 gripper registers (pymycobot common.ProGripper); the angle is the opening in percent (0 closed .. 100 open)
+namespace gripper
+{
+constexpr int kDefaultId = 14;
+constexpr int kSetAngle = 11, kGetAngle = 12, kSetCalibration = 13, kGetStatus = 14;
+constexpr int kSetTorque = 27, kGetTorque = 28, kSetSpeed = 32, kGetSpeed = 33;
+constexpr int kPause = 37, kResume = 38, kStop = 39;
+}  // namespace gripper
+
+Bytes encodeGripperGet(int id, int reg);              // payload of kGetToolGripper
+Bytes encodeGripperSet(int id, int reg, int value);   // payload of kSetToolGripper
+// value from a kGetToolGripper reply payload ([id] [int16 reg] [value: int16 or 1 byte], or a bare byte);
+// nullopt if it answers another register
+std::optional<int> decodeGripperValue(const Bytes & payload, int reg);
+
 // Request/response over one arm port. Not thread-safe: use from a single owner thread.
 class ArmLink
 {
@@ -114,6 +132,10 @@ public:
   // drag_teach: kDragTeachSave / kDragTeachPause; otherwise release / focus all servos.
   // Returns whether the MCU answered (both are fire-and-forget in pymycobot).
   bool freedrive(bool on, bool drag_teach);
+  // F100 gripper on the tool port. get: nullopt = no answer (no gripper there); set: whether it answered
+  // (pymycobot sends sets without waiting for a reply, so false is not necessarily a failure)
+  std::optional<int> gripperGet(int reg, int id = gripper::kDefaultId);
+  bool gripperSet(int reg, int value, int id = gripper::kDefaultId);
 
   double lastRttMs() const {return last_rtt_ms_;}
   size_t timeouts() const {return timeouts_;}

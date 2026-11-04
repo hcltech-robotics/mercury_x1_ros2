@@ -9,6 +9,10 @@
 //            upper_body/cartesian_command (mercury_x1_msgs/CartesianCommand)
 // Services   left_arm/power, right_arm/power (std_srvs/SetBool)
 //            left_arm/stop, right_arm/stop, upper_body/stop (std_srvs/Trigger)
+// Grippers   {left,right}_gripper/probe (std_srvs/Trigger): read-only check for an Elephant F100 on that tool port.
+//            For the sides in gripper_sides: {side}_gripper/gripper_cmd (control_msgs/GripperCommand; position =
+//            opening 0..100 %, max_effort > 0 sets the F100 torque 1..100) and {side}_gripper/state
+//            (sensor_msgs/JointState "gripper_L"/"gripper_R", position = opening %, 2 Hz).
 // Actions    {left_arm,right_arm,waist}_controller/follow_joint_trajectory (control_msgs/FollowJointTrajectory)
 //            for MoveIt: the planned path is reduced to its corners (Douglas-Peucker in joint space: the straight
 //            joint-space moves between them stay within trajectory_path_tolerance_deg of the planned, collision-
@@ -36,6 +40,7 @@
 #include <thread>
 
 #include "control_msgs/action/follow_joint_trajectory.hpp"
+#include "control_msgs/action/gripper_command.hpp"
 #include "mercury_x1_driver/arm_protocol.hpp"
 #include "mercury_x1_msgs/msg/arm_state.hpp"
 #include "mercury_x1_msgs/msg/cartesian_command.hpp"
@@ -427,6 +432,8 @@ private:
 
 using FJT = control_msgs::action::FollowJointTrajectory;
 using FJTGoal = rclcpp_action::ServerGoalHandle<FJT>;
+using GC = control_msgs::action::GripperCommand;
+using GCGoal = rclcpp_action::ServerGoalHandle<GC>;
 
 // one FollowJointTrajectory server: an arm (7 joints) or the waist (firmware "extra" joint on the right MCU)
 struct TrajController
@@ -514,6 +521,43 @@ public:
           srvFreedrive({"left", "right"}, req->data, *res);
         }, rmw_qos_profile_services_default, cb_));
     timer_ = create_wall_timer(std::chrono::duration<double>(1.0 / rate), [this] {publish();});
+
+    // F100 grippers (tool port, pymycobot ForceGripper). The probe only reads registers.
+    gripper_id_ = static_cast<int>(declare_parameter("gripper_id", 14));
+    for (auto & [side, _] : workers_) {
+      const std::string s = side;
+      srv_stop_.push_back(create_service<std_srvs::srv::Trigger>(s + "_gripper/probe",
+          [this, s](std_srvs::srv::Trigger::Request::ConstSharedPtr, std_srvs::srv::Trigger::Response::SharedPtr res) {
+            srvGripperProbe(s, *res);
+          }, rmw_qos_profile_services_default, cb_));
+    }
+    for (const auto & s : declare_parameter("gripper_sides", std::vector<std::string>{})) {
+      if (s.empty()) {continue;}
+      if (!workers_.count(s)) {
+        RCLCPP_WARN(get_logger(), "gripper_sides: unknown side '%s'", s.c_str());
+        continue;
+      }
+      pub_gripper_[s] = create_publisher<sensor_msgs::msg::JointState>(s + "_gripper/state", 10);
+      gripper_servers_[s] = rclcpp_action::create_server<GC>(this, s + "_gripper/gripper_cmd",
+          [this, s](const rclcpp_action::GoalUUID &, std::shared_ptr<const GC::Goal> g) {
+            const auto snap = workers_[s]->snapshot();
+            if (!snap.connected || g->command.position < 0 || g->command.position > 100) {
+              RCLCPP_ERROR(get_logger(), "%s gripper: goal rejected (%s)", s.c_str(),
+                  snap.connected ? "position must be 0..100 (% open)" : "arm not connected");
+              return rclcpp_action::GoalResponse::REJECT;
+            }
+            return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+          },
+          [this, s](std::shared_ptr<GCGoal>) {
+            workers_[s]->call<bool>([this](arm::ArmLink & l) {return l.gripperSet(arm::gripper::kStop, 0, gripper_id_);},
+                1s);
+            return rclcpp_action::CancelResponse::ACCEPT;
+          },
+          [this, s](std::shared_ptr<GCGoal> gh) {std::thread([this, s, gh] {executeGripper(s, gh);}).detach();},
+          rcl_action_server_get_default_options(), cb_);
+      RCLCPP_INFO(get_logger(), "%s F100 gripper: %s_gripper/gripper_cmd", s.c_str(), s.c_str());
+    }
+    if (!pub_gripper_.empty()) {gripper_timer_ = create_wall_timer(500ms, [this] {publishGrippers();}, cb_);}
 
     // MoveIt trajectory execution (see the header). The firmware speed scale is not documented:
     // speed_deg_s_at_100 = joint speed at firmware speed 100 (too high -> moves slower than planned, safe side).
@@ -633,6 +677,90 @@ private:
       res.success = res.success && ok.value_or(false);
       res.message += s + (ok.value_or(false) ? ": stopped " : ": no ack ");
     }
+  }
+
+  // ---- F100 grippers -----------------------------------------------------------------------------------
+  std::optional<int> gripperRead(const std::string & side, int reg)
+  {
+    auto r = workers_[side]->call<std::optional<int>>(
+        [this, reg](arm::ArmLink & l) {return l.gripperGet(reg, gripper_id_);}, 1s);
+    return r ? *r : std::nullopt;
+  }
+
+  void srvGripperProbe(const std::string & side, std_srvs::srv::Trigger::Response & res)
+  {
+    const auto status = gripperRead(side, arm::gripper::kGetStatus);
+    const auto opening = gripperRead(side, arm::gripper::kGetAngle);
+    const auto speed = gripperRead(side, arm::gripper::kGetSpeed);
+    const auto torque = gripperRead(side, arm::gripper::kGetTorque);
+    auto txt = [](const std::optional<int> & v) {return v ? std::to_string(*v) : std::string("-");};
+    res.success = status || opening || speed || torque;
+    res.message = res.success ?
+        "F100 answers: status " + txt(status) + ", opening " + txt(opening) + " %, speed " + txt(speed) +
+        ", torque " + txt(torque) : "no answer on the " + side + " tool port (no F100 gripper, or unpowered)";
+  }
+
+  void publishGrippers()
+  {
+    for (auto & [side, pub] : pub_gripper_) {
+      int & miss = gripper_misses_[side];
+      if (miss >= 5 && (++gripper_skip_[side] % 10) != 0) {continue;}   // silent gripper: retry every 5 s
+      const auto v = gripperRead(side, arm::gripper::kGetAngle);
+      miss = v ? 0 : miss + 1;
+      if (!v) {continue;}
+      sensor_msgs::msg::JointState js;
+      js.header.stamp = now();
+      js.name = {side == "left" ? "gripper_L" : "gripper_R"};
+      js.position = {static_cast<double>(*v)};
+      pub->publish(js);
+    }
+  }
+
+  void executeGripper(const std::string & side, std::shared_ptr<GCGoal> gh)
+  {
+    const auto goal = gh->get_goal();
+    const int target = static_cast<int>(std::lround(goal->command.position));
+    auto result = std::make_shared<GC::Result>();
+    auto & w = *workers_[side];
+    if (goal->command.max_effort > 0) {
+      const int torque = std::clamp(static_cast<int>(std::lround(goal->command.max_effort)), 1, 100);
+      w.call<bool>([this, torque](arm::ArmLink & l) {return l.gripperSet(arm::gripper::kSetTorque, torque, gripper_id_);},
+          1s);
+    }
+    w.call<bool>([this, target](arm::ArmLink & l) {return l.gripperSet(arm::gripper::kSetAngle, target, gripper_id_);},
+        1s);
+    // done when it reaches the target, or stops short (stalled on an object), or after 6 s
+    int last = -1000, still = 0;
+    const auto t0 = std::chrono::steady_clock::now();
+    while (rclcpp::ok() && std::chrono::steady_clock::now() - t0 < 6s) {
+      if (gh->is_canceling()) {
+        result->position = last;
+        gh->canceled(result);
+        return;
+      }
+      std::this_thread::sleep_for(150ms);
+      const auto v = gripperRead(side, arm::gripper::kGetAngle);
+      if (!v) {continue;}
+      auto fb = std::make_shared<GC::Feedback>();
+      fb->position = *v;
+      gh->publish_feedback(fb);
+      if (std::abs(*v - target) <= 2) {
+        result->position = *v;
+        result->reached_goal = true;
+        gh->succeed(result);
+        return;
+      }
+      still = std::abs(*v - last) <= 1 ? still + 1 : 0;
+      last = *v;
+      if (still >= 4) {     // ~0.6 s without moving short of the target: holding something
+        result->position = *v;
+        result->stalled = true;
+        gh->succeed(result);
+        return;
+      }
+    }
+    result->position = last;
+    gh->abort(result);
   }
 
   // ---- FollowJointTrajectory --------------------------------------------------------------------------
@@ -884,6 +1012,12 @@ private:
   rclcpp::CallbackGroup::SharedPtr cb_;
   std::vector<rclcpp::ServiceBase::SharedPtr> srv_power_, srv_stop_;
   rclcpp::TimerBase::SharedPtr timer_;
+  // F100 grippers
+  int gripper_id_{14};
+  std::map<std::string, rclcpp_action::Server<GC>::SharedPtr> gripper_servers_;
+  std::map<std::string, rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr> pub_gripper_;
+  std::map<std::string, int> gripper_misses_, gripper_skip_;
+  rclcpp::TimerBase::SharedPtr gripper_timer_;
 };
 
 int main(int argc, char ** argv)

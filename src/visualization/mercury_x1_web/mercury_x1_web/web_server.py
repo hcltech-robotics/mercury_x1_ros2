@@ -45,7 +45,9 @@ from sensor_msgs.msg import BatteryState, JointState, PointCloud2, PointField
 from tf2_msgs.msg import TFMessage
 
 from .arm_motion import ArmMotion
+from .gestures import Gestures
 from .pose_chain import PoseChain
+from . import places as placelib
 from . import slam3d
 from .gpuprocs import GpuProcs
 from .sysstats import SysStats
@@ -84,6 +86,9 @@ BODY_JOINTS = ("body", "head", "eye")     # waist, neck, jaw: positions for the 
 # applies; the stock demo is Mandarin-only (English only via its built-in lexicon, voice_board english_lexicon.txt).
 # The threshold buttons only matter for the stock demo.
 VOICE_BOARD_CONF = os.path.expanduser("~/.config/mercury_x1/voice_board.json")
+# wake direction -> head yaw: yaw = sign * (angle - front). Front 90 deg = broadside (checked: a speaker straight in
+# front reads ~91 deg). The SIGN is not calibrated yet (needs a voice from one side); +1 = 0 deg is the robot's left.
+VB_FRONT_DEG, VB_ANGLE_SIGN = 90.0, 1.0
 WAKE_PRESETS = [
     {"keyword": "hey mercury", "label": "hey mercury", "fw": "voicefront"},
     {"keyword": "hey mercury;hello mercury;ok mercury", "label": "hey / hello / ok mercury", "fw": "voicefront"},
@@ -180,6 +185,7 @@ class WebNode(Node):
         self.base: BaseState | None = None
         self.arms: dict[str, ArmState] = {}
         self.waypoints: list[dict] = []
+        self.places: list[dict] = []          # named places of the current map (places.py)
         self.nav = {"state": "idle", "goal": None, "current": None, "loop": False, "message": ""}
         self.wp_handle = None
         self.goal_handle = None
@@ -190,6 +196,8 @@ class WebNode(Node):
         self.waypoints_changed = None         # set by App: persist + republish
         self.remote: dict | None = None       # Unitree BLE remote (mercury_x1_teleop/unitree_remote)
         self.body_joints: dict[str, float] = {}   # waist / neck / jaw [deg] from /joint_states
+        self.arm_joints: dict[str, float] = {}    # joint1_L.. [rad] from /joint_states
+        self.wake_hook = None                     # App: turn the head towards a wake word
         self.vb_state: VoiceBoardState | None = None   # head voice board link (mercury_x1_voice_board)
         self.vb_wakes: list[dict] = []                 # last wake events, newest first
         try:
@@ -526,6 +534,8 @@ class WebNode(Node):
             self.get_logger().info("E-stop released (base MCU back or arms powered)")
 
     def _on_wake(self, m: VoiceWake) -> None:
+        if self.wake_hook and not math.isnan(m.angle_deg):
+            self.wake_hook(m.angle_deg)
         self.vb_wakes = ([{"t": time.time(), "keyword": m.keyword, "angle": None if math.isnan(m.angle_deg) else
                            round(m.angle_deg, 1), "beam": m.beam,
                            "score": None if math.isnan(m.score) else (round(m.score, 2) if m.score < 1.5 else round(m.score))}]
@@ -592,6 +602,8 @@ class WebNode(Node):
         for name, pos in zip(m.name, m.position):
             if name in BODY_JOINTS and not math.isnan(pos):
                 self.body_joints[name] = round(math.degrees(pos), 1)
+            elif name.startswith("joint") and not math.isnan(pos):
+                self.arm_joints[name] = pos      # [rad], gestures read the arm joints
 
     def status(self) -> dict:
         base = self.base
@@ -615,6 +627,7 @@ class WebNode(Node):
             "map_version": self.map_version,
             "plan": self.plan,
             "waypoints": self.waypoints,
+            "places": self.places,
             "click_mode": self.click_mode,
             "last_click": self.last_click,
             "remote": self.remote,
@@ -644,7 +657,9 @@ class App:
         self.sysstats = SysStats()           # CPU / GPU load and temperatures for the status page
         self.gpuprocs = GpuProcs()           # GPU memory per process (kiosk Status → GPU processes)
         self.jetson = self.jetson_versions()
-        self.voice = VoiceChat(on_change=self._voice_changed)   # kiosk Chat tab
+        self.gestures = Gestures(node, node.arm_motion)   # body language for voice chat (switch "gestures")
+        node.wake_hook = self._on_wake_word
+        self.voice = VoiceChat(on_change=self._voice_changed, actions=self)   # kiosk Chat tab; actions = voice tools
         self.voice_version = 0
         node.waypoints_changed = self.save_waypoints
         os.makedirs(MAPS_DIR, exist_ok=True)
@@ -697,6 +712,83 @@ class App:
         with open(self.wp_file(), "w") as f:
             json.dump(self.node.waypoints, f, indent=1)
         self.node.post(self.node.publish_waypoints)
+
+    # -- named places (per map) -----------------------------------------------------------------
+    def places_file(self) -> str:
+        return os.path.join(MAPS_DIR, f"{self.map_name}.places.json")
+
+    def load_places(self) -> None:
+        self.node.places = placelib.load(self.places_file())
+
+    def place_save(self, name: str, x=None, y=None, yaw=None) -> str:
+        """save a place at (x, y, yaw) or at the robot's pose now; returns an error text or "" """
+        name = str(name).strip()
+        if not placelib.norm(name):
+            return "give the place a name"
+        if x is None:
+            pose = self.node.robot_pose()
+            if pose is None or pose["frame"] != "map":
+                return "the robot is not localized on a map"
+            x, y, yaw = pose["x"], pose["y"], pose["yaw"]
+        self.node.places = placelib.upsert(self.node.places, name, float(x), float(y), float(yaw or 0.0))
+        placelib.save(self.places_file(), self.node.places)
+        return ""
+
+    def place_delete(self, name: str) -> bool:
+        p = placelib.resolve(name, self.node.places)
+        if p is None:
+            return False
+        self.node.places = [q for q in self.node.places if q is not p]
+        placelib.save(self.places_file(), self.node.places)
+        return True
+
+    # -- actions for voice chat (tools the model may call; voice.py checks the switches) ---------
+    def voice_places(self) -> list[str]:
+        return [p["name"] for p in self.node.places]
+
+    def voice_go(self, spoken: str) -> tuple[bool, str]:
+        n = self.node
+        p = placelib.resolve(spoken, n.places)
+        if p is None:
+            known = ", ".join(self.voice_places()) or "none saved yet"
+            return False, f"no place called '{spoken}' on map '{self.map_name}' (known places: {known})"
+        if not self.sup.status()["nav"]["running"]:
+            return False, "navigation (Nav2) is not running"
+        n.post(lambda: n.go_to(p["x"], p["y"], p["yaw"]))
+        return True, f"driving to {p['name']}"
+
+    def voice_stop(self) -> str:
+        n = self.node
+        n.post(n.cancel)
+        self.gestures.stop()
+        return "stopped"
+
+    def voice_gesture_names(self) -> list[str]:
+        return self.gestures.names()
+
+    async def voice_gesture(self, name: str) -> tuple[bool, str]:
+        return self.gestures.run(name)
+
+    def voice_talking(self, on: bool) -> None:
+        if self.voice.settings.get("gestures"):
+            self.gestures.talking(on)
+
+    def _on_wake_word(self, angle_deg: float) -> None:
+        """ROS thread: someone said the wake word from angle_deg -> look that way (gestures on only)"""
+        if self.voice.settings.get("gestures"):
+            self.gestures.look_at(angle_deg, VB_FRONT_DEG, VB_ANGLE_SIGN)
+
+    def voice_status(self) -> dict:
+        n = self.node
+        pose = n.robot_pose()
+        near = None
+        if pose and pose["frame"] == "map" and n.places:
+            q = min(n.places, key=lambda p: math.hypot(p["x"] - pose["x"], p["y"] - pose["y"]))
+            d = math.hypot(q["x"] - pose["x"], q["y"] - pose["y"])
+            near = f"{q['name']} ({d:.1f} m away)"
+        return {"battery_percent": None if math.isnan(n.battery_pct) else round(n.battery_pct),
+                "navigation": n.nav.get("state"), "map": self.map_name, "nearest_place": near,
+                "time": time.strftime("%H:%M"), "date": time.strftime("%A %d %B %Y")}
 
     # -- routes --------------------------------------------------------------------------------
     async def index(self, req):
@@ -1014,6 +1106,15 @@ class App:
             n.post(n.cancel)
         elif action == "goto":
             n.post(lambda: n.go_to(body["x"], body["y"], body.get("yaw", 0.0)))
+        elif action == "place_save":    # {"name", "x"?, "y"?, "yaw"?}: default = where the robot is now
+            err = self.place_save(body.get("name", ""), body.get("x"), body.get("y"), body.get("yaw"))
+            return web.json_response({"ok": not err, "error": err, "places": n.places})
+        elif action == "place_delete":  # {"name"}
+            ok = self.place_delete(str(body.get("name", "")))
+            return web.json_response({"ok": ok, "places": n.places})
+        elif action == "place_go":      # {"name"}: Nav2 goal to the named place
+            ok, msg = self.voice_go(str(body.get("name", "")))
+            return web.json_response({"ok": ok, "error": "" if ok else msg})
         elif action == "map_delete":    # {"name"}: to ~/maps/.trash (kept TRASH_DAYS days)
             name = str(body.get("name", ""))
             slam = self.sup.status()["slam"]
@@ -1046,7 +1147,7 @@ class App:
                 await self.voice.stop_speaking()
             elif op == "clear":
                 self.voice.clear()
-            elif op == "settings":       # {"volume"?: 0..100, "voice"?, "speed"?: 0.7..1.4}
+            elif op == "settings":       # {"volume"?: 0..100, "voice"?, "speed"?: 0.7..1.4, "drive"?, "gestures"?}
                 await self.voice.update_settings(body)
             elif op == "test":
                 asyncio.create_task(self.voice.test_voice())
@@ -1144,6 +1245,7 @@ class App:
                 await loop.run_in_executor(None, lambda: self.delete_map(name))
             self.map_name = name
             self.load_waypoints()
+            self.load_places()
             self._maps_t = 0.0
             if mode == "mapping" and self.head_hold:   # the depth camera feeds the map: look straight ahead, level
                 self.level_head()
@@ -1204,6 +1306,7 @@ class App:
         app.router.add_get("/exports/{name}", self.export_file)
         threading.Thread(target=self.fetch_viewer, daemon=True).start()
         self.load_waypoints()
+        self.load_places()
 
         head = web.Application()          # head display: same API, its own page and a 1 Hz status
         head.router.add_get("/", self.head_index)

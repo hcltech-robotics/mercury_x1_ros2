@@ -250,6 +250,12 @@
           <button class="b danger" id="b-clear">Delete all</button>
         </div>
         <div id="navstate" class="muted">idle</div>
+        <h2 style="margin-top:12px">Places <span class="muted" style="text-transform:none;letter-spacing:0">· voice: "take me to the kitchen"</span></h2>
+        <table id="pltable"></table>
+        <div class="row" style="margin-top:8px">
+          <input type="text" id="pl-name" placeholder="name, e.g. kitchen" style="flex:1;min-width:0" title="saved where the robot stands now, facing its current heading">
+          <button class="b primary" id="b-plsave" title="save the robot's current pose under this name">Save robot's spot</button>
+        </div>
       </section>
       <section>
         <h2>3D view</h2>
@@ -502,6 +508,7 @@ function onStatus() {
   renderMaps(s);
   $("#wpmap").textContent = s.map_name ? `· map ${s.map_name}` : "";
   if (JSON.stringify(s.waypoints) !== JSON.stringify(WAYPOINTS) && !dragging) { WAYPOINTS = s.waypoints; renderTable(); }
+  renderPlaces(s.places || []);
   if (s.map_version !== mapVersion) { mapVersion = s.map_version; loadMap(); }
   if (s.click_mode && s.click_mode !== tool && Date.now() - toolChanged > 1500) setTool(s.click_mode, false);
   if (s.last_click && s.last_click.t !== lastClickT) {
@@ -883,6 +890,30 @@ $("#wptable").addEventListener("click", (e) => {
 $("#b-clear").onclick = async () => { if (WAYPOINTS.length && await ask(`Delete all ${WAYPOINTS.length} waypoints of this map?`, { ok: "Delete", danger: true })) { WAYPOINTS = []; pushWaypoints(); } };
 $("#b-runonce").onclick = () => api("run", { loop: false });
 $("#b-cruise").onclick = () => api("run", { loop: true });
+
+// ---------------- named places (voice "go to X"); stored per map next to the waypoints ----------------
+const escHtml = (t) => String(t).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+let placesKey = "";
+function renderPlaces(places) {
+  const key = JSON.stringify(places);
+  if (key === placesKey) return;
+  placesKey = key;
+  $("#pltable").innerHTML = places.length ? places.map((p, k) => `<tr><td>${escHtml(p.name)}</td><td>${p.x.toFixed(2)}, ${p.y.toFixed(2)}</td><td>${(p.yaw * 180 / Math.PI).toFixed(0)}°</td>
+    <td class="act"><button data-a="go" data-k="${k}" title="drive there">➜</button><button data-a="del" class="del" data-k="${k}" title="delete">✕</button></td></tr>`).join("")
+    : `<tr><td></td><td class="muted" colspan="3">Drive the robot to a spot, type a name, Save.</td></tr>`;
+  $("#pltable")._places = places;
+}
+$("#pltable").addEventListener("click", async (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  const p = ($("#pltable")._places || [])[+b.dataset.k]; if (!p) return;
+  if (b.dataset.a === "go") { const j = await api("place_go", { name: p.name }); if (j && j.ok) toast(`driving to ${p.name}`); }
+  if (b.dataset.a === "del" && await ask(`Delete the place '${p.name}'?`, { ok: "Delete", danger: true })) api("place_delete", { name: p.name });
+});
+$("#b-plsave").onclick = async () => {
+  const name = $("#pl-name").value.trim(); if (!name) { toast("type a name first"); return; }
+  const j = await api("place_save", { name });
+  if (j && j.ok) { toast(`saved '${name}'`); $("#pl-name").value = ""; }
+};
 
 // ---------------- SLAM / Nav ----------------
 // saved maps (~/maps/*.db), newest first; the status carries the list

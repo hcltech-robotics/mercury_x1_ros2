@@ -165,6 +165,40 @@ std::optional<Bytes> ArmLink::request(uint8_t cmd, const Bytes & data, std::chro
   return std::nullopt;
 }
 
+Bytes encodeGripperGet(int id, int reg)
+{
+  Bytes b{static_cast<uint8_t>(id)};
+  putI16(b, reg);
+  return b;
+}
+
+Bytes encodeGripperSet(int id, int reg, int value)
+{
+  Bytes b = encodeGripperGet(id, reg);
+  putI16(b, value);
+  return b;
+}
+
+std::optional<int> decodeGripperValue(const Bytes & p, int reg)
+{
+  if (p.size() == 1) {return p[0];}
+  if (p.size() < 4) {return std::nullopt;}
+  if (getI16(&p[1]) != reg) {return std::nullopt;}
+  if (p.size() >= 5) {return getI16(&p[3]);}
+  return p[3];
+}
+
+std::optional<int> ArmLink::gripperGet(int reg, int id)
+{
+  auto r = request(op::kGetToolGripper, encodeGripperGet(id, reg), std::chrono::milliseconds(300));
+  return r ? decodeGripperValue(*r, reg) : std::nullopt;
+}
+
+bool ArmLink::gripperSet(int reg, int value, int id)
+{
+  return request(op::kSetToolGripper, encodeGripperSet(id, reg, value), std::chrono::milliseconds(150)).has_value();
+}
+
 std::optional<bool> ArmLink::isPowerOn()
 {
   auto r = request(op::kIsPowerOn);

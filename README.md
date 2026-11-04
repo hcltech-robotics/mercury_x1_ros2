@@ -17,7 +17,7 @@ control page and a touch kiosk on the head display).
 - [Quick start](#quick-start)
 - [Running on the robot](#running-on-the-robot): [autostart](#autostart) · [ROS environment and network](#ros-environment-and-network) · [robot-side dependencies](#robot-side-dependencies)
 - [Web UIs](#web-uis): [control page :8080](#control-page-8080) · [head display :8081](#head-display-8081)
-- [SLAM and navigation](#slam-and-navigation): [mapping](#mapping) · [maps and waypoints](#maps-and-waypoints) · [Nav2](#nav2-in-one-process) · [arm-aware footprint](#arm-aware-footprint)
+- [SLAM and navigation](#slam-and-navigation): [mapping](#mapping) · [named places](#named-places-voice-go-to-the-kitchen) · [maps and waypoints](#maps-and-waypoints) · [Nav2](#nav2-in-one-process) · [arm-aware footprint](#arm-aware-footprint)
 - [Arms: MoveIt](#arms-moveit-planning-ik-self-collision)
 - [Voice](#voice): [voice chat](#voice-chat-head-display--chat-tab) · [voice board](#voice-board-iflytek-xfm-dp-4-mic-array-in-the-head)
 - [Packages and interfaces](#packages-and-interfaces)
@@ -145,6 +145,13 @@ live `.db` with SQLite while rtabmap runs (rtabmap aborts on "database is locked
 start opens a new session in the database, and sessions that never get linked by a loop closure split the map
 (`office` had 24 sessions in 4 disconnected pieces). Map a place in one go.
 
+### Named places (voice "go to the kitchen")
+Control page → under Waypoints → **Places**: drive the robot to a spot, type a name, **Save robot's spot**. Each
+saved place has buttons to drive there and to delete it. Places are stored per map in `~/maps/<map>.places.json`
+(name, x, y, yaw in the map frame, optional `aliases`). Voice chat resolves spoken names loosely: "the kitchen",
+"kitchen area" and small typos still match. API: `place_save {name, x?, y?, yaw?}` (default: where the robot is now),
+`place_delete {name}`, `place_go {name}`.
+
 ### Maps and waypoints
 Page → **Maps** lists `~/maps/*.db` (newest first, size, waypoint count, which one SLAM uses): ▶ localize,
 ✎ continue mapping, ✕ delete (moved with its waypoints / .pgm to `~/maps/.trash/`, purged after 7 days; the map in
@@ -164,6 +171,16 @@ outline, `/local_costmap/footprint` and `/global_costmap/footprint` get the conv
 points (+4 cm); MPPI (`consider_footprint`) and the behaviours collide-check with it. Published only on change (a new
 footprint makes the costmaps re-inflate). Arms hanging: outline. (Different job from MoveIt below: this keeps the
 *driving* robot from clipping things with an arm held out; MoveIt plans the *arm* motions themselves.)
+
+## Grippers: Elephant F100 (since 2026-11-04, not yet tried on the robot)
+`upper_body_node` speaks the F100 tool-port protocol (pymycobot `ForceGripper`: 0xD8 set / 0xD9 get, gripper id 14,
+int16 register + value; the frames are checked in `test/test_protocol.cpp`). Every arm gets
+`{left,right}_gripper/probe` (std_srvs/Trigger). It only reads status, opening, speed and torque, so it is the
+safe first test of which arm has a gripper. The sides listed in `gripper_sides` (`config/drivers.yaml`, empty by
+default) also get `{side}_gripper/gripper_cmd`, the standard control_msgs/GripperCommand action. Its position is
+the opening, 0 to 100 %, and max_effort > 0 sets the torque. It finishes when the gripper reaches the target or
+stalls on an object. `{side}_gripper/state` (JointState `gripper_L`/`gripper_R`) reports the opening at 2 Hz.
+Built and tested on the robot, but the running driver has not been restarted with it yet.
 
 ## Arms: MoveIt (planning, IK, self-collision)
 `src/control/mercury_x1_moveit_config`, started from the page (Robot → Light & arms → Motion planning) or
@@ -193,7 +210,7 @@ footprint makes the costmaps re-inflate). Arms hanging: outline. (Different job 
 ### Voice chat (head display → Chat tab)
 Tap the microphone, then just speak. Speech runs on the robot; only text goes to Qwen on 11.51.
 
-- **Input:** `arecord` on the XFM-DP mic array (`mx1_beam` = the board's processed beam, 16 kHz) streams to `mercury-speech`
+- **Input:** `arecord` on the XFM-DP mic array (`mx1_beam` = voicefront's processed beam, 16 kHz) streams to `mercury-speech`
   (`server/robot_speech`, 127.0.0.1:8097, own venv `~/mercury-speech` with the Jetson onnxruntime-gpu wheel;
   `server/robot_speech/setup.sh` installs it).
 - **ASR:** Silero VAD finds phrases; NVIDIA Parakeet TDT 0.6B v2 transcribes them on the GPU (fp16 made on a PC with
@@ -202,6 +219,21 @@ Tap the microphone, then just speak. Speech runs on the robot; only text goes to
 - **LLM:** `voice.py` in web_server sends the text to Qwen (pennyroyal proxy :11434, thinking off, ~0.2 s to first
   word) and cuts the reply into sentences (the opening clause goes first).
 - **TTS:** Kokoro on the GPU (~0.35-0.8 s per sentence); `aplay` on the C-Media speaker; the mic is muted while it talks.
+- **Knowledge (since 2026-11-04):** every phrase is looked up in `knowledge/*.md` (and `~/.config/mercury_x1/knowledge/`)
+  with BM25 (`mercury_x1_web/knowledge.py`, no model, under 1 ms). The best paragraphs go into the prompt right before
+  the question, newest source first. Files: HCLTech as of 4 Nov 2026 (Q2 FY27 results, FY27 guidance, leadership, AI
+  and physical-AI news, with sources), the older Q3 FY25 Q&A from proj-cec-doggo-ai, and the robot itself. Edits are
+  picked up without a restart; the format is in `knowledge/README.md`. Temperature is 0.3, and the prompt makes the
+  model copy names and numbers and say the period.
+- **Actions (tools):** the model may call `get_robot_status` (battery, time, nearest place), `list_places`,
+  `go_to_place` (Nav2 goal to a named place), `stop_moving` and `gesture` (nod, shake_head, handshake). **Drive by
+  voice** and **Gestures** are switches on the kiosk Voice tab, off by default. Without them the robot explains that
+  the action is switched off. A short phrase with stop / wait / halt cancels navigation and gestures directly,
+  before the model answers. With gestures on, the robot also sways its waist ±4° and head ±6° while it talks, and
+  turns its head towards whoever says the wake word (head yaw = sign × (angle − 90°); the sign is not calibrated
+  yet: `VB_ANGLE_SIGN` in `web_server.py`). The handshake moves the right arm to `reach_forward_R` through MoveIt
+  (Motion planning must be on), pumps the elbow ±4° a few times, then goes back to `rest`. None of the motions has
+  been run on the robot yet.
 - ~2.3 GB of GPU memory in all (kiosk Status → GPU processes). The unit compacts RAM before starting: fragmented
   memory made the GPU allocations fail (nvmap error 12) with GBs free. The room's 150-300 Hz hum made webrtcvad trigger
   95 % of the time; Silero scores it ≤ 0.3.

@@ -25,6 +25,12 @@ mercury_upper_body:
     power_on_delay_s: 2.0      # (with power_on_start) this long after the link opened
     power_switch_stagger_s: 3.0   # never switch the two arms' power within this interval (on or off, any source)
     poll_body_coords: true
+    # Elephant F100 grippers on the tool ports. Find them first with the read-only probe:
+    #   ros2 service call /left_gripper/probe std_srvs/srv/Trigger   (and /right_gripper/probe)
+    # then list the sides that answer here: they get {side}_gripper/gripper_cmd (control_msgs/GripperCommand,
+    # position = opening 0..100 %) and {side}_gripper/state.
+    gripper_sides: [""]          # e.g. ["right"] or ["left", "right"]; [""] = none (ROS 2 cannot load an empty list)
+    gripper_id: 14
     default_speed: 30
     max_speed: 100
     publish_rate: 50.0

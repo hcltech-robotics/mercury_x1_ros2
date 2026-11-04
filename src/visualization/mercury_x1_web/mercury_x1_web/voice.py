@@ -8,6 +8,9 @@ Runs on web_server's asyncio loop (all I/O, no threads):
     sentences, each one is synthesised by Kokoro (/tts) and played with `aplay` on the C-Media speaker
     while the next is being made (Kokoro on the robot's GPU, same service: /tts).
   * The mic is muted while the robot talks (no echo loop) and for a short tail after it.
+  * Knowledge: every phrase is looked up in the local knowledge files (knowledge.py, BM25) and the best
+    paragraphs go into the prompt. Actions: the model may call tools (robot status, named places, drive to a
+    place, stop, gestures); driving and gestures only when switched on in the settings (kiosk Voice tab).
 Config: ~/.config/mercury_x1/voice.env (model URL + bearer token, ALSA devices; chmod 600).
 """
 from __future__ import annotations
@@ -21,22 +24,34 @@ from urllib.parse import urlparse
 
 import aiohttp
 
+from .knowledge import Knowledge, as_prompt
+
 CONF = os.path.expanduser("~/.config/mercury_x1/voice.env")
 SETTINGS_FILE = os.path.expanduser("~/.config/mercury_x1/voice_settings.json")
 VOICES = {"af_heart": "Heart (US)", "af_bella": "Bella (US)", "am_michael": "Michael (US)",
           "bf_emma": "Emma (UK)", "bm_george": "George (UK)", "am_puck": "Puck (US)"}
-DEFAULT_SETTINGS = {"volume": 46, "voice": "af_heart", "speed": 1.0}
+DEFAULT_SETTINGS = {"volume": 46, "voice": "af_heart", "speed": 1.0,
+                    "drive": False,       # may drive to named places when asked (Nav2); off until tested
+                    "gestures": False}    # may move waist / neck / arms for gestures; off until tested
 TEST_PHRASE = "Hello, I am Mercury. This is how loud I speak."
 SYSTEM_PROMPT = (
     "You are Mercury, a friendly wheeled humanoid robot with two arms, made by Elephant Robotics and working in the "
-    "HCLTech robotics lab. You are talking out loud with people standing in front of you, so answer in one to three "
-    "short spoken sentences, in plain words: no lists, no markdown, no emojis, no code. If you did not understand, "
-    "ask briefly. You cannot move or act on requests yet; you can only talk.")
+    "HCLTech robotics lab as a lab companion. You are talking out loud with people standing in front of you, so "
+    "answer in one to three short spoken sentences, in plain words: no lists, no markdown, no emojis, no code. Say "
+    "numbers the way a person would. If you did not understand, ask briefly. For questions about HCLTech, the lab or "
+    "yourself, answer only from the facts you are given: copy names and numbers exactly, say the period of a figure, "
+    "prefer the most recent date, and if the facts do not say it, say you do not know. Call a tool only when the "
+    "person asks for what it does (your status, places, driving somewhere, stopping, a gesture). You move only "
+    "through tools: never say you are moving or doing something unless a tool result confirms it, and if no tool "
+    "fits, say you cannot do that yet.")
+MAX_TOOL_ROUNDS = 3
 HISTORY_TURNS = 8          # user + assistant pairs kept as context
 IDLE_RESET_S = 180         # forget the conversation after this long without speech
 UNMUTE_TAIL_S = 0.35       # keep the mic muted this long after the speaker stops
 LOCAL_SPEECH = "http://127.0.0.1:8097"   # server/robot_speech: Parakeet STT + Kokoro TTS
 SENTENCE_END = re.compile(r"(?<=[.!?;:])\s+|\n+")
+# a short "stop" phrase cancels motion directly, before (and whatever) the model answers
+STOP_PHRASE = re.compile(r"\b(stop|halt|freeze|wait|stay|hold on|don'?t move|stand still)\b", re.I)
 FIRST_CLAUSE = re.compile(r"^((?:\S+\s+){3,}?\S+,)\s+")   # a reply's opening clause of 4+ words, up to its comma
 
 
@@ -55,7 +70,8 @@ def load_conf() -> dict:
 
 
 def speakable(text: str) -> str:
-    """strip what TTS would read out literally (markdown, emoji, URLs)"""
+    """strip what TTS would read out literally (markdown, emoji, URLs, stray think tags)"""
+    text = re.sub(r"</?think>?", "", text)
     text = re.sub(r"https?://\S+", "", text)
     text = re.sub(r"[*_`#>|~\[\]]", "", text)
     text = re.sub(r"[\U0001F000-\U0001FAFF☀-➿]", "", text)
@@ -63,8 +79,10 @@ def speakable(text: str) -> str:
 
 
 class VoiceChat:
-    def __init__(self, on_change=None) -> None:
+    def __init__(self, on_change=None, actions=None) -> None:
         self.on_change = on_change or (lambda: None)
+        self.actions = actions        # web_server App: voice_places / voice_go / voice_stop / voice_status / voice_gesture
+        self.kb = Knowledge()
         self.enabled = False
         self.state = "off"         # off | connecting | listening | hearing | thinking | speaking | error
         self.message = ""
@@ -116,6 +134,9 @@ class VoiceChat:
             self.settings["voice"] = changes["voice"]
         if "speed" in changes:
             self.settings["speed"] = round(max(0.7, min(1.4, float(changes["speed"]))), 2)
+        for key in ("drive", "gestures"):
+            if key in changes:
+                self.settings[key] = bool(changes[key])
         os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
         with open(SETTINGS_FILE, "w") as f:
             json.dump(self.settings, f)
@@ -269,6 +290,9 @@ class VoiceChat:
             self.history = []
         self.last_speech = now
         self._say("user", text)
+        if self.actions is not None and len(text.split()) <= 6 and STOP_PHRASE.search(text):
+            self._say("note", self.actions.voice_stop())
+            text += "  [the robot has already stopped all motion]"
         await self._mute(True)
         self._reply_task = asyncio.create_task(self._reply(text, conf))
 
@@ -278,40 +302,67 @@ class VoiceChat:
         answer, queue = "", asyncio.Queue()
         speaker = asyncio.create_task(self._speak_queue(queue, conf))
         try:
-            msgs = [{"role": "system", "content": SYSTEM_PROMPT}] + self.history[-2 * HISTORY_TURNS:] + \
-                   [{"role": "user", "content": text}]
-            body = {"model": conf.get("VOICE_LLM_MODEL", "pennyroyal"), "messages": msgs, "stream": True,
-                    "max_tokens": 300, "temperature": 0.7, "chat_template_kwargs": {"enable_thinking": False}}
-            pending, first, spoken = "", None, False
-            async with self._session.post(conf["VOICE_LLM_URL"], json=body,
-                                          timeout=aiohttp.ClientTimeout(total=60)) as r:
-                if r.status != 200:
-                    raise RuntimeError(f"model: HTTP {r.status} {(await r.text())[:100]}")
-                async for raw in r.content:
-                    line = raw.decode(errors="replace").strip()
-                    if not line.startswith("data:") or line.endswith("[DONE]"):
-                        continue
-                    delta = json.loads(line[5:])["choices"][0].get("delta", {})
-                    piece = delta.get("content") or ""
-                    if not piece:
-                        continue
-                    first = first or time.time() - t0
-                    answer += piece
-                    pending += piece
-                    parts = SENTENCE_END.split(pending)
-                    clause = FIRST_CLAUSE.match(parts[0]) if not spoken and len(parts) == 1 else None
-                    if clause and speakable(clause.group(1)):    # speak the opening clause now: earlier first word
-                        await queue.put(speakable(clause.group(1)))
-                        spoken, pending = True, pending[clause.end():]
-                        continue
-                    for sentence in parts[:-1]:      # complete sentences go to speech right away
-                        if speakable(sentence):
-                            await queue.put(speakable(sentence))
-                            spoken = True
-                    pending = parts[-1]
-            if speakable(pending):
-                await queue.put(speakable(pending))
+            msgs = self._messages(text)
+            tools = self._tools()
+            first, spoken = None, False
+            for round_ in range(MAX_TOOL_ROUNDS + 1):
+                body = {"model": conf.get("VOICE_LLM_MODEL", "pennyroyal"), "messages": msgs, "stream": True,
+                        "max_tokens": 300, "temperature": 0.3, "chat_template_kwargs": {"enable_thinking": False}}
+                if tools and round_ < MAX_TOOL_ROUNDS:
+                    body["tools"] = tools
+                pending, calls, part = "", {}, ""
+                async with self._session.post(conf["VOICE_LLM_URL"], json=body,
+                                              timeout=aiohttp.ClientTimeout(total=60)) as r:
+                    if r.status != 200:
+                        raise RuntimeError(f"model: HTTP {r.status} {(await r.text())[:100]}")
+                    async for raw in r.content:
+                        line = raw.decode(errors="replace").strip()
+                        if not line.startswith("data:") or line.endswith("[DONE]"):
+                            continue
+                        delta = json.loads(line[5:])["choices"][0].get("delta", {})
+                        for tc in delta.get("tool_calls") or []:      # streamed in pieces, keyed by index
+                            c = calls.setdefault(tc.get("index", 0), {"id": "", "name": "", "arguments": ""})
+                            c["id"] = tc.get("id") or c["id"]
+                            fn = tc.get("function") or {}
+                            c["name"] += fn.get("name") or ""
+                            c["arguments"] += fn.get("arguments") or ""
+                        piece = delta.get("content") or ""
+                        if not piece:
+                            continue
+                        first = first or time.time() - t0
+                        part += piece
+                        pending += piece
+                        parts = SENTENCE_END.split(pending)
+                        clause = FIRST_CLAUSE.match(parts[0]) if not spoken and len(parts) == 1 else None
+                        if clause and speakable(clause.group(1)):    # speak the opening clause now: earlier first word
+                            await queue.put(speakable(clause.group(1)))
+                            spoken, pending = True, pending[clause.end():]
+                            continue
+                        for sentence in parts[:-1]:      # complete sentences go to speech right away
+                            if speakable(sentence):
+                                await queue.put(speakable(sentence))
+                                spoken = True
+                        pending = parts[-1]
+                if speakable(pending):
+                    await queue.put(speakable(pending))
+                answer += part
+                if not calls:
+                    break
+                ordered = [calls[i] for i in sorted(calls)]
+                msgs.append({"role": "assistant", "content": part or None, "tool_calls": [
+                    {"id": c["id"] or f"call_{round_}_{i}", "type": "function",
+                     "function": {"name": c["name"], "arguments": c["arguments"] or "{}"}} for i, c in enumerate(ordered)]})
+                for i, c in enumerate(ordered):
+                    result = await self._run_tool(c["name"], c["arguments"])
+                    self.stats["last_tool"] = f"{c['name']} {c['arguments'][:60]}"
+                    msgs.append({"role": "tool", "tool_call_id": c["id"] or f"call_{round_}_{i}",
+                                 "content": json.dumps(result, ensure_ascii=False)})
+                if answer.strip():   # already said something this turn: continue, do not repeat
+                    msgs.append({"role": "system", "content": f"You already said aloud: \"{answer.strip()}\". "
+                                 "Reply with only what the tool result adds, in one short sentence, or nothing."})
+
             self.stats["llm_first_s"] = round(first or 0, 2)
+            self.stats["facts"] = self._facts_used
             answer = answer.strip()
             self._say("robot", answer)
             self.history += [{"role": "user", "content": text}, {"role": "assistant", "content": answer}]
@@ -326,11 +377,94 @@ class VoiceChat:
             speaker.cancel()
             self._say("note", f"error: {str(e)[:140]}")
         finally:
+            self._talking(False)
             await asyncio.sleep(UNMUTE_TAIL_S)
             await self._mute(False)
             self.last_speech = time.time()
             if self.enabled and self.state in ("thinking", "speaking"):
                 self._set("listening")
+
+    # ---- knowledge + tools ---------------------------------------------------------------------
+    _facts_used = 0
+
+    def _messages(self, text: str) -> list[dict]:
+        """system prompt + history + retrieved facts + the new phrase"""
+        query = text
+        if len(text.split()) < 6:   # a short follow-up ("and the margin?"): the previous question gives context
+            prev = [m["content"] for m in self.history[-4:] if m["role"] == "user"]
+            query = " ".join(prev[-1:] + [text])
+        hits = self.kb.search(query)
+        self._facts_used = len(hits)
+        system = SYSTEM_PROMPT
+        if self.actions is not None:
+            places = self.actions.voice_places()
+            system += (f" Named places on the current map: {', '.join(places)}." if places else
+                       " No named places are saved on the current map yet.")
+            system += (" Driving by voice is switched ON." if self.settings.get("drive") else
+                       " Driving by voice is switched OFF (it can be switched on in the kiosk Voice tab).")
+        msgs = [{"role": "system", "content": system}] + self.history[-2 * HISTORY_TURNS:]
+        if hits:   # right before the question: the model weighs it most
+            msgs.append({"role": "system", "content": as_prompt(hits)})
+        return msgs + [{"role": "user", "content": text}]
+
+    def _talking(self, on: bool) -> None:
+        """body language while speaking (the App only moves when the gestures switch is on)"""
+        fn = getattr(self.actions, "voice_talking", None)
+        if fn is not None:
+            try:
+                fn(on)
+            except Exception:  # noqa: BLE001 - never let gestures break the conversation
+                pass
+
+    def _tools(self) -> list[dict]:
+        if self.actions is None:
+            return []
+
+        def fn(name: str, desc: str, props: dict | None = None, req: list | None = None) -> dict:
+            return {"type": "function", "function": {"name": name, "description": desc, "parameters": {
+                "type": "object", "properties": props or {}, "required": req or []}}}
+        tools = [
+            fn("get_robot_status", "Only when the person asks about your battery, the time or date, or where you "
+               "are: battery level, navigation state, map, nearest named place, time, date."),
+            fn("list_places", "Names of the places the robot knows on the current map."),
+            fn("go_to_place", "Drive to a named place on the map, e.g. when asked to go to or show the way to the "
+               "kitchen. Only for places in the list.", {"place": {"type": "string", "description": "place name"}},
+               ["place"]),
+            fn("stop_moving", "Stop driving immediately (cancel navigation). Use it when someone says stop or wait."),
+        ]
+        gestures = getattr(self.actions, "voice_gesture_names", lambda: [])()
+        if gestures:
+            tools.append(fn("gesture", "Do a body gesture with the waist, head and arms.",
+                            {"name": {"type": "string", "enum": gestures}}, ["name"]))
+        return tools
+
+    async def _run_tool(self, name: str, arguments: str) -> dict:
+        try:
+            args = json.loads(arguments or "{}")
+        except ValueError:
+            args = {}
+        a = self.actions
+        try:
+            if name == "get_robot_status":
+                return a.voice_status()
+            if name == "list_places":
+                return {"places": a.voice_places()}
+            if name == "go_to_place":
+                if not self.settings.get("drive"):
+                    return {"ok": False, "error": "driving by voice is switched off (kiosk Voice tab)"}
+                ok, msg = a.voice_go(str(args.get("place", "")))
+                self._say("note", msg)
+                return {"ok": ok, "result" if ok else "error": msg}
+            if name == "stop_moving":
+                return {"ok": True, "result": a.voice_stop()}
+            if name == "gesture":
+                if not self.settings.get("gestures"):
+                    return {"ok": False, "error": "gestures are switched off (kiosk Voice tab)"}
+                ok, msg = await a.voice_gesture(str(args.get("name", "")))
+                return {"ok": ok, "result" if ok else "error": msg}
+        except Exception as e:  # noqa: BLE001 - the model gets the error and can say so
+            return {"ok": False, "error": str(e)[:120]}
+        return {"ok": False, "error": f"unknown tool {name}"}
 
     async def _speak_queue(self, queue: asyncio.Queue, conf: dict) -> None:
         """synthesise sentence n+1 while sentence n plays"""
@@ -342,6 +476,8 @@ class VoiceChat:
             nxt = asyncio.create_task(self._tts(conf, following)) if following is not None else None
             wav = await wav_task
             self.stats["tts_ms"], self.stats["tts_on"] = self._last_tts_ms, self._last_tts_on
+            if self.state != "speaking":
+                self._talking(True)
             self._set("speaking")
             await self._play(wav, conf)
             sentence = following
