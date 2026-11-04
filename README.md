@@ -80,10 +80,13 @@ Kiosk: `sudo apt install surf matchbox-window-manager xinit`. Speech: `server/ro
 onnxruntime-gpu for CUDA 13 from the Jetson AI Lab `sbsa/cu130` index - it runs on the Orin).
 
 Power: the Orin NX runs the **25 W** profile (`nvpmodel -m 3`: 8 cores at 1.5 GHz; the 15 W profile has only 4 cores
-online). Switching the arms' servo power dips the supply enough to reset the module (PMC `reset_reason` SYS_RESET_N,
-seen at MAXN, 25 W and 15 W, with and without the 3 s stagger of `power_switch_stagger_s`), so the drivers no longer
-power the arms at start (`power_on_start: false`): switch them on from the page / kiosk once the stack is up. A
-hardware fix (flyback / TVS on the arm power relay, bulk capacitance for the Orin) is pending.
+online). The Jetson carrier is fed by the robot's 24 V -> 12 V converter, an RT7272B (3 A, i.e. ~36 W for module +
+cameras + lidar + display): a MAXN start-up step or the arms' servo power-on on top of a loaded Jetson folds it and
+the module resets (abrupt journal end; PMC `reset_reason` is not reliable - SYS_RESET_N also follows a clean reboot).
+Hence: 25 W, the arms are powered right after the driver opens them (`power_on_delay_s` 2 s, right / left
+`power_switch_stagger_s` 3 s apart) while the Jetson is still idle, and `start.sh` waits for them before SLAM / Nav2.
+The Status tab shows the module input (INA3221 `VDD_IN`, 5 V nominal) with its minimum since start; a sag there is
+the converter folding. Hardware fix pending: a bigger 12 V converter (or the Jetson on its own).
 
 ## Web UIs
 
