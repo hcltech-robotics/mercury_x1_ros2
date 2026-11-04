@@ -3,9 +3,9 @@
 # Logs: journalctl -u mercury-speech
 [Unit]
 Description=Mercury X1 speech (Parakeet STT, Kokoro TTS)
-# after the stack has started: loading the GPU models at the same instant the drivers power the arms made the
-# carrier reset the module (SYS_RESET_N, 2026-11-03)
-After=network.target mercury-x1.service
+# not enabled at boot: start.sh starts it (after the drivers, before the arms are powered) so the CUDA model load
+# is a supply step of its own - the 12 V converter for the Jetson resets the module when steps coincide (2026-11-03)
+After=network.target
 
 [Service]
 User=elephant

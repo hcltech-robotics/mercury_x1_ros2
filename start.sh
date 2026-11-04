@@ -5,7 +5,7 @@
 #
 #   ./start.sh [--map NAME] [--mode mapping|localization] [--fresh] [--no-slam] [--no-nav]
 #
-# Defaults come from ~/.config/mercury_x1/autostart.env (MX1_MAP, MX1_MODE, MX1_SLAM, MX1_NAV);
+# Defaults come from ~/.config/mercury_x1/autostart.env (MX1_MAP, MX1_MODE, MX1_SLAM, MX1_NAV, MX1_SPEECH, MX1_ARMS);
 # without MX1_MAP the most recently saved map in ~/maps is used, in localization mode (mapping only
 # when that map does not exist yet; --mode mapping continues it, --fresh starts it over). A restart from the page (ROS network switch) leaves resume.env,
 # so SLAM / Nav2 come back as they were. ROS domain / network: scripts/ros_env.sh.
@@ -61,16 +61,25 @@ else
   "$HERE/scripts/mx1_up.sh"
 fi
 wait_for 90 "the control page" curl -sf -m 2 "$PAGE/config"
-# the arms are powered right after the driver opens them (drivers.yaml power_on_delay_s / power_switch_stagger_s):
-# let that happen while the Jetson is still idle - switching the servo power on top of SLAM / nvblox / Nav2 starting
-# dipped the 24 V bus enough to reset the module (2026-11-03). Waits at most 40 s (arms off / E-stop: carry on).
+# Power steps one at a time - the robot's 24 V -> 12 V converter for the Jetson (RT7272B, 3 A) folds and resets the
+# module when they coincide (2026-11-03): 1) speech service (CUDA model load) while the arms are still unpowered,
+# 2) the arms (right, then left 3 s later: upper_body power_switch_stagger_s) on an otherwise idle Jetson,
+# 3) only then SLAM / Nav2. Speech is not enabled in systemd for that reason; this is where it starts.
+source "$HERE/scripts/ros_env.sh"
+if [ "${MX1_SPEECH:-true}" = true ]; then
+  sudo -n systemctl start mercury-speech 2>/dev/null || true
+  wait_for 60 "the speech service" curl -sf -m 2 -o /dev/null http://127.0.0.1:8097/health || true
+fi
 arms_powered() {
   for a in left right; do
-    ros2 topic echo --once --field powered "/${a}_arm/state" 2>/dev/null | grep -qi true || return 1   # prints "True"
+    ros2 topic echo --once --field powered "/${a}_arm/state" 2>/dev/null | grep -qi true || return 1
   done
 }
-source "$HERE/scripts/ros_env.sh"
-wait_for 40 "the arms to power up" arms_powered || true
+if [ "${MX1_ARMS:-true}" = true ] && ! arms_powered; then
+  echo "powering the arms"
+  api arms_power '{"on": true}'
+  wait_for 40 "the arms to power up" arms_powered || true
+fi
 
 if [ "$SLAM" = true ]; then
   if pgrep -x rtabmap >/dev/null; then

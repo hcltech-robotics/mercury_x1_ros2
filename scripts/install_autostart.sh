@@ -19,4 +19,5 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 for u in $UNITS; do sudo install -m 644 "$HERE/config/systemd/$u.service" "/etc/systemd/system/$u.service"; done
 sudo systemctl daemon-reload
 sudo systemctl enable $UNITS
+sudo systemctl disable mercury-speech 2>/dev/null || true   # started by start.sh, see config/systemd/mercury-speech.service
 echo "enabled: the stack and the head display start at boot (sudo systemctl start mercury-x1 mercury-x1-head)"
