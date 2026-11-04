@@ -79,14 +79,22 @@ serves the matching `@rerun-io/web-viewer` (`VIEWER_VERSION` in `web_server.py`,
 Kiosk: `sudo apt install surf matchbox-window-manager xinit`. Speech: `server/robot_speech/setup.sh` (own venv;
 onnxruntime-gpu for CUDA 13 from the Jetson AI Lab `sbsa/cu130` index - it runs on the Orin).
 
-Power: the Orin NX runs the **25 W** profile (`nvpmodel -m 3`: 8 cores at 1.5 GHz; the 15 W profile has only 4 cores
-online). The Jetson carrier is fed by the robot's 24 V -> 12 V converter, an RT7272B (3 A, i.e. ~36 W for module +
-cameras + lidar + display): a MAXN start-up step or the arms' servo power-on on top of a loaded Jetson folds it and
-the module resets (abrupt journal end; PMC `reset_reason` is not reliable - SYS_RESET_N also follows a clean reboot).
-Hence: 25 W, the arms are powered right after the driver opens them (`power_on_delay_s` 2 s, right / left
-`power_switch_stagger_s` 3 s apart) while the Jetson is still idle, and `start.sh` waits for them before SLAM / Nav2.
-The Status tab shows the module input (INA3221 `VDD_IN`, 5 V nominal) with its minimum since start; a sag there is
-the converter folding. Hardware fix pending: a bigger 12 V converter (or the Jetson on its own).
+Power: the Jetson carrier is fed by the robot's 24 V -> 12 V converter, an RT7272B (3 A, i.e. ~36 W for module +
+cameras + lidar + display). Any big load step on top of a running Jetson folds it and the module resets (abrupt journal
+end; PMC `reset_reason` is not reliable - SYS_RESET_N also follows a clean reboot): a MAXN start-up, the speech
+service's CUDA model load, the arms' servo power-on. Measured on 2026-11-03, the module's own 5 V (`VDD_IN`) stays
+clean, the fold is upstream. What runs now:
+
+* clocks capped at boot by `mercury-clocks.service` (CPU 1.42 GHz, GPU 612 MHz = the 15 W limits) with all 8 cores
+  (custom nvpmodel profile `15W_8CORE`, ID 4 in `/etc/nvpmodel.conf`; the stock 15 W profile has 4 cores, and the
+  custom profile does not apply its caps at boot, hence the unit);
+* one supply step at a time: `start.sh` starts the speech service first (CUDA load, arms still unpowered), then powers
+  the arms through the page API (right, left 3 s later: `power_switch_stagger_s`), then SLAM / Nav2. The driver does
+  not power the arms itself (`power_on_start: false`) and `mercury-speech` is not enabled in systemd for the same
+  reason (`MX1_SPEECH=false` / `MX1_ARMS=false` in `autostart.env` skip the steps);
+* the Status tab shows the module input (`VDD_IN`, 5 V nominal) with its minimum since start; docker is disabled.
+
+Hardware fix pending: a 12 V converter with headroom (>= 5-6 A) for the Jetson, or its own supply from the battery.
 
 ## Web UIs
 
