@@ -203,6 +203,7 @@
 </style>
 <script src="/static/remote_ui.js"></script>
 <script src="/static/nodes_ui.js"></script>
+<script src="/static/confirm_ui.js"></script>
 </head>
 <body>
 <div id="bar">
@@ -484,12 +485,12 @@ function bindSwitch(el, onTap) {
     el._until = 0; el.classList.remove("busy"); el.classList.toggle("checked", !!state);
   };
 }
-const setArms = bindSwitch($("#sw-arms"), (on) => {
-  if (!on && !confirm("Power the arms off? They go limp - make sure they are supported.")) return false;
+const setArms = bindSwitch($("#sw-arms"), async (on) => {
+  if (!on && !await ask("Power the arms off? They go limp - make sure they are supported.", { ok: "Power off", danger: true })) return false;
   api("arms_power", { on });
 });
-const setFree = bindSwitch($("#sw-free"), (on) => {
-  if (on && !confirm("Freedrive: the arms can be moved by hand and may sink. Hold the arms. Continue?")) return false;
+const setFree = bindSwitch($("#sw-free"), async (on) => {
+  if (on && !await ask("Freedrive: the arms can be moved by hand and may sink. Hold the arms. Continue?", { ok: "Freedrive", danger: true })) return false;
   api("freedrive", { on });
 });
 function renderArms() {
@@ -525,11 +526,11 @@ function renderWifi() {
        <span class="grow">${esc(n.ssid)}</span>
        <span class="tag">${n.active ? "connected" : n.saved ? "saved" : n.secure ? "🔒" : "open"}</span>
      </div>`).join("");
-  for (const it of $("#w-list").querySelectorAll(".item")) it.onclick = () => {
+  for (const it of $("#w-list").querySelectorAll(".item")) it.onclick = async () => {
     const n = w.networks[+it.dataset.i];
     if (n.active || w.busy) return;
     if (n.secure && !n.saved) askPassword(n.ssid);
-    else if (confirm(`Connect to ${n.ssid}?\nThe robot leaves its current network; the control page moves with it.`)) api("wifi_connect", { ssid: n.ssid });
+    else if (await ask(`Connect to ${n.ssid}?\nThe robot leaves its current network; the control page moves with it.`, { ok: "Connect" })) api("wifi_connect", { ssid: n.ssid });
   };
 }
 
@@ -622,10 +623,10 @@ function renderVoice() {
 let vbThr = null;
 for (const b of document.querySelectorAll("#vb-thr button")) b.onclick = () => {
   vbThr = +b.dataset.t; document.querySelectorAll("#vb-thr button").forEach((x) => x.classList.toggle("on", x === b)); };
-$("#vb-presets").onclick = (e) => {
+$("#vb-presets").onclick = async (e) => {
   const b = e.target.closest("button[data-k]"); if (!b) return;
   const thr = vbThr || ((S.voice_board || {}).conf || {}).threshold || 900;
-  if (!confirm(`Load the wake word "${b.textContent}" (threshold ${thr})? The board compiles it and restarts its engine (~40 s).`)) return;
+  if (!await ask(`Load the wake word "${b.textContent}" (threshold ${thr})? The board compiles it and restarts its engine (~40 s).`, { ok: "Load" })) return;
   api("wake_word", { keyword: b.dataset.k, threshold: thr });
 };
 // radar: linear array -> 0..180 deg, 90 up; drawn mirrored (0 on the screen's left) - matches what a person

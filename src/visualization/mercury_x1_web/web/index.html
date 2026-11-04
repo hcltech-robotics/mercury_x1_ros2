@@ -176,6 +176,7 @@
 </style>
 <script src="/static/remote_ui.js"></script>
 <script src="/static/nodes_ui.js"></script>
+<script src="/static/confirm_ui.js"></script>
 </head>
 <body>
 <header>
@@ -876,7 +877,7 @@ $("#wptable").addEventListener("click", (e) => {
   if (b.dataset.a === "go") { const w = WAYPOINTS[k]; api("goto", w); return; }
   pushWaypoints();
 });
-$("#b-clear").onclick = () => { if (WAYPOINTS.length && confirm(`Delete all ${WAYPOINTS.length} waypoints of this map?`)) { WAYPOINTS = []; pushWaypoints(); } };
+$("#b-clear").onclick = async () => { if (WAYPOINTS.length && await ask(`Delete all ${WAYPOINTS.length} waypoints of this map?`, { ok: "Delete", danger: true })) { WAYPOINTS = []; pushWaypoints(); } };
 $("#b-runonce").onclick = () => api("run", { loop: false });
 $("#b-cruise").onclick = () => api("run", { loop: true });
 
@@ -902,7 +903,7 @@ async function deleteMap(m) {
   const slam = ST.procs.slam, inUse = slam.running && slam.map === m;
   const msg = inUse ? `'${m}' is in use (${slam.mode}). Stop SLAM${ST.procs.nav.running ? " and Nav2" : ""} and delete it with its waypoints?`
                     : `Delete map '${m}' and its waypoints?`;
-  if (!confirm(`${msg}\n\nIt is kept in ~/maps/.trash for 7 days.`)) return;
+  if (!await ask(`${msg}\n\nIt is kept in ~/maps/.trash for 7 days.`, { ok: "Delete", danger: true })) return;
   if (inUse) {
     toast("stopping SLAM (saving map)…");
     if (ST.procs.nav.running) await api("nav_stop");
@@ -916,24 +917,24 @@ async function startSlam(mode, map, fresh = false) {
   const j = await api("slam", { mode, map, fresh });
   if (j && j.ok) view.fitted = false;
 }
-$("#maptable").addEventListener("click", (e) => {
+$("#maptable").addEventListener("click", async (e) => {
   const b = e.target.closest("button"); if (!b || b.disabled) return; const m = b.dataset.m;
   if (b.dataset.a === "loc") startSlam("localization", m);
-  if (b.dataset.a === "extend" && confirm(`Continue mapping '${m}'?\n\nStart where the map was recorded: the new drive only joins the map once RTAB-Map recognises a known place, otherwise it becomes a separate piece.`)) startSlam("mapping", m);
+  if (b.dataset.a === "extend" && await ask(`Continue mapping '${m}'?\n\nStart where the map was recorded: the new drive only joins the map once RTAB-Map recognises a known place, otherwise it becomes a separate piece.`)) startSlam("mapping", m);
   if (b.dataset.a === "del") deleteMap(m);
 });
-$("#b-newmap").onclick = () => {
+$("#b-newmap").onclick = async () => {
   const name = $("#newmap").value.trim().replace(/[^A-Za-z0-9_-]/g, "");
   if (!name) { toast("type a map name (letters, digits, - _)"); $("#newmap").focus(); return; }
-  if ((ST.maps || []).some((m) => m.name === name) && !confirm(`A map '${name}' exists. Replace it with a new, empty map?`)) return;
+  if ((ST.maps || []).some((m) => m.name === name) && !await ask(`A map '${name}' exists. Replace it with a new, empty map?`, { ok: "Replace", danger: true })) return;
   $("#newmap").value = "";
   startSlam("mapping", name, true);
 };
 $("#b-slamstop").onclick = async () => { toast("stopping SLAM (saving map)…"); await api("slam_stop"); toast("SLAM stopped, map saved"); };
 $("#b-exp-cloud").onclick = () => api("export3d", { kind: "cloud" });
-$("#exp3d-files").addEventListener("click", (ev) => {
+$("#exp3d-files").addEventListener("click", async (ev) => {
   const b = ev.target.closest("button[data-f]");
-  if (b && confirm(`Delete ${b.dataset.f}?`)) api("export3d_delete", { name: b.dataset.f });
+  if (b && await ask(`Delete ${b.dataset.f}?`, { ok: "Delete", danger: true })) api("export3d_delete", { name: b.dataset.f });
 });
 $("#b-exp-mesh").onclick = () => api("export3d", { kind: "mesh" });
 $("#b-export").onclick = async () => { const j = await api("export_map"); if (j && j.ok) toast(`saved ${j.file}`); };
@@ -1041,12 +1042,12 @@ function bindSwitch(id, onChange, holdMs = 8000) {
     el._until = 0; el.classList.remove("busy"); cb.checked = !!state;
   };
 }
-const setArmsSwitch = bindSwitch("#sw-arms", (on) => {
-  if (!on && !confirm("Power the arms off? They go limp - make sure they are supported.")) return false;
+const setArmsSwitch = bindSwitch("#sw-arms", async (on) => {
+  if (!on && !await ask("Power the arms off? They go limp - make sure they are supported.", { ok: "Power off", danger: true })) return false;
   api("arms_power", { on }); toast(on ? "powering arms on" : "powering arms off");
 });
-const setFreeSwitch = bindSwitch("#sw-free", (on) => {
-  if (on && !confirm("Freedrive: the arms can be moved by hand. Hold the arms - they may sink. Continue?")) return false;
+const setFreeSwitch = bindSwitch("#sw-free", async (on) => {
+  if (on && !await ask("Freedrive: the arms can be moved by hand. Hold the arms - they may sink. Continue?", { ok: "Freedrive", danger: true })) return false;
   api("freedrive", { on }); toast(on ? "freedrive on (remote: Select toggles)" : "freedrive off - arms hold");
 });
 const setHoldSwitch = bindSwitch("#sw-hold", (on) => { api("head_hold", { on }); });
@@ -1058,8 +1059,8 @@ function renderArmMotion(m, moveitOn) {
   if (key !== armPosesKey) {
     armPosesKey = key;
     $("#arm-poses").innerHTML = m.poses.map((p) => `<button class="b" data-pose="${p.name}">${p.label}</button>`).join("");
-    for (const b of $("#arm-poses").querySelectorAll("button")) b.onclick = () => {
-      if (!confirm(`Move to "${b.textContent}"? The arms move - keep clear.`)) return;
+    for (const b of $("#arm-poses").querySelectorAll("button")) b.onclick = async () => {
+      if (!await ask(`Move to "${b.textContent}"? The arms move - keep clear.`, { ok: "Move", danger: true })) return;
       api("arm_pose", { name: b.dataset.pose, speed: +$("#arm-speed").value });
     };
   }
@@ -1093,10 +1094,10 @@ document.querySelectorAll("#vox-shape button").forEach((b) => b.onclick = () => 
   api("viz_voxel", { shape: b.dataset.shape });
 });
 $("#vox-size").onchange = () => { voxUntil = Date.now() + 1500; api("viz_voxel", { size: +$("#vox-size").value }); };
-const setLanSwitch = bindSwitch("#sw-lan", (lan) => {
+const setLanSwitch = bindSwitch("#sw-lan", async (lan) => {
   const what = lan ? "LAN: other machines can see the robot's ROS topics (DDS traffic on the WiFi)"
                    : "Robot only: ROS traffic stays on the robot";
-  if (!confirm(`${what}.\n\nThis restarts every ROS node (~30 s): the base stops, navigation is cancelled, SLAM / Nav2 come back as they are now. Continue?`)) return false;
+  if (!await ask(`${what}.\n\nThis restarts every ROS node (~30 s): the base stops, navigation is cancelled, SLAM / Nav2 come back as they are now. Continue?`, { ok: "Restart" })) return false;
   api("ros_network", { network: lan ? "lan" : "localhost" }); toast("restarting the stack…");
 }, 90000);
 </script>
