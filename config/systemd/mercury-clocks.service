@@ -1,0 +1,16 @@
+# Mercury X1: cap the Orin NX clocks (CPU 1.42 GHz, GPU 612 MHz = the 15 W profile's limits) while keeping all 8 cores
+# (nvpmodel profile 15W_8CORE). The robot's 24 V -> 12 V converter for the Jetson carrier (RT7272B, 3 A) folds under
+# full-clock load steps and resets the module (2026-11-03); the custom nvpmodel profile does not apply its caps at
+# boot, this unit does. Install / remove with scripts/install_autostart.sh.
+[Unit]
+Description=Mercury X1 Jetson clock caps (CPU 1.42 GHz, GPU 612 MHz)
+After=nvpmodel.service
+Before=mercury-x1.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'for c in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_max_freq; do echo 1420800 > $c; done; for g in /sys/class/devfreq/*gpu*/max_freq; do echo 612000000 > $g; done'
+
+[Install]
+WantedBy=multi-user.target

@@ -1,11 +1,11 @@
 #!/bin/bash
-# Start the Mercury X1 at boot: mercury-x1 (the stack, ./start.sh as elephant) and mercury-x1-head (the
-# head display kiosk on tty1, needs `sudo apt install surf matchbox-window-manager`).
+# Start the Mercury X1 at boot: mercury-clocks (Jetson clock caps), mercury-x1 (the stack, ./start.sh as elephant)
+# and mercury-x1-head (the head display kiosk on tty1, needs `sudo apt install surf matchbox-window-manager`).
 #   scripts/install_autostart.sh            install + enable (does not start them now)
 #   scripts/install_autostart.sh --remove   disable + remove
 # Afterwards: sudo systemctl start|stop|restart mercury-x1 / mercury-x1-head, journalctl -u <unit>
 set -e
-UNITS="mercury-x1 mercury-x1-head"
+UNITS="mercury-clocks mercury-x1 mercury-x1-head"
 if [ "$1" = "--remove" ]; then
   for u in $UNITS; do
     sudo systemctl disable "$u" 2>/dev/null || true
