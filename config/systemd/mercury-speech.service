@@ -3,7 +3,9 @@
 # Logs: journalctl -u mercury-speech
 [Unit]
 Description=Mercury X1 speech (Parakeet STT, Kokoro TTS)
-After=network.target
+# after the stack has started: loading the GPU models at the same instant the drivers power the arms made the
+# carrier reset the module (SYS_RESET_N, 2026-11-03)
+After=network.target mercury-x1.service
 
 [Service]
 User=elephant
