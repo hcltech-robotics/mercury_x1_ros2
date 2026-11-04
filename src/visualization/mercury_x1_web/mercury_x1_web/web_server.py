@@ -1166,7 +1166,8 @@ class App:
         app.router.add_get("/maps", self.maps)
         app.router.add_get("/vendor/rerun/{name}", self.vendor)
         app.router.add_post("/api/{action}", self.api)
-        app.router.add_static("/static", self.static_dir)
+        # follow_symlinks: colcon --symlink-install links the web files into the install tree (aiohttp 404s them otherwise)
+        app.router.add_static("/static", self.static_dir, follow_symlinks=True)
         app.router.add_get("/exports/{name}", self.export_file)
         threading.Thread(target=self.fetch_viewer, daemon=True).start()
         self.load_waypoints()
@@ -1175,7 +1176,7 @@ class App:
         head.router.add_get("/", self.head_index)
         head.router.add_get("/ws", self.head_ws)
         head.router.add_post("/api/{action}", self.api)
-        head.router.add_static("/static", self.static_dir)
+        head.router.add_static("/static", self.static_dir, follow_symlinks=True)
 
         async def serve() -> None:
             runners = []

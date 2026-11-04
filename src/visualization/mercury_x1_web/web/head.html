@@ -101,9 +101,9 @@
   .meter .val { text-align: right; font-variant-numeric: tabular-nums; }
   .bar { height: 14px; background: var(--panel2); border-radius: 7px; overflow: hidden; }
   .bar i { display: block; height: 100%; width: 0; background: var(--ok); }
-  #cores { display: flex; gap: 10px; align-items: flex-end; height: 92px; margin: 6px 0 4px 68px; }
+  #cores { display: flex; gap: 6px; align-items: flex-end; height: 92px; margin: 6px 0 4px 68px; flex-wrap: nowrap; }   /* 8 cores on the Orin NX */
   .core { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); }
-  .core .col { width: 30px; height: 64px; background: var(--panel2); border-radius: 6px; display: flex; align-items: flex-end; overflow: hidden; }
+  .core .col { width: 22px; height: 64px; background: var(--panel2); border-radius: 6px; display: flex; align-items: flex-end; overflow: hidden; }
   .core .col i { display: block; width: 100%; background: var(--ok); }
   .temps { display: flex; gap: 22px; margin-top: 14px; font-variant-numeric: tabular-nums; }
   .temps b { font-weight: 600; }
