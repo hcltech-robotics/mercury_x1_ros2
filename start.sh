@@ -66,7 +66,7 @@ wait_for 90 "the control page" curl -sf -m 2 "$PAGE/config"
 # dipped the 24 V bus enough to reset the module (2026-11-03). Waits at most 40 s (arms off / E-stop: carry on).
 arms_powered() {
   for a in left right; do
-    ros2 topic echo --once --field powered "/${a}_arm/state" 2>/dev/null | grep -q true || return 1
+    ros2 topic echo --once --field powered "/${a}_arm/state" 2>/dev/null | grep -qi true || return 1   # prints "True"
   done
 }
 source "$HERE/scripts/ros_env.sh"
