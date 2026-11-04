@@ -72,8 +72,9 @@ libgoogle-glog-dev libdw-dev nlohmann-json3-dev libbluetooth-dev libeigen3-dev` 
 `--cmake-args -DUSE_NV_HW_DECODER=ON` (Jetson JPEG decoder in orbbec_camera; on JetPack 7 it links CUDA nvJPEG +
 libnvmm_jpeg instead of the old Tegra libnvjpeg).
 
-pip (user site, `--break-system-packages`): `"numpy>=2,<2.4" scipy trimesh "rerun-sdk==0.39.0" "pandas>=2.2,<3"`
-(rerun's pyarrow needs numpy 2; the apt scipy/pandas are built against numpy 1, so they come from pip too). The page
+pip (user site, `--break-system-packages`): `"numpy>=2,<2.4" scipy trimesh "rerun-sdk==0.39.0" "pandas>=2.2,<3" "aiohttp>=3.10"`
+(rerun's pyarrow needs numpy 2; the apt scipy/pandas are built against numpy 1, so they come from pip too; the apt
+aiohttp 3.9 lacks `ClientWSTimeout`, which the voice chat uses). The page
 serves the matching `@rerun-io/web-viewer` (`VIEWER_VERSION` in `web_server.py`, fetched once from jsDelivr).
 Kiosk: `sudo apt install surf matchbox-window-manager xinit`. Speech: `server/robot_speech/setup.sh` (own venv;
 onnxruntime-gpu for CUDA 13 from the Jetson AI Lab `sbsa/cu130` index - it runs on the Orin).
