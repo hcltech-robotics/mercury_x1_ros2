@@ -12,6 +12,9 @@ export MX1_ROS_NETWORK
 # 16 MB shared-memory segments (640x480 images exceed the 512 KB default and were half dropped) +
 # UDP on loopback only (localhost) or on every interface (lan)
 export FASTRTPS_DEFAULT_PROFILES_FILE="$MX1_WS/config/fastdds_$MX1_ROS_NETWORK.xml"
-if [ "$MX1_ROS_NETWORK" = localhost ]; then export ROS_LOCALHOST_ONLY=1; else unset ROS_LOCALHOST_ONLY; fi
-source /opt/ros/humble/setup.bash
+# Jazzy: ROS_AUTOMATIC_DISCOVERY_RANGE replaces ROS_LOCALHOST_ONLY (deprecated, still honoured)
+if [ "$MX1_ROS_NETWORK" = localhost ]; then export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+else export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET; fi
+unset ROS_LOCALHOST_ONLY
+source /opt/ros/jazzy/setup.bash
 [ -f "$MX1_WS/install/setup.bash" ] && source "$MX1_WS/install/setup.bash"

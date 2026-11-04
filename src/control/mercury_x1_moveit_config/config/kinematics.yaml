@@ -1,4 +1,4 @@
-# IK per planning group. KDL ships with MoveIt; pick_ik (apt ros-humble-pick-ik) handles the 7-DOF redundancy
+# IK per planning group. KDL ships with MoveIt; pick_ik (apt ros-jazzy-pick-ik) handles the 7-DOF redundancy
 # better (joint-centring, approximate solutions) - switch with kinematics_solver: pick_ik/PickIkPlugin.
 left_arm:
   kinematics_solver: kdl_kinematics_plugin/KDLKinematicsPlugin

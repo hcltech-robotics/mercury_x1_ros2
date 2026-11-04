@@ -56,7 +56,7 @@ from std_srvs.srv import SetBool, Trigger
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
 MAPS_DIR = os.path.expanduser("~/maps")
-VIEWER_VERSION = "0.39.0"   # must match rerun-sdk on the robot (newest release that still supports Python 3.10)
+VIEWER_VERSION = "0.39.0"   # must match rerun-sdk on the robot
 VIEWER_FILES = ("index.js", "re_viewer.js", "re_viewer_bg.wasm")
 MX1_WS = os.environ.get("MX1_WS", os.path.expanduser("~/mercury_x1_ros2"))
 CONF_DIR = os.path.expanduser("~/.config/mercury_x1")

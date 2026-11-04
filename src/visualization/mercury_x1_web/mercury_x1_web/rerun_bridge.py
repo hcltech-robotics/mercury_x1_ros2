@@ -192,7 +192,7 @@ class RerunBridge(Node):
         for name in ("left", "back", "right"):
             sub(Range, f"/ultrasonic/{name}", lambda m, n=name: self._on_range(m, n), qos_profile_sensor_data)
         sub(Path, "/plan", self._on_plan, 1)
-        # cuVSLAM RGB-D visual odometry (mercury_x1_perception/cuvslam_rgbd_node), for comparison
+        # cuVSLAM RGB-D visual odometry (Isaac ROS visual_slam, mercury_x1_perception/cuvslam.launch.py), for comparison
         sub(Path, "/vslam/path", self._on_vslam_path, 1)
         sub(PoseArray, "/web/waypoints", self._on_waypoints, LATCHED)
         sub(PolygonStamped, "/local_costmap/published_footprint", self._on_footprint, 1)

@@ -16,6 +16,7 @@ import time
 WHAT = {
     "nvblox_node": "nvblox 3D reconstruction",
     "cuvslam_rgbd": "cuVSLAM visual odometry",
+    "vslam_container": "cuVSLAM visual odometry (Isaac ROS)",
     "camera_container": "Orbbec camera (JPEG decode)",
     "camera": "Orbbec camera",
     "mercury-speech": "speech: Parakeet STT + Kokoro TTS",
