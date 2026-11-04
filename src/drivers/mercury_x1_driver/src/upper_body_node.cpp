@@ -20,6 +20,9 @@
 //  * motion commands queue inside the MCU rather than replacing the running motion, so a
 //    preempting command is sent as STOP (no payload) followed by the new target;
 //  * only power/status/single-joint reads answer while an arm is powered off.
+//  * switching an arm's servo power is a supply transient that has reset the Orin (no flyback on the arm
+//    power path): the two arms are never switched within power_switch_stagger_s of each other, and the
+//    power-on at start waits power_on_delay_s after the link opened, past the boot load.
 
 #include <atomic>
 #include <cmath>
@@ -87,6 +90,27 @@ double steadyNow()
 {
   return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
+
+// One arm power switch at a time, at least `stagger` seconds apart (both arms, on and off).
+struct PowerGate
+{
+  void wait()
+  {
+    std::lock_guard<std::mutex> lk(m_);
+    double now = steadyNow();
+    while (now - last_ < stagger_) {
+      std::this_thread::sleep_for(50ms);
+      now = steadyNow();
+    }
+    last_ = now;
+  }
+  void setStagger(double s) {std::lock_guard<std::mutex> lk(m_); stagger_ = s;}
+
+private:
+  std::mutex m_;
+  double last_{-1e9}, stagger_{3.0};
+};
+PowerGate g_power_gate;
 }  // namespace
 
 struct Motion
@@ -119,9 +143,9 @@ public:
   using Job = std::function<void(arm::ArmLink &)>;
 
   ArmWorker(rclcpp::Logger log, std::string side, std::string port, std::vector<int> extra_ids,
-            bool power_on_start, bool poll_body)
+            bool power_on_start, double power_on_delay_s, bool poll_body)
   : log_(log), side_(std::move(side)), port_(std::move(port)), extra_ids_(std::move(extra_ids)),
-    power_on_start_(power_on_start), poll_body_(poll_body)
+    power_on_start_(power_on_start), power_on_delay_s_(power_on_delay_s), poll_body_(poll_body)
   {
     snap_.coords.fill(NAN);
     snap_.body.fill(NAN);
@@ -214,6 +238,7 @@ public:
   {
     std::lock_guard<std::mutex> lk(mtx_);
     snap_.powered = p;
+    power_on_due_ = -1;                  // switched from the service: no pending start-up power-on
     if (!p) {snap_.freedrive = false;}   // power on again = joints hold
   }
 
@@ -257,8 +282,9 @@ private:
           RCLCPP_INFO(log_, "%s arm: opened %s (powered=%d)", side_.c_str(), port_.c_str(), pw.value_or(false));
           bool powered = pw.value_or(false);
           if (power_on_start_ && pw.has_value() && !powered) {
-            RCLCPP_INFO(log_, "%s arm: powering on", side_.c_str());
-            powered = link->power(true);
+            // not now: the boot load / the other arm's switch make the supply dip (see the file header)
+            power_on_due_ = steadyNow() + power_on_delay_s_;
+            RCLCPP_INFO(log_, "%s arm: powering on in %.0f s", side_.c_str(), power_on_delay_s_);
           }
           update([&](ArmSnapshot & s) {s.connected = pw.has_value(); s.powered = powered;});
           readVersions(*link);
@@ -324,6 +350,14 @@ private:
             if (auto st = link->status()) {update([&](ArmSnapshot & s) {s.status = *st;});}
           }
         } else {
+          if (power_on_due_ >= 0 && steadyNow() >= power_on_due_) {
+            power_on_due_ = -1;
+            g_power_gate.wait();
+            RCLCPP_INFO(log_, "%s arm: powering on", side_.c_str());
+            const bool p = link->power(true);
+            update([&](ArmSnapshot & s) {s.powered = p;});
+            continue;
+          }
           if (k % 20 == 0) {
             auto pw = link->isPowerOn();
             auto st = link->status();
@@ -378,7 +412,10 @@ private:
   rclcpp::Logger log_;
   std::string side_, port_;
   std::vector<int> extra_ids_;
-  bool power_on_start_, poll_body_;
+  bool power_on_start_;
+  double power_on_delay_s_;
+  std::atomic<double> power_on_due_{-1.0};   // steadyNow() at which the start-up power-on happens (-1: none)
+  bool poll_body_;
   std::optional<bool> movement_linear_;
   std::mutex mtx_;
   ArmSnapshot snap_;
@@ -412,6 +449,8 @@ public:
     const auto left_port = declare_parameter("left_port", "/dev/left_arm");
     const auto right_port = declare_parameter("right_port", "/dev/right_arm");
     const bool power_on_start = declare_parameter("power_on_start", true);
+    const double power_on_delay_s = declare_parameter("power_on_delay_s", 20.0);
+    g_power_gate.setStagger(declare_parameter("power_switch_stagger_s", 3.0));
     const bool poll_body = declare_parameter("poll_body_coords", true);
     default_speed_ = declare_parameter("default_speed", 30);
     // drag_teach: vendor drag-teaching mode (gravity-compensated); release: torque off, damping
@@ -436,9 +475,9 @@ public:
       for (int i = 1; i <= 7; ++i) {arm_names_[side].push_back("joint" + std::to_string(i) + "_" + s);}
     }
     workers_["left"] = std::make_unique<ArmWorker>(get_logger(), "left", left_port, std::vector<int>{},
-        power_on_start, poll_body);
+        power_on_start, power_on_delay_s, poll_body);
     workers_["right"] = std::make_unique<ArmWorker>(get_logger(), "right", right_port, extra_ids,
-        power_on_start, poll_body);
+        power_on_start, power_on_delay_s, poll_body);
     extra_ids_ = extra_ids;
 
     pub_js_ = create_publisher<sensor_msgs::msg::JointState>("joint_states", 10);
@@ -564,7 +603,7 @@ private:
   void srvPower(const std::string & side, bool on, std_srvs::srv::SetBool::Response & res)
   {
     auto & w = *workers_[side];
-    auto ok = w.call<bool>([on](arm::ArmLink & l) {return l.power(on);}, 15s);
+    auto ok = w.call<bool>([on](arm::ArmLink & l) {g_power_gate.wait(); return l.power(on);}, 15s);
     auto pw = w.call<std::optional<bool>>([](arm::ArmLink & l) {return l.isPowerOn();}, 2s);
     const bool powered = pw && *pw && **pw;
     w.markPowered(powered);
