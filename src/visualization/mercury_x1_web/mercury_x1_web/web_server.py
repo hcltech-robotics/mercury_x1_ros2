@@ -774,9 +774,13 @@ class App:
             self.gestures.talking(on)
 
     def _on_wake_word(self, angle_deg: float) -> None:
-        """ROS thread: someone said the wake word from angle_deg -> look that way (gestures on only)"""
+        """ROS thread: someone said the wake word from angle_deg -> look that way (gestures on only) and, if voice
+        chat is not listening, start a conversation (switch "wake_listen"; stops again after a quiet minute)"""
         if self.voice.settings.get("gestures"):
             self.gestures.look_at(angle_deg, VB_FRONT_DEG, VB_ANGLE_SIGN)
+        loop = getattr(self, "loop", None)
+        if loop is not None and self.voice.settings.get("wake_listen"):
+            asyncio.run_coroutine_threadsafe(self.voice.wake(), loop)
 
     def voice_status(self) -> dict:
         n = self.node
@@ -1323,6 +1327,7 @@ class App:
                 runners.append(runner)
             stop = asyncio.Event()
             loop = asyncio.get_running_loop()
+            self.loop = loop                     # ROS-thread callbacks (wake word) schedule voice work here
             for sig in (signal.SIGINT, signal.SIGTERM):
                 loop.add_signal_handler(sig, stop.set)
             await stop.wait()

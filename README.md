@@ -208,7 +208,9 @@ Built and tested on the robot, but the running driver has not been restarted wit
 ## Voice
 
 ### Voice chat (head display → Chat tab)
-Tap the microphone, then just speak. Speech runs on the robot; only text goes to Qwen on 11.51.
+Tap the microphone, or say **"hey mercury"**, then just speak. Speech runs on the robot; only text goes to Qwen on
+11.51. The wake word plays a short chime and starts listening when voice chat is off (kiosk Voice tab → Listen after
+"hey mercury", on by default). A conversation started this way stops listening after 45 s without speech.
 
 - **Input:** `arecord` on the XFM-DP mic array (`mx1_beam` = voicefront's processed beam, 16 kHz) streams to `mercury-speech`
   (`server/robot_speech`, 127.0.0.1:8097, own venv `~/mercury-speech` with the Jetson onnxruntime-gpu wheel;

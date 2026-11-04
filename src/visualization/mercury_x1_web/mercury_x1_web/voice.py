@@ -32,7 +32,8 @@ VOICES = {"af_heart": "Heart (US)", "af_bella": "Bella (US)", "am_michael": "Mic
           "bf_emma": "Emma (UK)", "bm_george": "George (UK)", "am_puck": "Puck (US)"}
 DEFAULT_SETTINGS = {"volume": 46, "voice": "af_heart", "speed": 1.0,
                     "drive": False,       # may drive to named places when asked (Nav2); off until tested
-                    "gestures": False}    # may move waist / neck / arms for gestures; off until tested
+                    "gestures": False,    # may move waist / neck / arms for gestures; off until tested
+                    "wake_listen": True}  # "hey mercury" starts listening (if off), a quiet minute ends it
 TEST_PHRASE = "Hello, I am Mercury. This is how loud I speak."
 SYSTEM_PROMPT = (
     "You are Mercury, a friendly wheeled humanoid robot with two arms, made by Elephant Robotics and working in the "
@@ -47,6 +48,7 @@ SYSTEM_PROMPT = (
 MAX_TOOL_ROUNDS = 3
 HISTORY_TURNS = 8          # user + assistant pairs kept as context
 IDLE_RESET_S = 180         # forget the conversation after this long without speech
+WAKE_IDLE_OFF_S = 45       # a conversation started by the wake word stops listening after this long without speech
 UNMUTE_TAIL_S = 0.35       # keep the mic muted this long after the speaker stops
 LOCAL_SPEECH = "http://127.0.0.1:8097"   # server/robot_speech: Parakeet STT + Kokoro TTS
 SENTENCE_END = re.compile(r"(?<=[.!?;:])\s+|\n+")
@@ -134,7 +136,7 @@ class VoiceChat:
             self.settings["voice"] = changes["voice"]
         if "speed" in changes:
             self.settings["speed"] = round(max(0.7, min(1.4, float(changes["speed"]))), 2)
-        for key in ("drive", "gestures"):
+        for key in ("drive", "gestures", "wake_listen"):
             if key in changes:
                 self.settings[key] = bool(changes[key])
         os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
@@ -195,6 +197,43 @@ class VoiceChat:
             await asyncio.gather(*self._tasks, return_exceptions=True)
             self._tasks = []
             self._set("off")
+
+    async def wake(self) -> None:
+        """the wake word was heard: chime, and listen if voice chat is off (auto-off after a quiet spell)"""
+        if self.enabled:
+            return
+        self.last_speech = time.time()
+        await self.enable(True)
+        self._say("note", "heard 'hey mercury' - listening")
+        asyncio.create_task(self._chime())
+        self._tasks.append(asyncio.create_task(self._wake_watch()))
+
+    async def _chime(self) -> None:
+        """short two-tone cue on the speaker (the mic is muted meanwhile)"""
+        import math
+        import struct
+        rate, frames = 24000, []
+        for f, dur in ((880, 0.09), (1320, 0.12)):
+            n = int(rate * dur)
+            frames += [int(9000 * math.sin(2 * math.pi * f * i / rate) * min(1, i / 240, (n - i) / 240)) for i in range(n)]
+        data = struct.pack(f"<{len(frames)}h", *frames)
+        wav = b"RIFF" + struct.pack("<I", 36 + len(data)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16) \
+            + b"data" + struct.pack("<I", len(data)) + data
+        try:
+            await self._mute(True)
+            await self._play(wav, load_conf())
+        finally:
+            await asyncio.sleep(0.15)
+            await self._mute(False)
+
+    async def _wake_watch(self) -> None:
+        while self.enabled:
+            await asyncio.sleep(2.0)
+            busy = self.state in ("thinking", "speaking", "hearing")
+            if not busy and time.time() - self.last_speech > WAKE_IDLE_OFF_S:
+                self._say("note", "quiet for a while - stopped listening (say 'hey mercury' again)")
+                asyncio.create_task(self.enable(False))
+                return
 
     def clear(self) -> None:
         self.transcript, self.history = [], []
