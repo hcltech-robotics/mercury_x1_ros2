@@ -9,7 +9,9 @@
 // Pipeline per 10 ms: WebRTC AEC3 on every mic against the reference -> STFT (512/256) -> voice activity,
 // SRP-PHAT direction, steered beamformer -> WebRTC noise suppression + AGC2 -> output + keyword spotter.
 
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -74,6 +76,7 @@ struct Options {
   std::string amixer_card;  // e.g. hw:sndac10710036 (enables set_gain)
   std::string dump;         // AEC output (mics) + reference, interleaved S16
   bool output = true;
+  std::string out_cmd;  // beam to this command's stdin (restarted when it exits) instead of stdout
 };
 
 void usage() {
@@ -109,7 +112,9 @@ void usage() {
                "  --doa-during-playback  also track direction while the speaker plays\n"
                "  --amixer-card DEV   card for set_gain (AC107 'Channel N PGA Gain')\n"
                "  --dump FILE         write AEC output + reference (S16, mics+1 channels)\n"
-               "  --no-output         do not write the beam to stdout\n",
+               "  --no-output         do not write the beam to stdout\n"
+               "  --out-cmd CMD       write the beam to CMD's stdin instead (sh -c; restarted 1 s after it exits;\n"
+               "                      never blocks: audio is dropped while CMD does not read)\n",
                kVersion);
 }
 
@@ -165,6 +170,7 @@ bool parse_args(int argc, char** argv, Options& o) {
     else if (a == "--amixer-card") o.amixer_card = next("--amixer-card");
     else if (a == "--dump") o.dump = next("--dump");
     else if (a == "--no-output") o.output = false;
+    else if (a == "--out-cmd") o.out_cmd = next("--out-cmd");
     else {
       std::fprintf(stderr, "voicefront: unknown option %s\n", a.c_str());
       return false;
@@ -318,6 +324,70 @@ class KwsRunner {
   bool f_result_ = false;
 };
 
+// The beam's consumer (e.g. aplay into the USB gadget). aplay exits with EIO whenever the USB host stops
+// reading; the wake word and direction must keep working, so the consumer is respawned instead of us dying.
+class OutProc {
+ public:
+  explicit OutProc(std::string cmd) : cmd_(std::move(cmd)) {}
+  ~OutProc() { close_pipe(); }
+  void write(const int16_t* x, int n, double now) {
+    reap();
+    if (fd_ < 0) {
+      if (now < retry_at_) return;
+      spawn();
+      if (fd_ < 0) {
+        retry_at_ = now + 1.0;
+        return;
+      }
+    }
+    const ssize_t r = ::write(fd_, x, static_cast<size_t>(n) * sizeof(int16_t));
+    if (r < 0 && errno == EAGAIN) {
+      ++dropped_;  // the consumer is not reading (pipe full): drop this chunk
+    } else if (r < 0) {
+      close_pipe();  // EPIPE: it exited
+      retry_at_ = now + 1.0;
+      ++restarts_;
+    }
+  }
+  long restarts() const { return restarts_; }
+
+ private:
+  void spawn() {
+    int p[2];
+    if (pipe(p) != 0) return;
+    const pid_t pid = fork();
+    if (pid == 0) {
+      dup2(p[0], 0);
+      ::close(p[0]);
+      ::close(p[1]);
+      execl("/bin/sh", "sh", "-c", cmd_.c_str(), static_cast<char*>(nullptr));
+      _exit(127);
+    }
+    ::close(p[0]);
+    if (pid < 0) {
+      ::close(p[1]);
+      return;
+    }
+    fd_ = p[1];
+    pid_ = pid;
+    fcntl(fd_, F_SETFL, fcntl(fd_, F_GETFL) | O_NONBLOCK);
+    fcntl(fd_, F_SETFD, FD_CLOEXEC);
+  }
+  void close_pipe() {
+    if (fd_ >= 0) ::close(fd_);
+    fd_ = -1;
+  }
+  void reap() {
+    while (waitpid(-1, nullptr, WNOHANG) > 0) {
+    }
+  }
+  std::string cmd_;
+  int fd_ = -1;
+  pid_t pid_ = -1;
+  double retry_at_ = 0.0;
+  long dropped_ = 0, restarts_ = 0;
+};
+
 std::atomic<bool> g_stop{false};
 void on_signal(int) { g_stop = true; }
 
@@ -384,6 +454,8 @@ int main(int argc, char** argv) {
   }
 
   FILE* dump = o.dump.empty() ? nullptr : std::fopen(o.dump.c_str(), "wb");
+  std::unique_ptr<OutProc> out_proc;
+  if (!o.out_cmd.empty()) out_proc = std::make_unique<OutProc>(o.out_cmd);
 
   auto hello = [&] {
     link.send(std::string("{\"type\":\"hello\",\"name\":\"voicefront\",\"version\":\"") + kVersion +
@@ -434,6 +506,7 @@ int main(int argc, char** argv) {
                     (array.speech() ? "true" : "false") + ",\"playback\":" + (far ? "true" : "false") +
                     ",\"snr_db\":" + fmt("%.1f", array.snr_db()) + ",\"wakes\":" + std::to_string(wakes) +
                     ",\"dropped\":" + std::to_string(link.dropped());
+    if (out_proc) s += ",\"out_restarts\":" + std::to_string(out_proc->restarts());
     if (erle_n > 50 && erle_out > 0.0) s += ",\"erle_db\":" + fmt("%.1f", 10.0 * std::log10(erle_in / erle_out));
     if (o.kws) s += ",\"keywords\":" + str_list(spotter.keywords()) + ",\"kw_threshold\":" + fmt("%.3f", spotter.threshold());
     link.send(s + "}");
@@ -460,9 +533,9 @@ int main(int argc, char** argv) {
       return;
     }
     const std::string cmd = j.get_str("cmd");
-    if (cmd == "ping") {
-      reply(j, true, "", "");
-      hello();
+    if (cmd == "ping") {  // reply carries the hello fields; a "hello" event alone means voicefront (re)started
+      reply(j, true, std::string(",\"version\":\"") + kVersion + "\",\"keywords\":" +
+                         str_list(o.kws ? spotter.keywords() : std::vector<std::string>{}), "");
     } else if (cmd == "status") {
       reply(j, true, "", "");
       status(t);
@@ -592,7 +665,9 @@ int main(int argc, char** argv) {
       }
       used += kChunk;
       post.process(out.data());
-      if (o.output && !write_full(1, out.data(), out.size() * sizeof(int16_t))) {
+      if (out_proc) {
+        out_proc->write(out.data(), kChunk, now_s(CLOCK_MONOTONIC));
+      } else if (o.output && !write_full(1, out.data(), out.size() * sizeof(int16_t))) {
         log("stdout closed");
         g_stop = true;
         break;

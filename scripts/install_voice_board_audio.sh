@@ -21,7 +21,8 @@ if [ "$MODE" = install ]; then
     $ADB $D push /etc/rc.local,755 < $BRD/rc.local
     $ADB $D push /data/build/rawmic.sh,755 < $BRD/rawmic.sh
 elif [ "$MODE" = revert ]; then
-    $ADB $D shell "cp -p /etc/asound.conf.stock /etc/asound.conf; cp -p /etc/rc.local.stock /etc/rc.local; rm -f /data/build/rawmic.sh; echo stock restored"
+    # also undoes scripts/install_voicefront.sh (its beam needs the 6-channel gadget): the demo comes back
+    $ADB $D shell "cp -p /etc/asound.conf.stock /etc/asound.conf; cp -p /etc/rc.local.stock /etc/rc.local; rm -f /data/build/rawmic.sh /data/build/voicefront/voicefront.sh; [ -f /data/build/wakeupCron.sh.stock ] && cp -p /data/build/wakeupCron.sh.stock /data/build/wakeupCron.sh; killall voicefront.sh voicefront 2>/dev/null; echo stock restored"
 else
     echo "usage: $0 [install|revert]"; exit 2
 fi

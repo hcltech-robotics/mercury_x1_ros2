@@ -31,7 +31,7 @@ Link::~Link() {
 
 bool Link::open(const std::string& path, int baud, std::string& err) {
   if (path.empty() || path == "-") return true;
-  fd_ = ::open(path.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
+  fd_ = ::open(path.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
   if (fd_ < 0) {
     err = path + ": " + std::strerror(errno);
     return false;

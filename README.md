@@ -209,9 +209,10 @@ Tap the microphone, then just speak. Speech runs on the robot; only text goes to
   systemd `mercury-voice`) is the old remote speech service, disabled since 2026-11-02.
 
 ### Voice board (iFlytek XFM-DP 4-mic array in the head)
-`src/drivers/mercury_x1_voice_board` talks the AIUI serial protocol on `/dev/xf_mic` (udev rule in
-`scripts/install_voice_board_udev.sh`): acks the handshake, publishes wake events (`VoiceWake`: keyword, beam 0-2,
-angle 0-180°, score) and board state, services to set the wake word / fix the beam. Kiosk → **Voice** tab: wake-word
+`src/drivers/mercury_x1_voice_board` talks to the board on `/dev/xf_mic` (udev rule in
+`scripts/install_voice_board_udev.sh`) and detects which firmware runs there: **voicefront** (ours, since
+2026-11-04, JSON lines) or the stock iFlytek demo (AIUI frames). It publishes wake events (`VoiceWake`: keyword,
+angle 0-180°, score/confidence) and board state, with services to set the wake word and fix the beam. Kiosk → **Voice** tab: wake-word
 presets (factory 小微小微 `xiao3 wei1 xiao3 wei1`, threshold 700-1100, persisted in
 `~/.config/mercury_x1/voice_board.json`), a direction radar with the last wakes, and the voice-output settings.
 
@@ -229,7 +230,7 @@ the board for wake + direction; an English detector would have to run on the Ori
 |---|---|---|
 | 0-3 | the 4 mics, raw (AC107 slots 0-3, linear array, 35 mm pitch) | `mx1_mics` (0-3 + 4) / `mx1_array` (all 6) |
 | 4 | speaker echo reference (AC107 slot 6 = an analog loopback of the robot's speaker) | |
-| 5 | the board's processed beam (its AEC/beamforming; what the mono stream used to be) | `mx1_beam` (voice chat) |
+| 5 | the processed beam: voicefront's (AEC, beamformer, noise suppression; stock demo: its own beam) | `mx1_beam` (voice chat) |
 
 Board side, stock ALSA plugins only (`src/drivers/mercury_x1_voice_board/board/`): `asound.conf` shares the AC107
 capture via dsnoop (the board app and `rawmic.sh`) and feeds one 6-channel dmix on the gadget; `rawmic.sh` is an
@@ -245,15 +246,31 @@ Limits found on the way: the kernel's `f_uac1` uses a fixed 200-byte packet, so 
 across packets (channels shifted by 4 in every other packet); 6 channels (192 B/ms) fit. The kernel's `f_uac2` is
 the Linux 4.9 driver that always needs an iso IN *and* OUT endpoint while the board's UDC has one iso endpoint, which
 is why an earlier UAC2 attempt failed to bind and took ADB down until a power cycle. AC107 slots 4, 5, 7 carry only
-noise. Host-side DOA / beamforming / echo cancellation / English wake word on channels 0-4 is the planned
-replacement for the board's closed stack; the board's own wake word + angle keep working meanwhile.
+noise.
+
+**Our front end on the board (voicefront, since 2026-11-04):** `src/drivers/mercury_x1_voice_board/voicefront` is
+one static aarch64 program (WebRTC AEC3 + noise suppression + AGC2, SRP-PHAT direction, delay-and-sum / MVDR
+beamformer, sherpa-onnx English keyword spotting, default **"hey mercury"**) that replaces the closed iFlytek demo.
+It was developed on the Orin against the USB channels above and runs unchanged on the board's Tina Linux. It sends
+the beam to USB channel 5 and wake / direction / voice-activity / status as JSON lines on the board UART. Install
+or undo (on the robot, after the USB audio setup; keeps the stock watchdog script):
+
+```bash
+scripts/install_voicefront.sh            # or: ... revert   (stock demo back)
+```
+
+Measured: direction error under 1° on synthetic talkers, wake word 78-81 % on synthetic voices with no false wakes
+in other speech, 0 self-wakes when the robot itself says "hey mercury", about one of the board's four cores. Not
+measured yet: recall on real voices and the direction sign (`angle_sign`). Details, protocol and limits are in
+`voicefront/README.md`. The board's mic gains are lowered from 30 to 4 (reference 20) because the robot's own
+voice at full volume clipped the mics.
 
 ## Packages and interfaces
 
 | Package | What |
 |---|---|
 | `src/drivers/mercury_x1_driver` | C++ `base_node` (odom+TF, IMU, battery %, ultrasonic L/back/R, RGB LED, cmd_vel watchdog, rear guard) and `upper_body_node` (both arms + neck/jaw/waist: 50 Hz joint states, ArmState with flange coords, preemptible joint/Cartesian commands, FollowJointTrajectory servers, power/stop services). Exclusive serial ownership. |
-| `src/drivers/mercury_x1_voice_board` | AIUI serial driver for the mic array: wake events, state, wake-word / beam services |
+| `src/drivers/mercury_x1_voice_board` | mic-array driver (voicefront JSON lines or stock AIUI): wake events, state, wake-word / beam services; `voicefront/` = the board's front end |
 | `src/core/mercury_x1_msgs` | `ArmState`, `BaseState`, `JointCommand`, `CartesianCommand`, `VoiceWake`, `VoiceBoardState` |
 | `src/core/mercury_x1_description` | URDF + calibrated sensor frames (base_footprint = drive axle), convex collision meshes |
 | `src/control/mercury_x1_moveit_config` | SRDF, kinematics, controllers, `move_group.launch.py`, `demo.launch.py`, ACM/check tools |

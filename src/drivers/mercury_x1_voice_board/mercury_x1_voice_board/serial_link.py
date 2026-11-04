@@ -1,5 +1,10 @@
-"""Serial transport for the voice board: raw termios (no pyserial), a reader thread that confirms
-handshakes/events immediately (the board expects a confirm within 50 ms) and reconnects on errors."""
+"""Serial transport for the voice board: raw termios (no pyserial), a reader thread and reconnects on errors.
+
+Two board firmwares, told apart by what arrives:
+  "json": voicefront (ours): one JSON object per line; commands {"cmd": ..., "id": n} get {"type": "reply", "id": n}
+  "aiui": the stock iFlytek demo: binary AIUI frames; handshakes/events are confirmed immediately (the board
+          expects a confirm within 50 ms), requests are answered by an event of the same "type"
+"""
 import errno
 import json
 import os
@@ -58,6 +63,8 @@ class VoiceBoardLink:
         self.parser = proto.FrameParser()
         self.last_rx = 0.0
         self.handshakes = 0
+        self.mode = "unknown"  # "json" (voicefront) | "aiui" (stock demo), from the received data
+        self._line = b""
         self.is_open = False
         self._opened = threading.Event()
 
@@ -72,12 +79,22 @@ class VoiceBoardLink:
 
     # -- requests ----------------------------------------------------------------------------
     def request(self, message: dict, timeout: float) -> Optional[dict]:
-        """Send a control message and wait for the board's event with the same "type".
-        Waits for the port to open within the same timeout; returns None if there is no reply."""
+        """Send a control message and wait for its reply: in json mode the reply with the same "id", in aiui
+        mode the board's event with the same "type". Waits for the port to open and the firmware to be seen
+        within the same timeout; returns None if there is no reply."""
         deadline = time.monotonic() + timeout
         if not self._opened.wait(timeout):
             return None
-        kind = str(message.get("type", ""))
+        while self.mode == "unknown" and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if self.mode == "json":
+            message = dict(message)
+            with self._write_lock:
+                message["id"] = self._next_id
+                self._next_id = self._next_id % 0xFFFF + 1
+            kind = f"id:{message['id']}"
+        else:
+            kind = str(message.get("type", ""))
         pending = _Pending()
         with self._pending_lock:
             self._pending.setdefault(kind, []).append(pending)
@@ -95,6 +112,9 @@ class VoiceBoardLink:
                     self._pending.pop(kind, None)
 
     def send(self, message: dict) -> bool:
+        if self.mode == "json":
+            line = json.dumps(message, ensure_ascii=True, separators=(",", ":")) + "\n"
+            return self._write(line.encode())
         with self._write_lock:
             msg_id = self._next_id
             self._next_id = self._next_id % 0xFFFF + 1
@@ -128,6 +148,7 @@ class VoiceBoardLink:
             self._on_state(f"cannot open {self.port}: {exc.strerror}")
             return False
         self.parser = proto.FrameParser()
+        self._line = b""
         self.is_open = True
         self._opened.set()
         self._on_state("open")
@@ -164,8 +185,43 @@ class VoiceBoardLink:
                 self._stop.wait(self._reopen_delay)
                 continue
             self.last_rx = time.monotonic()
-            for msg_type, msg_id, payload in self.parser.feed(data):
-                self._handle(msg_type, msg_id, payload)
+            if b"\xa5\x01" in data and self.mode != "aiui":
+                self.mode, self.parser = "aiui", proto.FrameParser()
+                self._on_state("firmware: stock demo (AIUI frames)")
+            elif b'{"type":' in data and self.mode != "json":
+                self.mode, self._line = "json", b""
+                self._on_state("firmware: voicefront (JSON lines)")
+            if self.mode == "json":
+                self._feed_json(data)
+            else:
+                for msg_type, msg_id, payload in self.parser.feed(data):
+                    self._handle(msg_type, msg_id, payload)
+
+    def _feed_json(self, data: bytes) -> None:
+        self._line += data
+        *lines, self._line = self._line.split(b"\n")
+        if len(self._line) > 8192:  # no newline in sight: garbage
+            self._line = b""
+        for raw in lines:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                event = json.loads(raw.decode("utf-8", "replace"))
+            except json.JSONDecodeError:
+                self.parser.dropped_bytes += len(raw)
+                continue
+            if not isinstance(event, dict):
+                continue
+            if event.get("type") == "hello":
+                self.handshakes += 1
+            if event.get("type") == "reply" and "id" in event:
+                with self._pending_lock:
+                    waiters = list(self._pending.get(f"id:{event['id']}", []))
+                for pending in waiters:
+                    pending.reply = event
+                    pending.done.set()
+            self._on_event(event)
 
     def _handle(self, msg_type: int, msg_id: int, payload: bytes) -> None:
         if msg_type == proto.T_CONFIRM:

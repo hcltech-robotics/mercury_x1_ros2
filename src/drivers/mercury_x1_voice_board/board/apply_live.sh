@@ -10,7 +10,8 @@ MASK=$(sed -n 's/^[[:space:]]*echo \(0x[0-9a-f]*\) > .*uac1.usb0\/p_chmask$/\1/p
 [ -n "$MASK" ] || MASK=1
 WATCH=$(pidof watch)
 [ -n "$WATCH" ] && kill -STOP $WATCH       # the demo watchdog would restart demo mid-way
-killall rawmic.sh arecord aplay demo 2>/dev/null
+killall voicefront.sh rawmic.sh 2>/dev/null
+killall voicefront arecord aplay demo 2>/dev/null
 sleep 1
 UDC=$(cat $G/UDC)
 [ -n "$UDC" ] || UDC=$(ls /sys/class/udc)
@@ -22,5 +23,6 @@ echo $UDC > $G/UDC
 echo "gadget rebound: p_chmask=$(cat $F/p_chmask) udc=$(cat $G/UDC)"
 sleep 1
 [ -x /data/build/rawmic.sh ] && grep -q rawmic /etc/rc.local && start-stop-daemon -S -b -x /data/build/rawmic.sh && echo "rawmic started"
-[ -n "$WATCH" ] && kill -CONT $WATCH && echo "watchdog resumed (restarts demo)"
+[ -x /data/build/voicefront/voicefront.sh ] && grep -q voicefront /etc/rc.local && start-stop-daemon -S -b -x /data/build/voicefront/voicefront.sh && echo "voicefront started"
+[ -n "$WATCH" ] && kill -CONT $WATCH && echo "watchdog resumed (restarts demo unless voicefront disabled it)"
 echo done

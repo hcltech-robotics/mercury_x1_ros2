@@ -1,14 +1,21 @@
 # mercury_x1_voice_board
 
 Driver for the Mercury X1 head voice board: an iFlytek AIUI far-field mic-array board (Allwinner R818,
-firmware "XFM-DP-V0.0.18", USB `2207:0001`). The board runs wake word, direction of arrival, beamforming and
-noise suppression itself and gives the Orin:
+firmware "XFM-DP-V0.0.18", USB `2207:0001`). Since 2026-11-04 the board runs **our own front end,
+[`voicefront/`](voicefront/README.md)**, instead of the stock iFlytek demo. It provides an English wake word,
+direction of arrival, echo cancellation, beamforming and noise suppression (`scripts/install_voicefront.sh`,
+`... revert`). The board gives the Orin:
 
-- **6-channel 16 kHz USB audio** as a plain USB sound card (4 raw mics, speaker echo reference, the board's processed
-  beam; ALSA names `mx1_array` / `mx1_mics` / `mx1_beam`, set up by `scripts/install_voice_board_audio.sh` from
-  `board/` + `alsa/`; see the main README "Multi-channel USB audio"). Not touched by this node;
-- a **control UART** (WCH CH343 `1a86:55d4`, serial `5A37020735`, `/dev/ttyACM3`) with iFlytek's AIUI frame
-  protocol — this node.
+- **6-channel 16 kHz USB audio** as a plain USB sound card: the 4 raw mics, the speaker echo reference and the
+  processed beam. The ALSA names are `mx1_array`, `mx1_mics` and `mx1_beam`, set up by
+  `scripts/install_voice_board_audio.sh` from `board/` and `alsa/` (see the main README "Multi-channel USB
+  audio"). This node does not touch the audio;
+- a **control UART** (WCH CH343 `1a86:55d4`, serial `5A37020735`, `/dev/ttyACM3`), which this node uses. It
+  detects the firmware from what arrives: voicefront's JSON lines, or the stock demo's AIUI frames.
+
+With voicefront, `set_beam` takes a steering angle in degrees (-1 = follow the talker), `set_wake_word` takes
+plain English (";" separates several) with an optional threshold between 0 and 1, and `mic_vol` / `ref_vol` set
+the AC107 input gains (0 to 31).
 
 The speaker is a separate C-Media USB card on the Orin; the board does not drive it.
 

@@ -79,16 +79,16 @@ MAPPING_HEAD = {"head": 0.0, "eye": -5.7}
 # (the arms swing with it; cable wrap untested beyond that)
 WAIST_LIMIT_DEG = 90.0
 BODY_JOINTS = ("body", "head", "eye")     # waist, neck, jaw: positions for the pages
-# head voice board (mercury_x1_voice_board): wake words to pick on the kiosk Voice tab. The board's engine is
-# Mandarin-only; English words must come from its built-in lexicon (voice_board english_lexicon.txt), several
-# keywords can be loaded at once (";"), each wake event says which one fired.
+# head voice board (mercury_x1_voice_board): wake words to pick on the kiosk Voice tab, ";" = several at once,
+# each wake event says which one fired. With voicefront on the board (ours, English, plain text) the first group
+# applies; the stock demo is Mandarin-only (English only via its built-in lexicon, voice_board english_lexicon.txt).
+# The threshold buttons only matter for the stock demo.
 VOICE_BOARD_CONF = os.path.expanduser("~/.config/mercury_x1/voice_board.json")
 WAKE_PRESETS = [
-    {"keyword": "xiao3 wei1 xiao3 wei1", "label": "小微小微 (factory, Mandarin)"},
-    {"keyword": "hello computer", "label": "hello computer"},
-    {"keyword": "hey memory", "label": "hey memory"},
-    {"keyword": "hey merry carry", "label": "hey merry carry"},
-    {"keyword": "hello computer;hey memory;hey merry carry", "label": "all three English"},
+    {"keyword": "hey mercury", "label": "hey mercury (voicefront)"},
+    {"keyword": "hey mercury;hello mercury;ok mercury", "label": "hey / hello / ok mercury (voicefront)"},
+    {"keyword": "xiao3 wei1 xiao3 wei1", "label": "小微小微 (stock demo, Mandarin)"},
+    {"keyword": "hello computer;hey memory;hey merry carry", "label": "stock demo English lexicon words"},
 ]
 VIEWER_CACHE = os.path.expanduser(f"~/.cache/mercury_x1_web/rerun-web-viewer/{VIEWER_VERSION}")
 
@@ -521,7 +521,8 @@ class WebNode(Node):
 
     def _on_wake(self, m: VoiceWake) -> None:
         self.vb_wakes = ([{"t": time.time(), "keyword": m.keyword, "angle": None if math.isnan(m.angle_deg) else
-                           round(m.angle_deg, 1), "beam": m.beam, "score": None if math.isnan(m.score) else round(m.score)}]
+                           round(m.angle_deg, 1), "beam": m.beam,
+                           "score": None if math.isnan(m.score) else (round(m.score, 2) if m.score < 1.5 else round(m.score))}]
                          + self.vb_wakes)[:30]
 
     def set_wake_word(self, keyword: str, threshold: int) -> None:
@@ -533,7 +534,7 @@ class WebNode(Node):
             return
         n = len(keyword.split(";"))
         req = SetWakeWord.Request(keyword=keyword, threshold=";".join([str(threshold)] * n), reload=True)
-        self.vb_job = {"busy": True, "message": f"compiling '{keyword}' on the board…", "t": time.time()}
+        self.vb_job = {"busy": True, "message": f"loading '{keyword}' on the board…", "t": time.time()}
 
         def done(fut) -> None:
             r = fut.result()

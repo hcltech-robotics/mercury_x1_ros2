@@ -69,5 +69,7 @@ sleep 1
 
 # Mercury X1: raw mic channels -> USB (stock arecord/aplay, see /data/build/rawmic.sh)
 [ -x /data/build/rawmic.sh ] && start-stop-daemon -S -b -x /data/build/rawmic.sh
+# Mercury X1: our mic-array front end instead of the demo (scripts/install_voicefront.sh; absent = stock demo)
+[ -x /data/build/voicefront/voicefront.sh ] && start-stop-daemon -S -b -x /data/build/voicefront/voicefront.sh
 
 exit 0

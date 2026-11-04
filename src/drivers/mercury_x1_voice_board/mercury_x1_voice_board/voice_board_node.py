@@ -1,8 +1,10 @@
 """ROS 2 driver for the Mercury X1 head voice board (iFlytek AIUI mic-array board, USB 2207:0001).
 
-The board does wake word + direction of arrival + beamforming/noise suppression on board. Its processed
-16 kHz mono audio is a plain USB microphone (ALSA card XFMDPV0018) and is NOT handled here; this node
-talks to the board's control UART (CH343 USB-serial, /dev/xf_mic via udev).
+The board does wake word + direction of arrival + beamforming/noise suppression on board. Its audio is plain
+USB audio (ALSA card XFMDPV0018, 6 channels) and is NOT handled here; this node talks to the board's control
+UART (CH343 USB-serial, /dev/xf_mic via udev). Two board firmwares are understood (detected automatically):
+  voicefront (ours, ../voicefront): English wake word, direction 0..180 deg, JSON lines; set_beam takes an angle
+  stock iFlytek demo: Mandarin wake word, AIUI frames; set_beam takes a beam index
 
 Topics:   ~/wake (mercury_x1_msgs/VoiceWake), ~/state (VoiceBoardState), ~/events (std_msgs/String, every
           board event as JSON)
@@ -29,6 +31,8 @@ from .serial_link import VoiceBoardLink, event_text
 # re-init trigger after a wake word change: writing user_cfg.ini makes the board app reload everything
 RELOAD_SETTING = {"type": "setting", "content": [{"group": "vtn", "key": "log", "value": "0"}]}
 VOLUME_LIMITS = {"mic_vol": 30, "ref_vol": 30, "output_vol": 7}
+# voicefront: mic_vol / ref_vol are the AC107 PGA gains (0..31) of the mics / the speaker reference
+VF_GAIN_KEYS = {"mic_vol": "mic", "ref_vol": "ref"}
 
 
 class VoiceBoardNode(Node):
@@ -78,12 +82,17 @@ class VoiceBoardNode(Node):
             self._configure.set()
         elif text == "closed":
             self.get_logger().warn(f"{self.port} closed")
+        elif text.startswith("firmware:"):
+            self.get_logger().info(text)
         elif text != self.last_error:
             self.last_error = text
             self.get_logger().warn(text, throttle_duration_sec=30.0)
 
     def _on_event(self, event: dict) -> None:
         self.event_pub.publish(String(data=event_text(event)))
+        if self.link.mode == "json":
+            self._on_vf_event(event)
+            return
         kind = event.get("type")
         if kind in ("version", "started"):
             content = str(event.get("content", ""))
@@ -96,6 +105,23 @@ class VoiceBoardNode(Node):
         if wake is not None:
             self._publish_wake(wake)
         elif kind not in ("manual_wakeup", "mic_vol", "ref_vol", "output_vol", "setting", "wakeup_keywords"):
+            self.get_logger().info(f"board event: {event_text(event)}")
+
+    def _on_vf_event(self, event: dict) -> None:
+        kind = event.get("type")
+        if kind == "hello":
+            self.firmware_version = f"voicefront {event.get('version', '?')}"
+            self.get_logger().info(f"board: {self.firmware_version}, keywords {event.get('keywords')}")
+            self._configure.set()
+        elif kind == "wake":
+            angle = event.get("angle")
+            wake = proto.WakeInfo(
+                keyword=str(event.get("keyword", "")),
+                angle_deg=float(angle) if isinstance(angle, (int, float)) else float("nan"),
+                beam=-1, score=float(event.get("conf", 0.0)),
+                start_ms=int(float(event.get("t", -1)) * 1000), raw=event_text(event))
+            self._publish_wake(wake)
+        elif kind not in ("doa", "vad", "status", "reply"):
             self.get_logger().info(f"board event: {event_text(event)}")
 
     def _publish_wake(self, wake: proto.WakeInfo) -> None:
@@ -131,6 +157,12 @@ class VoiceBoardNode(Node):
             self._configure.wait()
             self._configure.clear()
             time.sleep(0.5)  # let the first handshakes be confirmed
+            deadline = time.monotonic() + 10.0  # voicefront sends status every 5 s, the demo handshakes ~2/s
+            while self.link.mode == "unknown" and time.monotonic() < deadline and rclpy.ok():
+                time.sleep(0.1)
+            if self.link.mode == "json":
+                self._configure_vf()
+                continue
             if self._request({"type": "version"}) is None:
                 self.get_logger().warn("no reply to version request")
             for name, limit in VOLUME_LIMITS.items():
@@ -140,7 +172,27 @@ class VoiceBoardNode(Node):
             if self.startup["beam"] >= 0:
                 self._request({"type": "manual_wakeup", "content": {"beam": self.startup["beam"]}})
 
+    def _configure_vf(self) -> None:
+        reply = self._request({"cmd": "ping"})
+        if reply is None:
+            self.get_logger().warn("no reply to ping")
+        elif reply.get("version"):
+            self.firmware_version = f"voicefront {reply['version']}"
+        for name in VF_GAIN_KEYS:
+            if 0 <= self.startup[name] <= 31:
+                self._apply_volume(name, self.startup[name])
+        if self.startup["beam"] >= 0:
+            self._request({"cmd": "set_beam", "mode": "fixed", "angle": float(self.startup["beam"])})
+
     def _apply_volume(self, name: str, value: int) -> bool:
+        if self.link.mode == "json":
+            if name not in VF_GAIN_KEYS:
+                return False
+            reply = self._request({"cmd": "set_gain", VF_GAIN_KEYS[name]: value})
+            ok = reply is not None and reply.get("ok") is True
+            if not ok:
+                self.get_logger().warn(f"{name}={value}: {reply}")
+            return ok
         reply = self._request({"type": name, "content": {"volume": value}})
         ok = reply is not None and reply.get("code") == 0
         if not ok:
@@ -149,13 +201,14 @@ class VoiceBoardNode(Node):
 
     def _heartbeat(self) -> None:
         if self.link.is_open and time.monotonic() - self.link.last_rx > self.heartbeat_period:
-            self._request({"type": "version"})
+            self._request({"cmd": "ping"} if self.link.mode == "json" else {"type": "version"})
 
     def _on_params(self, params) -> SetParametersResult:
         for param in params:
             if param.name in VOLUME_LIMITS:
                 value = int(param.value)
-                if not -1 <= value <= VOLUME_LIMITS[param.name]:
+                limit = 31 if self.link.mode == "json" and param.name in VF_GAIN_KEYS else VOLUME_LIMITS[param.name]
+                if not -1 <= value <= limit:
                     return SetParametersResult(successful=False,
                                                reason=f"{param.name} must be 0..{VOLUME_LIMITS[param.name]}")
                 self.startup[param.name] = value
@@ -176,12 +229,19 @@ class VoiceBoardNode(Node):
         except json.JSONDecodeError as exc:
             res.success, res.code, res.content = False, -1, f"invalid JSON: {exc}"
             return res
-        if not isinstance(message, dict) or "type" not in message:
-            res.success, res.code, res.content = False, -1, 'need a JSON object with "type"'
+        key = "cmd" if self.link.mode == "json" else "type"
+        if not isinstance(message, dict) or key not in message:
+            res.success, res.code, res.content = False, -1, f'need a JSON object with "{key}"'
             return res
         reply = self._request(message, req.timeout)
         if reply is None:
             res.success, res.code, res.content = False, -1, "no reply from the board"
+            return res
+        if self.link.mode == "json":
+            res.success = reply.get("ok") is True
+            res.code = 0 if res.success else -1
+            res.content = str(reply.get("error", ""))
+            res.reply = event_text(reply)
             return res
         res.code = int(reply.get("code", 0)) if isinstance(reply.get("code", 0), int) else -1
         res.content = str(reply.get("content", ""))
@@ -194,6 +254,18 @@ class VoiceBoardNode(Node):
         if not keyword:
             res.success, res.message = False, "empty keyword"
             return res
+        if self.link.mode == "json":  # plain English, ";"-separated; threshold optional (0..1, lower = easier)
+            msg = {"cmd": "set_keywords", "keywords": [k.strip() for k in keyword.split(";") if k.strip()]}
+            try:  # AIUI-style thresholds (300..3000, e.g. from the kiosk presets) mean nothing here: ignored
+                t = float(req.threshold.split(";")[0])
+                if 0.0 < t < 1.0:
+                    msg["threshold"] = t
+            except ValueError:
+                pass
+            reply = self._request(msg, self.reply_timeout)
+            res.success = reply is not None and reply.get("ok") is True
+            res.message = event_text(reply) if reply else "no reply from the board"
+            return res
         threshold = req.threshold.strip() or ";".join(["900"] * len(keyword.split(";")))
         reply = self._request({"type": "wakeup_keywords",
                                "content": {"keyword": keyword, "threshold": threshold}}, self.keyword_timeout)
@@ -205,6 +277,13 @@ class VoiceBoardNode(Node):
         return res
 
     def _srv_set_beam(self, req, res):
+        if self.link.mode == "json":  # beam = steering angle in degrees (0..180); -1 = follow the talker
+            msg = {"cmd": "set_beam", "mode": "auto"} if req.beam < 0 else \
+                {"cmd": "set_beam", "mode": "fixed", "angle": float(req.beam)}
+            reply = self._request(msg)
+            res.success = reply is not None and reply.get("ok") is True
+            res.message = event_text(reply) if reply else "no reply from the board"
+            return res
         reply = self._request({"type": "manual_wakeup", "content": {"beam": int(req.beam)}})
         res.success = reply is not None and reply.get("code") == 0
         res.message = str(reply.get("content")) if reply else "no reply from the board"

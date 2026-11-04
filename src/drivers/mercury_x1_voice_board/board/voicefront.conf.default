@@ -1,0 +1,6 @@
+# /data/build/voicefront/voicefront.conf on the voice board (sourced by voicefront.sh; restart to apply:
+#   killall voicefront   -> the runner starts it again within a second)
+MIC_GAIN=4      # AC107 PGA of the 4 mics, 0..31
+REF_GAIN=20     # PGA of the speaker echo reference, 0..31
+# extra voicefront options, e.g. --keywords "hey mercury;ok mercury" --kw-score 2.0 --beamformer mvdr
+VF_ARGS=""
