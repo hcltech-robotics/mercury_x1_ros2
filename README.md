@@ -79,8 +79,11 @@ serves the matching `@rerun-io/web-viewer` (`VIEWER_VERSION` in `web_server.py`,
 Kiosk: `sudo apt install surf matchbox-window-manager xinit`. Speech: `server/robot_speech/setup.sh` (own venv;
 onnxruntime-gpu for CUDA 13 from the Jetson AI Lab `sbsa/cu130` index - it runs on the Orin).
 
-Power: the Orin NX runs in the **15 W** mode (`nvpmodel -m 2`). At MAXN a full build browned the carrier out
-(PMC `reset_reason` SYS_RESET_N) - the robot's supply was sized for the Orin Nano.
+Power: the Orin NX runs the **25 W** profile (`nvpmodel -m 3`: 8 cores at 1.5 GHz; the 15 W profile has only 4 cores
+online). Switching the arms' servo power dips the supply enough to reset the module (PMC `reset_reason` SYS_RESET_N,
+seen at MAXN, 25 W and 15 W, with and without the 3 s stagger of `power_switch_stagger_s`), so the drivers no longer
+power the arms at start (`power_on_start: false`): switch them on from the page / kiosk once the stack is up. A
+hardware fix (flyback / TVS on the arm power relay, bulk capacitance for the Orin) is pending.
 
 ## Web UIs
 
