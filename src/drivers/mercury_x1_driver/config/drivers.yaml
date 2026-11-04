@@ -21,8 +21,9 @@ mercury_upper_body:
   ros__parameters:
     left_port: /dev/left_arm
     right_port: /dev/right_arm
-    power_on_start: false      # powering the arms resets the Orin (supply dip): switch them on from the page / kiosk
-    power_on_delay_s: 20.0     # ... this long after the link opened: past the boot load (switching = supply dip)
+    power_on_start: true       # enable servos at start (power_on_delay_s later; arms hold their pose, nothing moves)
+    power_on_delay_s: 2.0      # ... this long after the link opened - while the Jetson is still idle (start.sh waits
+                               # for the arms before SLAM / Nav2): switching the servo power dips the 24 V bus
     power_switch_stagger_s: 3.0   # never switch the two arms' power within this interval (on or off, any source)
     poll_body_coords: true
     default_speed: 30

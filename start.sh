@@ -61,6 +61,16 @@ else
   "$HERE/scripts/mx1_up.sh"
 fi
 wait_for 90 "the control page" curl -sf -m 2 "$PAGE/config"
+# the arms are powered right after the driver opens them (drivers.yaml power_on_delay_s / power_switch_stagger_s):
+# let that happen while the Jetson is still idle - switching the servo power on top of SLAM / nvblox / Nav2 starting
+# dipped the 24 V bus enough to reset the module (2026-11-03). Waits at most 40 s (arms off / E-stop: carry on).
+arms_powered() {
+  for a in left right; do
+    ros2 topic echo --once --field powered "/${a}_arm/state" 2>/dev/null | grep -q true || return 1
+  done
+}
+source "$HERE/scripts/ros_env.sh"
+wait_for 40 "the arms to power up" arms_powered || true
 
 if [ "$SLAM" = true ]; then
   if pgrep -x rtabmap >/dev/null; then
