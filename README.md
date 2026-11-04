@@ -1,6 +1,7 @@
 # mercury_x1_ros2
 
-ROS 2 Humble stack for the Elephant Robotics **Mercury X1** (wheeled dual-arm humanoid, Jetson Orin Nano):
+ROS 2 Jazzy stack for the Elephant Robotics **Mercury X1** (wheeled dual-arm humanoid, Jetson Orin NX 16 GB on
+JetPack 7.2 - the `humble` branch is the earlier Orin Nano / JetPack 6 / Humble version):
 C++ hardware drivers, RTAB-Map SLAM, Nav2, MoveIt for the arms, on-robot speech, and two web UIs (a Rerun-based
 control page and a touch kiosk on the head display).
 
@@ -59,10 +60,26 @@ saved in `~/.config/mercury_x1/ros_network` and restarts the stack (`scripts/mx1
 resuming as they were. The page and viewer use HTTP / gRPC, so they work in both modes.
 
 ### Robot-side dependencies
-pip (user site): `rerun-sdk==0.39.0 aiohttp "pandas>=2.2,<3"` (the apt pandas breaks under numpy 2). Rerun 0.39 is
-the newest release that supports Python 3.10 (Humble's rclpy); 0.40+ needs Python 3.11. The page serves the matching
-`@rerun-io/web-viewer` (`VIEWER_VERSION` in `web_server.py`, fetched once from jsDelivr).
-Kiosk: `sudo apt install surf matchbox-window-manager`. Speech: `server/robot_speech/setup.sh` (own venv).
+Platform: JetPack 7.2.1 (L4T R39.2.1, Ubuntu 24.04, CUDA 13.2), ROS 2 Jazzy from apt, Isaac ROS 4.6 from
+`deb [signed-by=/usr/share/keyrings/nvidia-isaac-ros.gpg] https://isaac.download.nvidia.com/isaac-ros/release-4.6 noble-jetpack main`
+(`ros-jazzy-isaac-ros-visual-slam ros-jazzy-nvblox-ros ros-jazzy-nvblox-nav2 ros-jazzy-nvblox-msgs` - not the
+`isaac-ros-nvblox` metapackage, it drags in triton-server, which does not install on Jetson). ROS packages:
+`ros-jazzy-desktop navigation2 nav2-bringup nav2-mppi-controller rtabmap-ros slam-toolbox moveit moveit-planners-ompl
+pick-ik usb-cam joy image-transport-plugins depthimage-to-laserscan robot-localization cv-bridge pcl-ros backward-ros
+ackermann-msgs xacro joint-state-publisher-gui`; build deps `libyuv-dev libpcap-dev libpcl-dev libgflags-dev
+libgoogle-glog-dev libdw-dev nlohmann-json3-dev libbluetooth-dev libeigen3-dev` (`rosdep install --from-paths src
+--ignore-src --rosdistro jazzy` covers the rest). Build with `PATH=/usr/local/cuda/bin:$PATH` and
+`--cmake-args -DUSE_NV_HW_DECODER=ON` (Jetson JPEG decoder in orbbec_camera; on JetPack 7 it links CUDA nvJPEG +
+libnvmm_jpeg instead of the old Tegra libnvjpeg).
+
+pip (user site, `--break-system-packages`): `"numpy>=2,<2.4" scipy trimesh "rerun-sdk==0.39.0" "pandas>=2.2,<3"`
+(rerun's pyarrow needs numpy 2; the apt scipy/pandas are built against numpy 1, so they come from pip too). The page
+serves the matching `@rerun-io/web-viewer` (`VIEWER_VERSION` in `web_server.py`, fetched once from jsDelivr).
+Kiosk: `sudo apt install surf matchbox-window-manager xinit`. Speech: `server/robot_speech/setup.sh` (own venv;
+onnxruntime-gpu for CUDA 13 from the Jetson AI Lab `sbsa/cu130` index - it runs on the Orin).
+
+Power: the Orin NX runs in the **15 W** mode (`nvpmodel -m 2`). At MAXN a full build browned the carrier out
+(PMC `reset_reason` SYS_RESET_N) - the robot's supply was sized for the Orin Nano.
 
 ## Web UIs
 
