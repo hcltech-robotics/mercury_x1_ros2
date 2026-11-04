@@ -43,9 +43,9 @@
   .sys .val { text-align: right; white-space: nowrap; }
   .bar { height: 8px; background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
   .bar i { display: block; height: 100%; width: 0; background: var(--ok); transition: width .4s, background .4s; }
-  .cores { display: grid; grid-template-columns: repeat(auto-fit, minmax(26px, 1fr)); gap: 4px; align-items: end; }
+  .cores { display: flex; flex-wrap: nowrap; gap: 4px; align-items: flex-end; justify-content: space-between; }   /* one row, 8 cores on the Orin NX */
   .core { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10px; color: var(--muted); }
-  .core .col { width: 14px; height: 30px; background: var(--panel2); border: 1px solid var(--line); border-radius: 3px;
+  .core .col { width: 12px; height: 30px; background: var(--panel2); border: 1px solid var(--line); border-radius: 3px;
     display: flex; align-items: flex-end; overflow: hidden; }
   .core .col i { display: block; width: 100%; height: 0; background: var(--ok); transition: height .4s, background .4s; }
   .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; color: var(--text); font-size: 12px; }
