@@ -39,6 +39,14 @@ Results: `metrics.txt`.
 Version pins that mattered: torch / torchaudio 2.8.0 (later releases dropped `torchaudio.load` / `info`),
 SciPy < 1.15 (for `acoustics`), `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` for the checkpoints.
 
+## Round 3 and the sweep (2026-11-05)
+
+`hey_mercury_r3.yaml` / `round3.sh` add the robot's own acoustics (`build_r3_assets.py`: measured monitor-to-mic
+responses, fan noise, real far-field positives); `sweep_r3.sh` retrains with other sizes / false-wake targets.
+Recall only rose together with false wakes (`metrics.txt`), so the deployed model is sweep D (128 units, a loose
+false-wake target) at a low threshold, and the Orin confirms each wake with speech recognition instead
+(`mercury_x1_web/wake_verify.py`). `eval_r3.py` scores a model on the far-field recordings.
+
 ## Next, if it is too deaf
 
 Add real far-field positives: people saying "hey mercury" 1 to 5 m from the robot, recorded on the board

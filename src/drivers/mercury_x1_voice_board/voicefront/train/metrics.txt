@@ -103,3 +103,10 @@ B r3 feats, 32, w150 fp1.0    10/28 /  12/28        0/12         53/56       0.9
 C r2 feats, 32, w150 fp1.0    11/28 /  16/28        0/12         54/56       1.12 / 2.90
 D r3 feats, 128, w150 fp1.0   14/28 /  20/28        1/12         54/56       1.96 / 3.18
 Recall only rises with false wakes (one trade-off curve); the robot acoustics did not move the curve.
+
+== Deployed 2026-11-05: sweep D (128 units, w150, fp 1.0) at threshold 0.3 on the board + wake confirmation on the
+   Orin (mercury_x1_web/wake_verify.py: Parakeet on raw mic 0, "mercury"-like text). Live, 56 far-field wake clips
+   (28 unseen voices) + 12 confusables through a monitor ~2 m away:
+   board candidates 49/56 (confusables 4/12) -> confirmed 45/56; confusables confirmed 2/12, both sentences that
+   contain the word mercury ("Mercury is the closest planet", "mercury levels are fine"); Mercedes/Murphy/Mark: 0.
+   Earlier the same day with r2 alone at 0.5: 19-23/56.

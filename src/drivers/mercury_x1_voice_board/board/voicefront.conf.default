@@ -6,6 +6,7 @@ KWS_GAIN_DB=20  # boost on the wake-word input: at MIC_GAIN 4 a talker 2 m away 
 # Wake-word engine: the trained openWakeWord model (model/hey_mercury.onnx) when it is installed, else the
 # open-vocabulary sherpa KWS. WAKE_MODEL=/data/build/voicefront/model/other.onnx picks another trained phrase.
 WAKE_MODEL=""
-KW_THRESHOLD=""  # empty = engine default (openWakeWord 0.5, sherpa 0.25); lower = more sensitive
+KW_THRESHOLD="0.3"  # openWakeWord: low on purpose, the Orin confirms each wake with speech recognition
+                    # (mercury_x1_web wake_verify.py); empty = engine default (openWakeWord 0.5, sherpa 0.25)
 # extra voicefront options, e.g. --keywords "hey mercury;ok mercury" (sherpa only) --beamformer mvdr
 VF_ARGS=""
