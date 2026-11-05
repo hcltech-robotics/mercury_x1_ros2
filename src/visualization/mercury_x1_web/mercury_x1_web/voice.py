@@ -37,7 +37,7 @@ DEFAULT_SETTINGS = {"volume": 46, "voice": "af_heart", "speed": 1.0,
                     "drive": False,       # may drive to named places when asked (Nav2); off until tested
                     "gestures": False,    # may move waist / neck / arms for gestures; off until tested
                     "llm": "auto",        # auto: lab server, robot's own model when it does not answer | lab | robot
-                    "wake_listen": True}  # "hey mercury" starts listening (if off), a quiet minute ends it
+                    "wake_listen": True}  # "hey mercury" takes one question (when not already listening)
 TEST_PHRASE = "Hello, I am Mercury. This is how loud I speak."
 SYSTEM_PROMPT = (
     "You are Mercury, a friendly wheeled humanoid robot with two arms, made by Elephant Robotics and working in the "
@@ -59,7 +59,9 @@ LOCAL_RULES = (
 MAX_TOOL_ROUNDS = 3
 HISTORY_TURNS = 8          # user + assistant pairs kept as context
 IDLE_RESET_S = 180         # forget the conversation after this long without speech
-WAKE_IDLE_OFF_S = 45       # a conversation started by the wake word stops listening after this long without speech
+WAKE_ASK_S = 8.0           # after "hey mercury": back to waiting for the wake word if no question starts within this
+# the wake word itself as speech-to-text writes it ("Hey, Mark Jury", "Pay marks"): stripped from the start of a question
+WAKE_ECHO = re.compile(r"^\W*(?:hey|hay|hi|hello|ok(?:ay)?|pay)\W+(?:mercur\w*|merc\w*|mark\W*jury|marks?)\b\W*", re.I)
 UNMUTE_TAIL_S = 0.35       # keep the mic muted this long after the speaker stops
 LOCAL_SPEECH = "http://127.0.0.1:8097"   # server/robot_speech: Parakeet STT + Kokoro TTS
 LOCAL_LLM = "http://127.0.0.1:8091/v1/chat/completions"   # server/robot_llm: llama-server on the Jetson
@@ -101,7 +103,9 @@ class VoiceChat:
         self.actions = actions        # web_server App: voice_places / voice_go / voice_stop / voice_status / voice_gesture
         self.kb = Knowledge()
         self.enabled = False
-        self.state = "off"         # off | connecting | listening | hearing | thinking | speaking | error
+        self.wake_turn = False     # listening for the one question after "hey mercury" (not the Listen switch)
+        self._wake_t = 0.0         # wake word or last speech activity during a wake turn
+        self.state = "off"        # off | connecting | listening | hearing | thinking | speaking | error
         self.message = ""
         self.transcript: list[dict] = []      # {"role": "user"|"robot"|"note", "text", "t"}
         self.history: list[dict] = []         # chat messages for the model
@@ -203,10 +207,13 @@ class VoiceChat:
         self.on_change()
 
     # ---- control ---------------------------------------------------------------------------
-    async def enable(self, on: bool) -> None:
+    async def enable(self, on: bool, wake_turn: bool = False) -> None:
+        if on and self.enabled and not wake_turn:
+            self.wake_turn = False          # the Listen switch turns a wake-word question into a conversation
         if on == self.enabled:
             return
         self.enabled = on
+        self.wake_turn = on and wake_turn
         if on:
             self._tasks = [asyncio.create_task(self._run())]
         else:
@@ -218,11 +225,14 @@ class VoiceChat:
             self._set("off")
 
     async def wake(self) -> None:
-        """the wake word was heard: chime, and listen if voice chat is off (auto-off after a quiet spell)"""
+        """the wake word was heard: chime and take one question, then wait for the wake word again.
+        Ignored while the Listen switch keeps a conversation open (every phrase is answered then)."""
         if self.enabled:
+            if self.wake_turn:
+                self._wake_t = time.time()  # said again while waiting for the question: wait a bit longer
             return
-        self.last_speech = time.time()
-        await self.enable(True)
+        self._wake_t = time.time()
+        await self.enable(True, wake_turn=True)
         self._say("note", "heard 'hey mercury' - listening")
         asyncio.create_task(self._chime())
         self._tasks.append(asyncio.create_task(self._wake_watch()))
@@ -246,13 +256,19 @@ class VoiceChat:
             await self._mute(False)
 
     async def _wake_watch(self) -> None:
-        while self.enabled:
-            await asyncio.sleep(2.0)
-            busy = self.state in ("thinking", "speaking", "hearing")
-            if not busy and time.time() - self.last_speech > WAKE_IDLE_OFF_S:
-                self._say("note", "quiet for a while - stopped listening (say 'hey mercury' again)")
+        """no question after the wake word: stop listening"""
+        while self.enabled and self.wake_turn:
+            await asyncio.sleep(0.5)
+            busy = self.state in ("thinking", "speaking", "hearing") or (self._reply_task and not self._reply_task.done())
+            if not busy and time.time() - self._wake_t > WAKE_ASK_S:
+                self._say("note", "no question heard - waiting for 'hey mercury'")
                 asyncio.create_task(self.enable(False))
                 return
+
+    async def _end_wake_turn(self) -> None:
+        if self.enabled and self.wake_turn:
+            self._say("note", "waiting for 'hey mercury'")
+            await self.enable(False)
 
     def clear(self) -> None:
         self.transcript, self.history = [], []
@@ -311,6 +327,8 @@ class VoiceChat:
                     continue
                 ev = json.loads(msg.data)
                 kind = ev.get("type")
+                if kind in ("speech_start", "speech_end"):
+                    self._wake_t = time.time()      # a question is under way: the wake turn waits for its text
                 if kind == "speech_start" and self.state == "listening":
                     self._set("hearing")
                 elif kind == "speech_end" and self.state == "hearing":
@@ -343,6 +361,11 @@ class VoiceChat:
     async def _on_phrase(self, text: str, conf: dict) -> None:
         if self._reply_task and not self._reply_task.done():
             return                          # still answering (mic is muted; should not happen)
+        question = WAKE_ECHO.sub("", text).strip()
+        if not re.search(r"\w", question):  # only the wake word (said again, or its tail): keep listening
+            self._wake_t = time.time()
+            return
+        text = question
         now = time.time()
         if now - self.last_speech > IDLE_RESET_S:
             self.history = []
@@ -438,6 +461,8 @@ class VoiceChat:
             self.last_speech = time.time()
             if self.enabled and self.state in ("thinking", "speaking"):
                 self._set("listening")
+            if self.wake_turn:      # one question per wake word (last statement: this task is done before it runs)
+                asyncio.create_task(self._end_wake_turn())
 
     # ---- language model: lab server or the robot's own -------------------------------------------
     _lab_down_until = 0.0

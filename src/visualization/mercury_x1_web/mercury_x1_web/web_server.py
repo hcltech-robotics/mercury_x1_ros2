@@ -777,7 +777,7 @@ class App:
 
     def _on_wake_word(self, angle_deg: float) -> None:
         """ROS thread: someone said the wake word from angle_deg -> look that way (gestures on only) and, if voice
-        chat is not listening, start a conversation (switch "wake_listen"; stops again after a quiet minute)"""
+        chat is not listening, take one question (switch "wake_listen"), then wait for the wake word again"""
         if self.voice.settings.get("gestures"):
             self.gestures.look_at(angle_deg, VB_FRONT_DEG, VB_ANGLE_SIGN)
         loop = getattr(self, "loop", None)
