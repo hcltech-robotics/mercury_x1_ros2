@@ -64,6 +64,7 @@ MX1_WS = os.environ.get("MX1_WS", os.path.expanduser("~/mercury_x1_ros2"))
 CONF_DIR = os.path.expanduser("~/.config/mercury_x1")
 ROS_NETWORK_FILE = os.path.join(CONF_DIR, "ros_network")   # read by scripts/ros_env.sh at stack start
 VIZ_LAYERS_FILE = os.path.join(CONF_DIR, "viz_layers.json")  # read by rerun_bridge at start
+PINS_FILE = "/run/mercury-pins/pins.json"   # 40-pin header state, written by mercury-pins (server/robot_pins), read-only
 # = rerun_bridge.NVBLOX_LAYERS + "camera" (camera frustums with the live image in the 3D view)
 NVBLOX_LAYERS = ("mesh", "esdf", "depth", "tsdf", "color", "occupancy", "slam3d", "camera")
 VOXEL_SHAPES = ("round", "square")   # voxel map look (rerun_bridge voxel_shape / voxel_size)
@@ -1091,6 +1092,12 @@ class App:
 
     async def api(self, req):
         action = req.match_info["action"]
+        if action == "pins":      # kiosk Debug tab (polled): header pin states; reading only, nothing is touched
+            try:
+                with open(PINS_FILE) as f:
+                    return web.json_response({"ok": True, **json.load(f)})
+            except (OSError, ValueError) as e:
+                return web.json_response({"ok": False, "error": f"pin monitor (mercury-pins) not running: {e}"[:160]})
         body = await req.json() if req.can_read_body else {}
         n = self.node
         loop = asyncio.get_running_loop()

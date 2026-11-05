@@ -89,6 +89,27 @@
   .msg.robot { align-self: flex-start; background: var(--panel2); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
   .msg.note { align-self: center; color: #ffb3bd; font-size: 15px; background: none; }
   .msg .t { display: block; color: var(--muted); font-size: 13px; margin-top: 4px; }
+  /* Debug: 40-pin header, physical layout (odd pins left, even right) */
+  #debug { grid-template-rows: auto 1fr; gap: 12px; }
+  #hdr-meta { color: var(--muted); font-size: 15px; display: flex; gap: 18px; flex-wrap: wrap; align-items: center; }
+  #hdr-meta i { display: inline-block; width: 12px; height: 12px; border-radius: 50%; vertical-align: -1px; margin-right: 5px; }
+  #hdr { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 10px; align-content: start; }
+  .hp { display: grid; grid-template-columns: 34px 16px 1fr; align-items: center; gap: 8px; min-height: 44px; padding: 4px 9px;
+        border: 1px solid var(--line); border-radius: 10px; background: var(--panel); min-width: 0; }
+  .hp.even { grid-template-columns: 1fr 16px 34px; text-align: right; }
+  .hp.even .n { order: 3; } .hp.even .d { order: 2; } .hp.even .tx { order: 1; }
+  .hp .n { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--muted); text-align: center; }
+  .hp .d { width: 16px; height: 16px; border-radius: 50%; background: var(--off); border: 2px solid #4b5160; }
+  .hp .d.hi { background: var(--ok); border-color: var(--ok); }
+  .hp .d.lo { background: #2a2e37; border-color: #5d6474; }
+  .hp .d.na { background: transparent; border-style: dashed; }
+  .hp .tx { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 1.2; }
+  .hp .tx b { font-size: 16px; } .hp .tx small { display: block; color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; }
+  .hp.power { background: #3a1d22; border-color: #5a2a31; } .hp.power .d { background: var(--bad); border-color: var(--bad); }
+  .hp.ground { background: #15171b; } .hp.ground .d { background: #000; border-color: #444; }
+  .hp.reserved { background: repeating-linear-gradient(135deg, #22252c 0 8px, #1a1d23 8px 16px); border-style: dashed; }
+  .hp.reserved .d { background: transparent; border-color: var(--warn); }
+  .hp.recent { border-color: var(--accent); box-shadow: 0 0 0 2px #4cc2ff55 inset; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px 18px; }
   .card h2 { margin: 0 0 12px; font-size: 14px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
   .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0; }
@@ -235,6 +256,7 @@
   <button data-tab="settings">Settings</button>
   <button data-tab="voicetab">Voice</button>
   <button data-tab="chat">Chat</button>
+  <button data-tab="debug">Debug</button>
 </div>
 
 <div class="page active" id="status">
@@ -318,6 +340,14 @@
   </div>
 </div>
 
+<div class="page" id="debug">
+  <div id="hdr-meta"><b style="color:var(--text)">40-pin header · read-only</b>
+    <span><i style="background:var(--ok)"></i>high</span><span><i style="background:#2a2e37;border:2px solid #5d6474"></i>low</span>
+    <span><i style="border:2px dashed #4b5160"></i>not a GPIO now</span><span><i style="border:2px solid var(--warn)"></i>reserved, not read</span>
+    <span id="hdr-t">—</span></div>
+  <div id="hdr"></div>
+</div>
+
 <div class="page" id="settings">
   <div class="card">
     <h2>Wi-Fi</h2>
@@ -379,6 +409,41 @@ for (const b of document.querySelectorAll("#tabs button")) b.onclick = () => {
   document.querySelectorAll("#tabs button").forEach((x) => x.classList.toggle("active", x === b));
   document.querySelectorAll(".page").forEach((p) => p.classList.toggle("active", p.id === b.dataset.tab));
 };
+
+// Debug: header pins from mercury-pins (registers read through /dev/mem, read-only), polled while shown
+let hdrTimer = null;
+function hdrCell(p) {
+  const odd = p.pin % 2 ? "" : " even", now = Date.now() / 1000;
+  let cls = p.kind, dot = "na", sub = "";
+  if (p.kind === "io") {
+    if (p.error) sub = esc(p.error);
+    else {
+      dot = p.level == null ? "na" : p.level ? "hi" : "lo";
+      sub = p.mode === "GPIO" ? `${esc(p.tegra)} · GPIO ${p.dir}${p.out != null ? ` (drives ${p.out})` : ""} · pull ${esc(p.pull)}`
+                              : `${esc(p.tegra)} · ${esc(p.mode)} function`;
+      if (p.changed_at && now - p.changed_at < 15) cls += " recent";
+      if (p.changes) sub += ` · ${p.changes} change${p.changes > 1 ? "s" : ""}${p.changed_at ? `, last ${Math.round(now - p.changed_at)} s ago` : ""}`;
+    }
+  } else if (p.kind === "reserved") sub = `${esc(p.tegra)} · ${esc(p.role)}`;
+  else sub = p.kind === "power" ? "supply" : "";
+  const name = p.kind === "reserved" ? "reserved" : esc(p.name);
+  return `<div class="hp ${cls}${odd}" title="${esc(sub)}"><span class="n">${p.pin}</span><span class="d ${dot}"></span>` +
+         `<span class="tx"><b>${name}</b>${sub ? `<small>${sub}</small>` : ""}</span></div>`;
+}
+async function pollHeader() {
+  try {
+    const j = await (await fetch("/api/pins", { method: "POST" })).json();
+    if (!j.ok) { $("#hdr-t").textContent = j.error; return; }
+    setHTML("#hdr", j.pins.map(hdrCell).join(""));
+    const age = Date.now() / 1000 - j.t;
+    $("#hdr-t").textContent = j.error ? `error: ${j.error}` : age > 3 ? `stale (${Math.round(age)} s old)` : `live · ${new Date(j.t * 1000).toLocaleTimeString()}`;
+  } catch (e) { $("#hdr-t").textContent = `no connection (${e})`; }
+}
+function headerTab(on) {
+  clearInterval(hdrTimer); hdrTimer = null;
+  if (on) { pollHeader(); hdrTimer = setInterval(pollHeader, 500); }
+}
+for (const b of document.querySelectorAll("#tabs button")) b.addEventListener("click", () => headerTab(b.dataset.tab === "debug"));
 
 // Status: right card shows ROS 2 nodes or GPU processes
 let stPane = "nodes-pane";

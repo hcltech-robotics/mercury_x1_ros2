@@ -1,0 +1,14 @@
+# Mercury X1: read-only live state of the Jetson 40-pin header for the kiosk Debug tab (/run/mercury-pins/pins.json).
+# Root only to read registers through /dev/mem (opened read-only); nothing is driven, exported or re-muxed.
+# Install / remove with server/robot_pins/setup.sh. Logs: journalctl -u mercury-pins
+[Unit]
+Description=Mercury X1 header pin monitor (read-only)
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/lib/mercury-pins/pins_service.py
+Restart=always
+RestartSec=5
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
