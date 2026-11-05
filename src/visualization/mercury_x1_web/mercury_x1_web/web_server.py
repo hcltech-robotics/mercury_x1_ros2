@@ -664,7 +664,7 @@ class App:
         node.wake_hook = self._on_wake_word
         self.voice = VoiceChat(on_change=self._voice_changed, actions=self)   # kiosk Chat tab; actions = voice tools
         vconf = load_voice_conf()
-        self.wake_verifier = WakeVerifier(vconf.get("VOICE_MIC", "default"), vconf.get("VOICE_SPEECH_URL", LOCAL_SPEECH))
+        self.wake_verifier = WakeVerifier(vconf.get("VOICE_SPEECH_URL", LOCAL_SPEECH))
         self.voice_version = 0
         node.waypoints_changed = self.save_waypoints
         os.makedirs(MAPS_DIR, exist_ok=True)

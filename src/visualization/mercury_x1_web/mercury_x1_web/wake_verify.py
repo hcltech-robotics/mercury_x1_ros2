@@ -1,22 +1,44 @@
 """Second look at a wake word. The voice board's small wake model fires easily (low threshold, good recall);
 before the robot reacts, the Orin's speech recognizer (mercury-speech, Parakeet) transcribes the last seconds
-of the board's beam and the wake counts only if it hears something like "mercury". The beam is read all the
-time into a short ring buffer (ALSA dsnoop: the voice chat's own capture can run alongside)."""
+of a raw mic and the wake counts only if it hears something like "mercury". The mic is read all the time into
+a short ring buffer (ALSA dsnoop: the voice chat's own capture can run alongside). Raw mic, not the board's
+beam: measured 2026-11-05, the mics reach the Orin ~0.6 s after the sound and the wake event ~0.05 s after the
+word ends, but the beam (board aplay -> USB gadget) 1.5 s later still, and that grows across board restarts."""
+import array
 import asyncio
 import difflib
+import os
 import re
 import time
 from collections import deque
 
 import aiohttp
 
-RING_S = 3.0        # audio kept
-TAIL_S = 0.3        # the wake event arrives as the word ends: wait for its tail (board -> USB audio latency)
-TAKE_S = 2.4        # audio sent to the recognizer
-CHUNK = 1600        # 50 ms of PCM16 at 16 kHz
+RING_S = 4.0        # audio kept
+TAIL_S = 1.0        # the wake event arrives as the word ends; the mic audio of that end ~0.6 s later
+TAKE_S = 3.0        # audio sent to the recognizer: covers mic-path lags of 0.3 .. 1.3 s
+FRAMES = 800        # 50 ms at 16 kHz per ring chunk
+CHUNK = FRAMES * 2  # ... as mono PCM16 bytes
+MIC_DEVICE, MIC_CHANNELS, MIC_CHANNEL, MIC_GAIN = "mx1_mics", 5, 0, 10.0   # raw mic 0 of the voice board, +20 dB
+DEBUG_FILE = "/tmp/mercury_wake_last.raw"          # written while /tmp/mercury_wake_last.raw.on exists (PCM16 16 kHz)
 # what Parakeet makes of "mercury" said from across the room
 HEARD = re.compile(r"merc(?:ur|er|ury|y)|murcur|mark\s*jury|mercuri|merkur|mccur", re.I)
 LIKE = 0.72         # or a word (or two words joined) this similar to "mercury"
+
+
+# consonant skeleton of "mercury" (m-r-k-r): what the recognizer makes of it from across the room ("Marcura",
+# "Marjorie", "markets", "margarine", "Ama Curie") keeps the m-r-k / m-r-j / m-k-r onset; "Mercedes" (m-r-s),
+# "Murphy" (m-r-f), "merci" (m-r-s), "Mary" (m-r) do not
+SKELETON = re.compile(r"^m(?:r[kj]|[kj]r)[^aeiou]+")   # 4+ consonants: "mark", "Marco" are too short
+
+
+def skeleton(word: str) -> str:
+    w = word.lower()
+    w = re.sub(r"c(?=[eiy])", "s", w)                                 # Mercedes, Marcel: a soft c
+    for a, b in (("ph", "f"), ("ck", "k"), ("ch", "k"), ("x", "ks"), ("qu", "k"), ("c", "k"), ("q", "k"), ("g", "j")):
+        w = w.replace(a, b)
+    w = re.sub(r"[aeiouhwy']", "", w)
+    return re.sub(r"(.)\1+", r"\1", w)
 
 
 def heard_mercury(text: str) -> bool:
@@ -24,12 +46,19 @@ def heard_mercury(text: str) -> bool:
         return True
     words = re.findall(r"[a-z']+", text.lower())
     cands = words + [a + b for a, b in zip(words, words[1:])]
-    return any(w[:1] == "m" and difflib.SequenceMatcher(None, w, "mercury").ratio() >= LIKE for w in cands)
+    cands += [w[1:] for w in cands if w[:1] == "a" and len(w) > 4]      # "Amarty", "Ama Curie": a leading vowel
+    if any(w[:1] == "m" and difflib.SequenceMatcher(None, w, "mercury").ratio() >= LIKE for w in cands):
+        return True
+    # the phonetic rule: single words, or a word plus a vowel-led tail ("mark jury", "marks are", "mark your")
+    tails = [a + b for a, b in zip(words, words[1:]) if b[:1] in "aeiouyj"]
+    return any(w[:1] == "m" and SKELETON.match(skeleton(w)) for w in words + tails)
 
 
 class WakeVerifier:
-    def __init__(self, mic: str, speech_url: str) -> None:
-        self.mic, self.speech_url = mic, speech_url.rstrip("/")
+    def __init__(self, speech_url: str, mic: str = MIC_DEVICE, channels: int = MIC_CHANNELS, channel: int = MIC_CHANNEL,
+                 gain: float = MIC_GAIN) -> None:
+        self.mic, self.channels, self.channel, self.gain = mic, channels, channel, gain
+        self.speech_url = speech_url.rstrip("/")
         self._ring: deque[bytes] = deque(maxlen=int(RING_S * 32000 / CHUNK))
         self._proc: asyncio.subprocess.Process | None = None
         self._task: asyncio.Task | None = None
@@ -43,18 +72,23 @@ class WakeVerifier:
     async def _run(self) -> None:
         while True:
             try:
+                # stderr is dropped: an unread pipe fills with overrun warnings and then blocks arecord (a frozen
+                # ring); the 1 s ALSA buffer rides out event-loop hiccups
                 self._proc = await asyncio.create_subprocess_exec(
-                    "arecord", "-q", "-D", self.mic, "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw",
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                    "arecord", "-q", "-D", self.mic, "-f", "S16_LE", "-r", "16000", "-c", str(self.channels), "-t", "raw",
+                    "--buffer-size=16000", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
                 assert self._proc.stdout
                 self.error = ""
                 while True:
-                    chunk = await self._proc.stdout.read(CHUNK)
-                    if not chunk:
+                    try:
+                        raw = await self._proc.stdout.readexactly(CHUNK * self.channels)   # read() may return less
+                    except asyncio.IncompleteReadError:
                         break
-                    self._ring.append(chunk)
-                err = (await self._proc.stderr.read()).decode(errors="replace").strip() if self._proc.stderr else ""
-                self.error = f"mic: {err[:100] or 'arecord exited'}"
+                    a = array.array("h", raw)[self.channel::self.channels]
+                    if self.gain != 1.0:
+                        a = array.array("h", (max(-32768, min(32767, int(v * self.gain))) for v in a))
+                    self._ring.append(a.tobytes())
+                self.error = f"mic: arecord exited ({await self._proc.wait()})"
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001
@@ -67,6 +101,12 @@ class WakeVerifier:
         await asyncio.sleep(TAIL_S)
         pcm = b"".join(self._ring)[-int(TAKE_S * 32000):]
         t = time.time()
+        if os.path.exists(DEBUG_FILE + ".on"):
+            try:
+                with open(DEBUG_FILE, "wb") as f:
+                    f.write(pcm)
+            except OSError:
+                pass
         if len(pcm) < 16000:
             self.last = {"t": t, "ok": True, "heard": "", "why": self.error or "no audio yet"}
             return True, ""            # cannot check: let it through rather than go deaf
