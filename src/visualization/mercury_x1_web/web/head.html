@@ -686,6 +686,8 @@ function renderVoiceBoard() {
   setHTML("#vb-info", (vf ? [
     ["board", board],
     ["wake words", esc((lst.keywords || [conf.keyword || "?"]).join(" · "))],
+    ["wake engine", lst.kws_engine ? `${lst.kws_engine === "oww" ? "trained model" : "open vocabulary"} · threshold ${lst.kw_threshold ?? "?"}`
+      + (lst.kw_peak != null ? ` · last score ${lst.kw_peak.toFixed(2)}` : "") : "—"],
     ["listening", live.speech && now - (live.speech_t || 0) < 30 ? "voice" : "quiet"],
     ["beam", lst.mode ? `${lst.mode} · ${live.beam ?? "?"}°` : "—"],
     ["board CPU", lst.cpu != null ? `${Math.round(lst.cpu)} % of one core` : "—"],

@@ -118,7 +118,7 @@ class VoiceBoardNode(Node):
             wake = proto.WakeInfo(
                 keyword=str(event.get("keyword", "")),
                 angle_deg=float(angle) if isinstance(angle, (int, float)) else float("nan"),
-                beam=-1, score=float(event.get("conf", 0.0)),
+                beam=-1, score=float(event.get("score", event.get("conf", 0.0))),
                 start_ms=int(float(event.get("t", -1)) * 1000), raw=event_text(event))
             self._publish_wake(wake)
         elif kind not in ("doa", "vad", "status", "reply"):

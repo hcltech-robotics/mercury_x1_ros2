@@ -1,8 +1,11 @@
 # /data/build/voicefront/voicefront.conf on the voice board (sourced by voicefront.sh; restart to apply:
 #   killall voicefront   -> the runner starts it again within a second)
-MIC_GAIN=4      # AC107 PGA of the 4 mics, 0..31
+MIC_GAIN=4      # AC107 PGA of the 4 mics, 0..31 (30 clips when the robot talks at full volume)
 REF_GAIN=20     # PGA of the speaker echo reference, 0..31
-# extra voicefront options, e.g. --keywords "hey mercury;ok mercury" --kw-score 2.0 --beamformer mvdr
-# MIC_GAIN 4 leaves far speech ~35 dB under full scale, so the wake-word input gets +20 dB (2026-11-04, TTS
-# through a monitor ~2 m away: 0/5 -> 3/12 live; 0.1 threshold: 2/5 vs 1/5 offline)
-VF_ARGS="--kws-gain-db 20 --kw-threshold 0.1"
+KWS_GAIN_DB=20  # boost on the wake-word input: at MIC_GAIN 4 a talker 2 m away peaks around -33 dBFS
+# Wake-word engine: the trained openWakeWord model (model/hey_mercury.onnx) when it is installed, else the
+# open-vocabulary sherpa KWS. WAKE_MODEL=/data/build/voicefront/model/other.onnx picks another trained phrase.
+WAKE_MODEL=""
+KW_THRESHOLD=""  # empty = engine default (openWakeWord 0.5, sherpa 0.25); lower = more sensitive
+# extra voicefront options, e.g. --keywords "hey mercury;ok mercury" (sherpa only) --beamformer mvdr
+VF_ARGS=""

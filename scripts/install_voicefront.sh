@@ -24,6 +24,9 @@ if [ "$MODE" = install ]; then
     for f in encoder.int8.onnx decoder.int8.onnx joiner.int8.onnx tokens.txt bpe.vocab; do
         $ADB $D push $B/voicefront/model/$f < "$VF/model/$f"
     done
+    for f in melspectrogram.onnx embedding_model.onnx hey_mercury.onnx; do   # openWakeWord engine (if trained)
+        [ -f "$VF/model/$f" ] && $ADB $D push $B/voicefront/model/$f < "$VF/model/$f"
+    done
     $ADB $D push $B/voicefront/voicefront.sh,755 < "$BRD/voicefront.sh"
     $ADB $D push $B/voicefront/voicefront.conf.default < "$BRD/voicefront.conf.default"
     $ADB $D push /etc/rc.local,755 < "$BRD/rc.local"
