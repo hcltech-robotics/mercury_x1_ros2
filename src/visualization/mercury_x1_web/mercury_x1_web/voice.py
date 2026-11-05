@@ -49,6 +49,13 @@ SYSTEM_PROMPT = (
     "person asks for what it does (your status, places, driving somewhere, stopping, a gesture). You move only "
     "through tools: never say you are moving or doing something unless a tool result confirms it, and if no tool "
     "fits, say you cannot do that yet.")
+# the robot's own (small) model needs the tool rules spelled out; appended to its system prompt only
+LOCAL_RULES = (
+    " Rules: for your battery, the time, the date or where you are, call get_robot_status and say what it returns; "
+    "never guess a number. To go somewhere or show the way, call go_to_place. To nod, shake your head or shake hands, "
+    "call gesture. When someone says stop or wait, call stop_moving. Never say you are moving, going or doing a "
+    "gesture unless a tool result in this conversation says it worked; if it says something is switched off, say so. "
+    "General knowledge questions that are not about HCLTech, the lab or you, answer briefly from what you know.")
 MAX_TOOL_ROUNDS = 3
 HISTORY_TURNS = 8          # user + assistant pairs kept as context
 IDLE_RESET_S = 180         # forget the conversation after this long without speech
@@ -451,6 +458,7 @@ class VoiceChat:
         after-tool note) into the next user turn instead, or send a trailing note as a user turn"""
         out: list[dict] = []
         pending: list[str] = []
+        msgs = [{**msgs[0], "content": msgs[0]["content"] + LOCAL_RULES}, *msgs[1:]] if msgs and msgs[0]["role"] == "system" else msgs
         for i, m in enumerate(msgs):
             if m["role"] == "system" and i > 0:
                 pending.append(m["content"])
@@ -470,10 +478,18 @@ class VoiceChat:
             try:
                 timeout = aiohttp.ClientTimeout(total=60, sock_connect=1.5 if where == "lab" else 5)
                 req = {**body, "model": model}
-                if where == "robot":
+                hdr = None
+                if where == "robot":   # llama-server: strict templates, and it drops kept-alive connections
                     req["messages"] = self._leading_system_only(body["messages"])
-                r = await asyncio.wait_for(self._session.post(url, json=req, timeout=timeout),
-                                           LAB_HEADERS_S if where == "lab" else 30)
+                    hdr = {"Connection": "close"}
+                for attempt in range(2):
+                    try:
+                        r = await asyncio.wait_for(self._session.post(url, json=req, timeout=timeout, headers=hdr),
+                                                   LAB_HEADERS_S if where == "lab" else 30)
+                        break
+                    except aiohttp.ServerDisconnectedError:
+                        if attempt:
+                            raise
                 if r.status != 200:
                     text = (await r.text())[:100]
                     r.release()
