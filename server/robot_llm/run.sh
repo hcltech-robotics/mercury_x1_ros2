@@ -9,5 +9,5 @@ LLM_EXTRA=""
 [ -f ~/.config/mercury_x1/llm.env ] && . ~/.config/mercury_x1/llm.env
 # shellcheck disable=SC2086
 exec "$D/llama.cpp/build/bin/llama-server" -m "$D/models/$LLM_MODEL" --alias local \
-  --host 127.0.0.1 --port 8091 -ngl 99 -c "$LLM_CTX" -np 1 -fa on --jinja --no-mmap \
-  --reasoning-budget 0 --cache-reuse 256 -t 4 $LLM_EXTRA
+  --host 127.0.0.1 --port 8091 -ngl 99 -c "$LLM_CTX" -np 1 -fa on --jinja --load-mode none \
+  --cache-reuse 256 -t 4 $LLM_EXTRA

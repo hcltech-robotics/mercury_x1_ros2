@@ -445,13 +445,34 @@ class VoiceChat:
             return [lab]
         return [robot, lab] if time.time() < self._lab_down_until else [lab, robot]
 
+    @staticmethod
+    def _leading_system_only(msgs: list[dict]) -> list[dict]:
+        """Qwen / most chat templates in llama.cpp reject a system message after the start: fold the facts (and the
+        after-tool note) into the next user turn instead, or send a trailing note as a user turn"""
+        out: list[dict] = []
+        pending: list[str] = []
+        for i, m in enumerate(msgs):
+            if m["role"] == "system" and i > 0:
+                pending.append(m["content"])
+                continue
+            if pending and m["role"] == "user":
+                m = {**m, "content": "\n\n".join(pending) + "\n\nThe person said: " + m["content"]}
+                pending = []
+            out.append(m)
+        if pending:
+            out.append({"role": "user", "content": "(note) " + "\n\n".join(pending)})
+        return out
+
     async def _llm_open(self, body: dict, conf: dict) -> aiohttp.ClientResponse:
         """streaming chat request to the first model that starts answering (failover only before the reply starts)"""
         errors = []
         for where, url, model in self._llm_targets(conf):
             try:
                 timeout = aiohttp.ClientTimeout(total=60, sock_connect=1.5 if where == "lab" else 5)
-                r = await asyncio.wait_for(self._session.post(url, json={**body, "model": model}, timeout=timeout),
+                req = {**body, "model": model}
+                if where == "robot":
+                    req["messages"] = self._leading_system_only(body["messages"])
+                r = await asyncio.wait_for(self._session.post(url, json=req, timeout=timeout),
                                            LAB_HEADERS_S if where == "lab" else 30)
                 if r.status != 200:
                     text = (await r.text())[:100]
