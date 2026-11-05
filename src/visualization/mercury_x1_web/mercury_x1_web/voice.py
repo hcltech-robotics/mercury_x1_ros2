@@ -36,7 +36,8 @@ VOICES = {"af_heart": "Heart (US)", "af_bella": "Bella (US)", "am_michael": "Mic
 DEFAULT_SETTINGS = {"volume": 46, "voice": "af_heart", "speed": 1.0,
                     "drive": False,       # may drive to named places when asked (Nav2); off until tested
                     "gestures": False,    # may move waist / neck / arms for gestures; off until tested
-                    "llm": "auto",        # auto: lab server, robot's own model when it does not answer | lab | robot
+                    "llm": "auto",        # auto: network model, robot's own when it does not answer | lab (network) | robot
+                    "llm_server": "1",    # which network model (network_llms id)
                     "wake_listen": True}  # "hey mercury" takes one question (when not already listening)
 TEST_PHRASE = "Hello, I am Mercury. This is how loud I speak."
 SYSTEM_PROMPT = (
@@ -66,6 +67,8 @@ UNMUTE_TAIL_S = 0.35       # keep the mic muted this long after the speaker stop
 LOCAL_SPEECH = "http://127.0.0.1:8097"   # server/robot_speech: Parakeet STT + Kokoro TTS
 LOCAL_LLM = "http://127.0.0.1:8091/v1/chat/completions"   # server/robot_llm: llama-server on the Jetson
 LLM_MODES = ("auto", "lab", "robot")
+LLM_ENV = os.path.expanduser("~/.config/mercury_x1/llm.env")   # server/robot_llm: which model the robot runs
+LLM_CHECK_MIN_S = 5.0      # reachability checks for the page: at most this often
 LAB_HEADERS_S = 3.0        # auto: the lab server must start answering within this, else the robot's model answers
 LAB_RETRY_S = 60.0         # auto: after a lab failure, ask the robot's model first for this long
 SENTENCE_END = re.compile(r"(?<=[.!?;:])\s+|\n+")
@@ -86,6 +89,34 @@ def load_conf() -> dict:
     except OSError:
         pass
     return conf
+
+
+def network_llms(conf: dict) -> list[dict]:
+    """language models on the local network, from voice.env: VOICE_LLM_URL (+ VOICE_LLM_MODEL, VOICE_LLM_NAME,
+    VOICE_LLM_KEY) and more as VOICE_LLM_URL_2 .. VOICE_LLM_URL_9 with the same suffix. Key defaults to VOICE_API_KEY."""
+    out = []
+    for n in range(1, 10):
+        sfx = "" if n == 1 else f"_{n}"
+        url = conf.get(f"VOICE_LLM_URL{sfx}", "")
+        if not url:
+            continue
+        model = conf.get(f"VOICE_LLM_MODEL{sfx}", "pennyroyal" if n == 1 else "")
+        out.append({"id": str(n), "name": conf.get(f"VOICE_LLM_NAME{sfx}") or model or urlparse(url).hostname or url,
+                    "url": url, "model": model or "default", "key": conf.get(f"VOICE_LLM_KEY{sfx}", conf.get("VOICE_API_KEY", ""))})
+    return out
+
+
+def robot_llm_name() -> str:
+    """the robot's own model, as server/robot_llm runs it (llm.env LLM_MODEL, else its default)"""
+    name = "Qwen3.5-4B-Q4_K_M.gguf"
+    try:
+        with open(LLM_ENV) as f:
+            for line in f:
+                if line.strip().startswith("LLM_MODEL="):
+                    name = line.split("=", 1)[1].strip().strip("\"'") or name
+    except OSError:
+        pass
+    return re.sub(r"(-Q\d\w*)?\.gguf$", "", os.path.basename(name))
 
 
 def speakable(text: str) -> str:
@@ -119,6 +150,8 @@ class VoiceChat:
         self._aplay: asyncio.subprocess.Process | None = None
         self._muted = False
         self.settings = self._load_settings()
+        self.llm_health: dict = {}     # "robot" / network id -> {"ok", "ms" | "error"}
+        self._llm_checked = 0.0
         self._vol_applied = False
 
     # ---- settings: speaker volume (ALSA hardware PCM control), voice, speed; saved ----------
@@ -162,6 +195,9 @@ class VoiceChat:
                 self.settings[key] = bool(changes[key])
         if changes.get("llm") in LLM_MODES:
             self.settings["llm"] = changes["llm"]
+        if str(changes.get("llm_server", "")) in {s["id"] for s in network_llms(load_conf())}:
+            self.settings["llm_server"] = str(changes["llm_server"])
+            self._lab_down_until = 0.0      # a new choice is tried first again
         os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
         with open(SETTINGS_FILE, "w") as f:
             json.dump(self.settings, f)
@@ -195,7 +231,41 @@ class VoiceChat:
     # ---- state for the page ---------------------------------------------------------------
     def snapshot(self) -> dict:
         return {"enabled": self.enabled, "state": self.state, "message": self.message,
-                "transcript": self.transcript[-14:], "stats": self.stats, "settings": self.settings, "voices": VOICES}
+                "transcript": self.transcript[-14:], "stats": self.stats, "settings": self.settings, "voices": VOICES,
+                "llms": self.llm_choices()}
+
+    # ---- language models for the page: the robot's own and the network ones (no keys), reachability ---------
+    def llm_choices(self) -> dict:
+        conf = load_conf()
+        net = [{"id": s["id"], "name": s["name"], "host": urlparse(s["url"]).hostname or "", "model": s["model"],
+                "health": self.llm_health.get(s["id"])} for s in network_llms(conf)]
+        return {"robot": {"name": robot_llm_name(), "health": self.llm_health.get("robot")}, "network": net}
+
+    async def check_llms(self) -> None:
+        """GET <base>/v1/models on each model server (2.5 s), for the page's status dots"""
+        if time.time() - self._llm_checked < LLM_CHECK_MIN_S:
+            return
+        self._llm_checked = time.time()
+        conf = load_conf()
+        targets = [("robot", conf.get("VOICE_LOCAL_LLM_URL", LOCAL_LLM), "")] + \
+                  [(s["id"], s["url"], s["key"]) for s in network_llms(conf)]
+
+        async def probe(session: aiohttp.ClientSession, key: str, url: str, token: str) -> None:
+            base = url.split("/v1/")[0].rstrip("/")
+            t = time.time()
+            try:
+                async with session.get(base + "/v1/models", headers={"Authorization": f"Bearer {token}"} if token else None,
+                                       timeout=aiohttp.ClientTimeout(total=2.5)) as r:
+                    ok = r.status == 200
+                    self.llm_health[key] = {"ok": ok, "ms": round((time.time() - t) * 1000)} if ok else \
+                        {"ok": False, "error": f"HTTP {r.status}"}
+            except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
+                self.llm_health[key] = {"ok": False, "error": "no answer" if isinstance(e, asyncio.TimeoutError)
+                                        else "not running" if key == "robot" else "unreachable"}
+
+        async with aiohttp.ClientSession() as session:
+            await asyncio.gather(*(probe(session, k, u, tok) for k, u, tok in targets))
+        self.on_change()
 
     def _set(self, state: str, message: str = "") -> None:
         if (state, message) != (self.state, self.message):
@@ -304,8 +374,8 @@ class VoiceChat:
                 await asyncio.sleep(3.0)
 
     async def _session_run(self, conf: dict) -> None:
-        if not conf.get("VOICE_LLM_URL"):
-            raise RuntimeError(f"not configured ({CONF})")
+        if not network_llms(conf) and self.settings.get("llm") != "robot":
+            raise RuntimeError(f"no network model in {CONF} (or choose: on robot)")
         if not self._vol_applied:
             await self.apply_volume()
         self._session = aiohttp.ClientSession(headers={"Authorization": f"Bearer {conf.get('VOICE_API_KEY', '')}"})
@@ -467,12 +537,15 @@ class VoiceChat:
     # ---- language model: lab server or the robot's own -------------------------------------------
     _lab_down_until = 0.0
 
-    def _llm_targets(self, conf: dict) -> list[tuple[str, str, str]]:
-        lab = ("lab", conf.get("VOICE_LLM_URL", ""), conf.get("VOICE_LLM_MODEL", "pennyroyal"))
-        robot = ("robot", conf.get("VOICE_LOCAL_LLM_URL", LOCAL_LLM), conf.get("VOICE_LOCAL_LLM_MODEL", "local"))
+    def _llm_targets(self, conf: dict) -> list[tuple[str, str, str, str, str]]:
+        """(where, url, model, key, name) in the order to try: where = lab (a network model) | robot"""
+        servers = network_llms(conf)
+        pick = next((s for s in servers if s["id"] == self.settings.get("llm_server")), servers[0] if servers else None)
+        robot = ("robot", conf.get("VOICE_LOCAL_LLM_URL", LOCAL_LLM), conf.get("VOICE_LOCAL_LLM_MODEL", "local"), "", "robot")
         mode = self.settings.get("llm", "auto")
-        if mode == "robot" or not lab[1]:
+        if mode == "robot" or pick is None:
             return [robot]
+        lab = ("lab", pick["url"], pick["model"], pick["key"], pick["name"])
         if mode == "lab":
             return [lab]
         return [robot, lab] if time.time() < self._lab_down_until else [lab, robot]
@@ -499,11 +572,11 @@ class VoiceChat:
     async def _llm_open(self, body: dict, conf: dict) -> aiohttp.ClientResponse:
         """streaming chat request to the first model that starts answering (failover only before the reply starts)"""
         errors = []
-        for where, url, model in self._llm_targets(conf):
+        for where, url, model, key, name in self._llm_targets(conf):
             try:
                 timeout = aiohttp.ClientTimeout(total=60, sock_connect=1.5 if where == "lab" else 5)
                 req = {**body, "model": model}
-                hdr = None
+                hdr = {"Authorization": f"Bearer {key}"} if key else None
                 if where == "robot":   # llama-server: strict templates, and it drops kept-alive connections
                     req["messages"] = self._leading_system_only(body["messages"])
                     hdr = {"Connection": "close"}
@@ -520,13 +593,14 @@ class VoiceChat:
                     r.release()
                     raise RuntimeError(f"HTTP {r.status} {text}")
             except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, OSError) as e:
-                errors.append(f"{where}: {str(e)[:80] or type(e).__name__}")
+                errors.append(f"{name}: {str(e)[:80] or type(e).__name__}")
                 if where == "lab":
                     self._lab_down_until = time.time() + LAB_RETRY_S
                 continue
             if where == "lab":
                 self._lab_down_until = 0.0
             self.stats["llm_on"] = where
+            self.stats["llm_name"] = name if where == "lab" else robot_llm_name()
             return r
         raise RuntimeError("model: " + "; ".join(errors))
 
