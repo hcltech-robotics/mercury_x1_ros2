@@ -555,7 +555,8 @@ class WebNode(Node):
             self.vb_live["speech"], self.vb_live["speech_t"] = bool(ev.get("speech")), now
         elif kind == "status":
             self.vb_live["status"] = {k: ev.get(k) for k in ("cpu", "mode", "beam", "playback", "snr_db", "keywords",
-                                                             "kw_threshold", "erle_db", "beamformer")}
+                                                             "kw_threshold", "kws_engine", "kw_peak", "erle_db",
+                                                             "beamformer")}
             self.vb_live["beam"] = ev.get("beam")
             self.vb_live["status_t"] = now
 
