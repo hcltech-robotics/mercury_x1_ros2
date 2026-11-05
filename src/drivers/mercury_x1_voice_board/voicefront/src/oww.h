@@ -34,7 +34,7 @@ class OwwSpotter : public WakeSpotter {
   float threshold() const override { return cfg_.threshold; }
   float score() const override { return 0.0f; }
   const char* engine() const override { return "oww"; }
-  float peak_score() override;
+  float peak_score() override;  // thread-safe
 
  private:
   struct Impl;

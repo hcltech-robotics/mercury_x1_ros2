@@ -1,0 +1,94 @@
+hey_mercury openWakeWord model — FINAL = round 2 (export_r2/hey_mercury.onnx), trained 2026-11-04 on HCLTech 192.168.10.52
+
+== Trainer validation metrics (openwakeword train.py auto_train, threshold 0.5) ==
+round 1 (50k pos / 50k adv-neg, default aug, pos=50 adv=50 per batch, max_neg_w=1500):
+Final Model Accuracy: 0.6072499752044678
+Final Model Recall: 0.21449999511241913
+Final Model False Positives per Hour: 0.0
+round 2 (FINAL: 100k LibriTTS-R pos + 7757 whisper-filtered Piper multi-voice pos / 100k adv-neg, far-field aug, pos=200 adv=100, max_neg_w=750):
+Final Model Accuracy: 0.7524999976158142
+Final Model Recall: 0.5049999952316284
+Final Model False Positives per Hour: 0.5309734344482422
+
+== Validation negative set (validation_set_features.npy, ~10.7 h) false wakes/hour, round 2 ==
+thr 0.5: 0.37/h  thr 0.6-0.8: 0.28/h  thr 0.85: 0.09/h  thr 0.9: 0.00/h   (round 1: 0/h at 0.3, max score 0.194)
+
+== Board mic per-second max score, round 2 (5 clips at ~4, ~7, ~9, ~15 s + one undetected) ==
+native: 0.00 0.00 0.00 0.03 0.97 0.00 0.01 0.10 0.00 0.94 0.00 0.00 0.00 0.00 0.00 0.87 0.00 0.00
+x10   : 0.00 0.00 0.00 0.01 0.95 0.00 0.02 0.05 0.00 0.94 0.00 0.00 0.00 0.00 0.00 0.83 0.00 0.00
+
+================ eval_clips.py output, ROUND 2 (final) ================
+model: export_r2/hey_mercury.onnx  size=205430 bytes
+onnx opset: [13]  inputs: [('onnx::Flatten_0', 1, [1, 16, 96])]
+
+== clean TTS clips (hey_*.wav) ==
+hey_af_bella.wav       sr=24000 dur=0.83s max=0.968
+hey_af_heart.wav       sr=24000 dur=1.05s max=0.947
+hey_am_adam.wav        sr=24000 dur=1.00s max=0.171
+hey_am_michael.wav     sr=24000 dur=1.17s max=0.930
+hey_bf_emma.wav        sr=24000 dur=1.15s max=0.947
+hey_bm_george.wav      sr=24000 dur=1.30s max=0.825
+clean >= 0.5: 5/6
+clean >= 0.3: 5/6
+
+== board_mic0_monitor_5clips (5 clips, ~2 m, quiet) ==
+board_mic0_monitor_5clips.wav [native] peak=-32.8 dBFS  overall max=0.965  top-5 clip peaks=['0.004', '0.098', '0.868', '0.941', '0.965']
+   >= 0.5: 3/5   (distinct activations: 3)
+   >= 0.3: 3/5   (distinct activations: 3)
+board_mic0_monitor_5clips_x10.wav [x10 (+20 dB)] peak=-12.8 dBFS  overall max=0.950  top-5 clip peaks=['0.003', '0.053', '0.834', '0.939', '0.950']
+   >= 0.5: 3/5   (distinct activations: 3)
+   >= 0.3: 3/5   (distinct activations: 3)
+
+== hdmi_beam (2 clips, processed beam) ==
+hdmi_beam.wav sr=16000 overall max=0.967 top-2 clip peaks=['0.300', '0.967']
+   >= 0.5: 1/2   (distinct activations: 1)
+   >= 0.3: 2/2   (distinct activations: 2)
+
+== talk3.wav (unrelated speech, must not trigger) ==
+talk3.wav sr=24000 dur=4.2s max=0.001
+   >= 0.5: ok
+   >= 0.3: ok
+
+== validation negative set (precomputed features) ==
+features shape=(481345, 96)
+duration ~10.70 h, max score=0.858
+   >= 0.5: 4 activations -> 0.37 false wakes/hour
+   >= 0.3: 4 activations -> 0.37 false wakes/hour
+
+================ eval_clips.py output, ROUND 1 (superseded) ================
+model: r1_backup/hey_mercury.onnx  size=205430 bytes
+onnx opset: [13]  inputs: [('onnx::Flatten_0', 1, [1, 16, 96])]
+
+== clean TTS clips (hey_*.wav) ==
+hey_af_bella.wav       sr=24000 dur=0.83s max=0.608
+hey_af_heart.wav       sr=24000 dur=1.05s max=0.756
+hey_am_adam.wav        sr=24000 dur=1.00s max=0.200
+hey_am_michael.wav     sr=24000 dur=1.17s max=0.672
+hey_bf_emma.wav        sr=24000 dur=1.15s max=0.008
+hey_bm_george.wav      sr=24000 dur=1.30s max=0.031
+clean >= 0.5: 3/6
+clean >= 0.3: 3/6
+
+== board_mic0_monitor_5clips (5 clips, ~2 m, quiet) ==
+board_mic0_monitor_5clips.wav [native] peak=-32.8 dBFS  overall max=0.183  top-5 clip peaks=['0.002', '0.002', '0.034', '0.159', '0.183']
+   >= 0.5: 0/5   (distinct activations: 0)
+   >= 0.3: 0/5   (distinct activations: 0)
+board_mic0_monitor_5clips_x10.wav [x10 (+20 dB)] peak=-12.8 dBFS  overall max=0.294  top-5 clip peaks=['0.002', '0.002', '0.030', '0.089', '0.294']
+   >= 0.5: 0/5   (distinct activations: 0)
+   >= 0.3: 0/5   (distinct activations: 0)
+
+== hdmi_beam (2 clips, processed beam) ==
+hdmi_beam.wav sr=16000 overall max=0.335 top-2 clip peaks=['0.024', '0.335']
+   >= 0.5: 0/2   (distinct activations: 0)
+   >= 0.3: 1/2   (distinct activations: 1)
+
+== talk3.wav (unrelated speech, must not trigger) ==
+talk3.wav sr=24000 dur=4.2s max=0.001
+   >= 0.5: ok
+   >= 0.3: ok
+
+== validation negative set (precomputed features) ==
+features shape=(481345, 96)
+duration ~10.70 h, max score=0.194
+   >= 0.5: 0 activations -> 0.00 false wakes/hour
+   >= 0.3: 0 activations -> 0.00 false wakes/hour

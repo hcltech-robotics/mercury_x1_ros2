@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -63,7 +64,8 @@ struct OwwSpotter::Impl {
   std::deque<std::array<float, kMelBins>> mels;
   std::deque<std::array<float, kEmbDim>> feats;
   int64_t fed = 0, blocks = 0, last_hit = -1;
-  float peak = 0.0f, last = 0.0f;
+  std::atomic<float> peak{0.0f};  // read and reset from the audio thread (status), written here
+  float last = 0.0f;
 
   void push_mel(const std::vector<float>& x) {  // mel of x (int16 scale) appended, x/10 + 2
     const std::vector<float> m = mel.run(x.data(), {1, static_cast<int64_t>(x.size())});
@@ -189,9 +191,7 @@ bool OwwSpotter::set_keywords(const std::vector<std::string>& kw, float threshol
 }
 
 float OwwSpotter::peak_score() {
-  const float p = im_->peak;
-  im_->peak = 0.0f;
-  return p;
+  return im_->peak.exchange(0.0f);
 }
 
 std::vector<KwsHit> OwwSpotter::feed(const float* x, int n) {
@@ -210,7 +210,9 @@ std::vector<KwsHit> OwwSpotter::feed(const float* x, int n) {
       float s = m.classify();
       if (++m.blocks <= kWarmup) s = 0.0f;
       m.last = s;
-      m.peak = std::max(m.peak, s);
+      float p = m.peak.load();
+      while (s > p && !m.peak.compare_exchange_weak(p, s)) {
+      }
       const int64_t at = m.fed - static_cast<int64_t>(m.pending.size());
       if (cfg_.trace) std::fprintf(stderr, "oww %.2f %.4f\n", static_cast<double>(at) / 16000.0, s);
       const bool quiet = m.last_hit < 0 || at - m.last_hit > static_cast<int64_t>(cfg_.refractory_s * 16000);

@@ -276,9 +276,7 @@ class KwsRunner {
   }
 
   bool peak_score_known() const { return std::string(k_->engine()) == "oww"; }
-  float peak_score() {
-    return call([&] { return k_->peak_score(); });
-  }
+  float peak_score() { return k_->peak_score(); }  // atomic in the engine: no need to wait for its thread
 
   void drain() {
     if (!async_) return;
