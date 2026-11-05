@@ -802,7 +802,15 @@ class App:
 
     # -- head display (:8081): lightweight touch UI, no 3D -------------------------------------
     async def head_index(self, req):
-        return web.FileResponse(os.path.join(self.static_dir, "head.html"))
+        # no-store: the head display's browser runs for days; a reload must fetch the current page
+        return web.FileResponse(os.path.join(self.static_dir, "head.html"), headers={"Cache-Control": "no-store"})
+
+    def head_page_version(self) -> int:
+        """the head page reloads itself when this changes (head.html replaced on the robot)"""
+        try:
+            return int(os.path.getmtime(os.path.join(self.static_dir, "head.html")))
+        except OSError:
+            return 0
 
     def _voice_changed(self) -> None:
         self.voice_version += 1
@@ -814,7 +822,7 @@ class App:
                 "procs": self.sup.status(), "map_name": self.map_name, "system": self.sysstats.snapshot(),
                 "nodes": self.node.node_names, "wifi": self.wifi.snapshot(), "ros": self.ros_network(),
                 "time": time.strftime("%H:%M"), "voice": self.voice.snapshot(), "gpu_procs": self.gpuprocs.snapshot(),
-                "voice_board": self.node.voice_board_status(), "now": time.time()}
+                "voice_board": self.node.voice_board_status(), "now": time.time(), "page_v": self.head_page_version()}
 
     async def head_ws(self, req):
         ws = web.WebSocketResponse(heartbeat=10)

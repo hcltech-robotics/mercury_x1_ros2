@@ -404,6 +404,7 @@
 const $ = (s) => document.querySelector(s);
 const esc = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 let S = null;
+let pageV = 0;   // head.html version seen at load
 const toast = (t) => { const e = $("#toast"); e.textContent = t; e.classList.add("show"); clearTimeout(e._t); e._t = setTimeout(() => e.classList.remove("show"), 3000); };
 async function api(action, body = {}) {
   try {
@@ -468,7 +469,11 @@ for (const b of document.querySelectorAll("#st-tabs button")) b.onclick = () => 
 // ---- status socket (1 Hz), reconnects forever
 function connect() {
   const ws = new WebSocket(`ws://${location.host}/ws`);
-  ws.onmessage = (m) => { S = JSON.parse(m.data); $("#conn-dot").classList.add("ok"); render(); };
+  ws.onmessage = (m) => {
+    S = JSON.parse(m.data); $("#conn-dot").classList.add("ok");
+    // a new head.html on the robot: load it (the kiosk browser never reloads by itself)
+    if (S.page_v) { if (pageV && S.page_v !== pageV) { location.reload(); return; } pageV = S.page_v; }
+    render(); };
   ws.onclose = () => { $("#conn-dot").classList.remove("ok"); $("#state").textContent = "no link to the robot"; setTimeout(connect, 2000); };
 }
 connect();
