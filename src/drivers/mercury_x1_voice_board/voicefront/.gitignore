@@ -1,4 +1,6 @@
 deps/
 build/
 model/*.onnx
+!model/hey_mercury.onnx
 model/tokens.txt
+model/oww_test/

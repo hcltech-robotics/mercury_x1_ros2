@@ -7,7 +7,7 @@
 // link  : JSON lines (wake word, direction, voice activity, status; commands back), see README.md
 //
 // Pipeline per 10 ms: WebRTC AEC3 on every mic against the reference -> STFT (512/256) -> voice activity,
-// SRP-PHAT direction, steered beamformer -> WebRTC noise suppression + AGC2 -> output + keyword spotter.
+// SRP-PHAT direction, steered beamformer -> WebRTC noise suppression + AGC2 -> output + keyword spotter->
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -37,6 +37,7 @@
 #include "json.h"
 #include "kws.h"
 #include "link.h"
+#include "oww.h"
 
 namespace {
 
@@ -63,8 +64,10 @@ struct Options {
   std::string kws_input = "mic";  // beam | mic | linear (wake word listens to this signal)
   std::string model_dir = "model";
   std::vector<std::string> keywords{"hey mercury"};
-  float kw_threshold = 0.25f;
+  float kw_threshold = -1.0f;  // engine default: 0.25 sherpa, 0.5 openwakeword
   float kw_score = 2.0f;
+  std::string oww;             // openWakeWord model file: switches the engine from sherpa KWS to it
+  bool kws_trace = false;
   int kws_threads = 1;
   int sync_kws = -1;  // -1: synchronous when stdin is a regular file
   std::string serial;
@@ -94,9 +97,12 @@ void usage() {
                "  --ns off|low|moderate|high|veryhigh  (default moderate)\n"
                "  --no-agc\n"
                "  --model DIR         keyword model directory (default ./model)\n"
-               "  --keywords \"a;b\"    wake words, plain English (default \"hey mercury\")\n"
-               "  --kw-threshold F    (default 0.25, lower = more sensitive)\n"
-               "  --kw-score F        (default 2.0)\n"
+               "  --keywords \"a;b\"    wake words, plain English (default \"hey mercury\"; sherpa engine)\n"
+               "  --oww FILE.onnx     openWakeWord model for one trained phrase (the file name), replaces the\n"
+               "                      sherpa engine; melspectrogram.onnx + embedding_model.onnx next to it or in --model\n"
+               "  --kw-threshold F    lower = more sensitive (default 0.25 sherpa, 0.5 openwakeword)\n"
+               "  --kw-score F        (default 2.0, sherpa only)\n"
+               "  --kws-trace         print every wake-word score to stderr\n"
                "  --no-kws\n"
                "  --kws-input mic|beam|linear  wake-word input: echo-cancelled mic 0 (default, hears every\n"
                "                      direction), the steered beam, or the linear AEC output\n"
@@ -156,6 +162,8 @@ bool parse_args(int argc, char** argv, Options& o) {
     else if (a == "--kw-threshold") o.kw_threshold = std::strtof(next("--kw-threshold").c_str(), nullptr);
     else if (a == "--kw-score") o.kw_score = std::strtof(next("--kw-score").c_str(), nullptr);
     else if (a == "--no-kws") o.kws = false;
+    else if (a == "--oww") o.oww = next("--oww");
+    else if (a == "--kws-trace") o.kws_trace = true;
     else if (a == "--kws-input") o.kws_input = next("--kws-input");
     else if (a == "--kws-agc") o.kws_agc = std::atoi(next("--kws-agc").c_str()) != 0;
     else if (a == "--kws-ns") o.kws_ns = next("--kws-ns");
@@ -231,7 +239,7 @@ std::string str_list(const std::vector<std::string>& v) {
 // Keyword spotter, either inline or on its own thread (the audio loop never waits for it).
 class KwsRunner {
  public:
-  KwsRunner(KeywordSpotter* k, bool async) : k_(k), async_(async) {
+  KwsRunner(WakeSpotter* k, bool async) : k_(k), async_(async) {
     if (async_) th_ = std::thread([this] { loop(); });
   }
   ~KwsRunner() { stop(); }
@@ -265,6 +273,11 @@ class KwsRunner {
     cv_.notify_one();
     done_cv_.wait(lk, [&] { return jobs_.empty() && !running_job_; });
     return f_result_;
+  }
+
+  bool peak_score_known() const { return std::string(k_->engine()) == "oww"; }
+  float peak_score() {
+    return call([&] { return k_->peak_score(); });
   }
 
   void drain() {
@@ -312,7 +325,7 @@ class KwsRunner {
     }
   }
 
-  KeywordSpotter* k_;
+  WakeSpotter* k_;
   bool async_;
   std::thread th_;
   std::mutex mu_;
@@ -435,23 +448,39 @@ int main(int argc, char** argv) {
   const bool file_in = fstat(0, &st) == 0 && S_ISREG(st.st_mode);
   const bool sync_kws = o.sync_kws < 0 ? file_in : o.sync_kws != 0;
 
-  KeywordSpotter spotter;
+  std::unique_ptr<WakeSpotter> spotter;
   std::unique_ptr<KwsRunner> kws;
-  if (o.kws) {
+  if (o.kws && !o.oww.empty()) {  // one trained phrase, openWakeWord
+    auto s = std::make_unique<OwwSpotter>();
+    OwwConfig oc;
+    oc.model = o.oww;
+    oc.threshold = o.kw_threshold > 0.0f ? o.kw_threshold : 0.5f;
+    oc.threads = o.kws_threads;
+    oc.trace = o.kws_trace;
+    struct stat fs{};
+    if (stat((o.model_dir + "/melspectrogram.onnx").c_str(), &fs) == 0) oc.feature_dir = o.model_dir;
+    if (!s->init(oc, err)) {
+      log("openwakeword: " + err);
+      return 1;
+    }
+    spotter = std::move(s);
+  } else if (o.kws) {  // open vocabulary, sherpa-onnx
+    auto s = std::make_unique<KeywordSpotter>();
     KwsConfig kc;
     kc.model_dir = o.model_dir;
     kc.keywords = o.keywords;
-    kc.threshold = o.kw_threshold;
+    kc.threshold = o.kw_threshold > 0.0f ? o.kw_threshold : 0.25f;
     kc.score = o.kw_score;
     kc.threads = o.kws_threads;
-    if (!spotter.init(kc, err)) {
+    if (!s->init(kc, err)) {
       log("keyword spotter: " + err);
       return 1;
     }
     std::string e2;
-    spotter.set_keywords(o.keywords, o.kw_threshold, o.kw_score, e2);  // normalises the names
-    kws = std::make_unique<KwsRunner>(&spotter, !sync_kws);
+    s->set_keywords(o.keywords, kc.threshold, o.kw_score, e2);  // normalises the names
+    spotter = std::move(s);
   }
+  if (spotter) kws = std::make_unique<KwsRunner>(spotter.get(), !sync_kws);
 
   FILE* dump = o.dump.empty() ? nullptr : std::fopen(o.dump.c_str(), "wb");
   std::unique_ptr<OutProc> out_proc;
@@ -461,7 +490,7 @@ int main(int argc, char** argv) {
     link.send(std::string("{\"type\":\"hello\",\"name\":\"voicefront\",\"version\":\"") + kVersion +
               "\",\"mics\":" + std::to_string(m) + ",\"rate\":16000,\"aec\":" + (o.aec ? "true" : "false") +
               ",\"beamformer\":" + json_str(array.beamformer()) +
-              ",\"keywords\":" + str_list(o.kws ? spotter.keywords() : std::vector<std::string>{}) + "}");
+              ",\"keywords\":" + str_list(o.kws ? spotter->keywords() : std::vector<std::string>{}) + "}");
   };
   hello();
 
@@ -508,7 +537,11 @@ int main(int argc, char** argv) {
                     ",\"dropped\":" + std::to_string(link.dropped());
     if (out_proc) s += ",\"out_restarts\":" + std::to_string(out_proc->restarts());
     if (erle_n > 50 && erle_out > 0.0) s += ",\"erle_db\":" + fmt("%.1f", 10.0 * std::log10(erle_in / erle_out));
-    if (o.kws) s += ",\"keywords\":" + str_list(spotter.keywords()) + ",\"kw_threshold\":" + fmt("%.3f", spotter.threshold());
+    if (o.kws) {
+      s += ",\"keywords\":" + str_list(spotter->keywords()) + ",\"kw_threshold\":" + fmt("%.3f", spotter->threshold()) +
+           ",\"kws_engine\":" + json_str(spotter->engine());
+      if (kws->peak_score_known()) s += ",\"kw_peak\":" + fmt("%.3f", kws->peak_score());
+    }
     link.send(s + "}");
     erle_in = erle_out = 0.0;
     erle_n = 0;
@@ -535,7 +568,7 @@ int main(int argc, char** argv) {
     const std::string cmd = j.get_str("cmd");
     if (cmd == "ping") {  // reply carries the hello fields; a "hello" event alone means voicefront (re)started
       reply(j, true, std::string(",\"version\":\"") + kVersion + "\",\"keywords\":" +
-                         str_list(o.kws ? spotter.keywords() : std::vector<std::string>{}), "");
+                         str_list(o.kws ? spotter->keywords() : std::vector<std::string>{}), "");
     } else if (cmd == "status") {
       reply(j, true, "", "");
       status(t);
@@ -556,12 +589,12 @@ int main(int argc, char** argv) {
       if (const Json* a = j.get("keywords"))
         for (const auto& v : a->arr)
           if (v.type == Json::Str) kw.push_back(v.str);
-      if (kw.empty()) kw = spotter.keywords();
-      const float th = static_cast<float>(j.get_num("threshold", spotter.threshold()));
-      const float sc = static_cast<float>(j.get_num("score", spotter.score()));
+      if (kw.empty()) kw = spotter->keywords();
+      const float th = static_cast<float>(j.get_num("threshold", spotter->threshold()));
+      const float sc = static_cast<float>(j.get_num("score", spotter->score()));
       std::string e;
-      const bool ok = kws->call([&] { return spotter.set_keywords(kw, th, sc, e); });
-      reply(j, ok, ",\"keywords\":" + str_list(spotter.keywords()), ok ? "" : e);
+      const bool ok = kws->call([&] { return spotter->set_keywords(kw, th, sc, e); });
+      reply(j, ok, ",\"keywords\":" + str_list(spotter->keywords()), ok ? "" : e);
     } else if (cmd == "set") {
       if (j.get("beamformer")) array.set_beamformer(j.get_str("beamformer"));
       if (j.has_num("vad_snr_db")) array.set_vad_snr_db(static_cast<float>(j.get_num("vad_snr_db", 8)));
@@ -583,7 +616,8 @@ int main(int argc, char** argv) {
 
   log(std::string("running: ") + std::to_string(c) + " ch in, mics " + std::to_string(m) +
       (o.aec ? ", aec on ref " + std::to_string(o.ref) : ", no aec") + ", " + array.beamformer() +
-      (o.kws ? ", kws on " + o.kws_input + (sync_kws ? " (inline)" : " (thread)") : ", no kws"));
+      (o.kws ? ", " + std::string(spotter->engine()) + " kws on " + o.kws_input + (sync_kws ? " (inline)" : " (thread)")
+             : ", no kws"));
 
   while (!g_stop && read_full(0, in.data(), in.size() * sizeof(int16_t))) {
     ++chunks;
@@ -724,7 +758,8 @@ int main(int argc, char** argv) {
     kws->drain();
     for (const auto& h : kws->take())
       link.send("{\"type\":\"wake\",\"keyword\":" + json_str(h.keyword) + ",\"angle\":null,\"t\":" +
-                fmt("%.2f", static_cast<double>(h.sample - kws_latency) / kRate) + "}");
+                fmt("%.2f", static_cast<double>(h.sample - kws_latency) / kRate) +
+                (h.score > 0.0f ? ",\"score\":" + fmt("%.3f", h.score) : "") + "}");
     kws->stop();
   }
   if (dump) std::fclose(dump);

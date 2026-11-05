@@ -9,6 +9,8 @@ DEPS=$HERE/deps
 PREFIX=$DEPS/prefix
 WAP_TAG=v2.1
 SHERPA_VER=2.0.1
+ORT_VER=1.28.2   # the onnxruntime inside the sherpa-onnx static bundle (strings libonnxruntime.a | grep '^1\.')
+OWW_REL=0.5.1
 KWS=sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01
 JOBS=${JOBS:-3}   # keep the Orin's 12 V converter happy (see the JetPack 7.2 devlog)
 
@@ -43,6 +45,20 @@ if [ ! -f "$PREFIX/lib/libsherpa-onnx-c-api.a" ]; then
   curl -fsSL -o "$PREFIX/include/sherpa-onnx/c-api/c-api.h" \
     "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v$SHERPA_VER/sherpa-onnx/c-api/c-api.h"
 fi
+
+# ONNX Runtime C/C++ headers matching the libonnxruntime.a inside the sherpa-onnx bundle (oww.cpp uses them)
+if [ ! -f "$PREFIX/include/onnxruntime/onnxruntime_cxx_api.h" ]; then
+  mkdir -p "$PREFIX/include/onnxruntime"
+  for h in onnxruntime_c_api.h onnxruntime_cxx_api.h onnxruntime_cxx_inline.h onnxruntime_float16.h onnxruntime_ep_c_api.h onnxruntime_error_code.h; do
+    curl -fsSL -o "$PREFIX/include/onnxruntime/$h" \
+      "https://raw.githubusercontent.com/microsoft/onnxruntime/v$ORT_VER/include/onnxruntime/core/session/$h"
+  done
+fi
+
+# openWakeWord feature models (Apache-2.0): melspectrogram + Google speech embedding, shared by every wake model
+for f in melspectrogram.onnx embedding_model.onnx; do
+  [ -f "model/$f" ] || curl -fsSL -o "model/$f" "https://github.com/dscripka/openWakeWord/releases/download/v$OWW_REL/$f"
+done
 
 # English keyword model (Apache-2.0); bpe.vocab is in the repo (exported from the model's bpe.model)
 if [ ! -f model/encoder.int8.onnx ]; then
