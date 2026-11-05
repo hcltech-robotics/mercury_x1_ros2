@@ -92,3 +92,14 @@ features shape=(481345, 96)
 duration ~10.70 h, max score=0.194
    >= 0.5: 0 activations -> 0.00 false wakes/hour
    >= 0.3: 0 activations -> 0.00 false wakes/hour
+
+== Round 3 + sweep (2026-11-05), eval_r3.py: far-field = robot mics recording a monitor ~2 m away, 14 held-out
+   Kokoro voices x 2 phrasings (28) + 12 confusable negatives; validation = 10.7 h of general audio ==
+model                         far-field 0.5 / 0.3   confusable   clean 0.5   false wakes/h 0.5 / 0.3
+r2 (installed)                10/28 / 10/28         0/12         45/56       0.37 / 0.37
+r3 (robot IR+noise+ff pos)     7/28 /  10/28        0/12         37/56       0.19 / 0.37
+A r3 feats, 128 units, w750    6/28 /   9/28        0/12         49/56       0.19 / 0.47
+B r3 feats, 32, w150 fp1.0    10/28 /  12/28        0/12         53/56       0.93 / 2.34
+C r2 feats, 32, w150 fp1.0    11/28 /  16/28        0/12         54/56       1.12 / 2.90
+D r3 feats, 128, w150 fp1.0   14/28 /  20/28        1/12         54/56       1.96 / 3.18
+Recall only rises with false wakes (one trade-off curve); the robot acoustics did not move the curve.
