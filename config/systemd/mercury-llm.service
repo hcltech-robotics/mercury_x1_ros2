@@ -1,0 +1,19 @@
+# Mercury X1 on-board language model for voice chat: llama-server (llama.cpp, CUDA) on http://127.0.0.1:8091.
+# Install / remove with server/robot_llm/setup.sh. Logs: journalctl -u mercury-llm
+[Unit]
+Description=Mercury X1 language model (llama.cpp on the Jetson)
+# not enabled at boot: start.sh starts it after mercury-speech, so loading ~3 GB onto the GPU is a supply step of
+# its own (the Jetson's 12 V converter resets the module when load steps coincide, 2026-11-03)
+After=network.target mercury-speech.service
+
+[Service]
+User=elephant
+WorkingDirectory=/home/elephant/llm
+# the GPU driver needs large contiguous blocks; compact RAM first (as root: "+"), as for mercury-speech
+ExecStartPre=+/bin/sh -c 'sync; echo 1 > /proc/sys/vm/compact_memory'
+ExecStart=/home/elephant/mercury_x1_ros2/server/robot_llm/run.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

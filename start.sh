@@ -70,6 +70,11 @@ if [ "${MX1_SPEECH:-true}" = true ]; then
   sudo -n systemctl start mercury-speech 2>/dev/null || true
   wait_for 60 "the speech service" curl -sf -m 2 -o /dev/null http://127.0.0.1:8097/health || true
 fi
+# 1b) the on-board language model (voice chat failsafe, server/robot_llm), also a GPU load of its own
+if [ "${MX1_LLM:-true}" = true ] && [ -f /etc/systemd/system/mercury-llm.service ]; then
+  sudo -n systemctl start mercury-llm 2>/dev/null || true
+  wait_for 90 "the on-board language model" curl -sf -m 2 -o /dev/null http://127.0.0.1:8091/health || true
+fi
 arms_powered() {
   for a in left right; do
     ros2 topic echo --once --field powered "/${a}_arm/state" 2>/dev/null | grep -qi true || return 1

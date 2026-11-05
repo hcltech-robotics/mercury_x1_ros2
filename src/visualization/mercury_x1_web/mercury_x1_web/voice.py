@@ -11,6 +11,9 @@ Runs on web_server's asyncio loop (all I/O, no threads):
   * Knowledge: every phrase is looked up in the local knowledge files (knowledge.py, BM25) and the best
     paragraphs go into the prompt. Actions: the model may call tools (robot status, named places, drive to a
     place, stop, gestures); driving and gestures only when switched on in the settings (kiosk Voice tab).
+  * Language model: the lab server (VOICE_LLM_URL) or the robot's own (llama-server on the Jetson,
+    VOICE_LOCAL_LLM_URL, server/robot_llm). Setting "llm": auto (lab, the robot when the lab does not answer),
+    lab, or robot (fully on board).
 Config: ~/.config/mercury_x1/voice.env (model URL + bearer token, ALSA devices; chmod 600).
 """
 from __future__ import annotations
@@ -33,6 +36,7 @@ VOICES = {"af_heart": "Heart (US)", "af_bella": "Bella (US)", "am_michael": "Mic
 DEFAULT_SETTINGS = {"volume": 46, "voice": "af_heart", "speed": 1.0,
                     "drive": False,       # may drive to named places when asked (Nav2); off until tested
                     "gestures": False,    # may move waist / neck / arms for gestures; off until tested
+                    "llm": "auto",        # auto: lab server, robot's own model when it does not answer | lab | robot
                     "wake_listen": True}  # "hey mercury" starts listening (if off), a quiet minute ends it
 TEST_PHRASE = "Hello, I am Mercury. This is how loud I speak."
 SYSTEM_PROMPT = (
@@ -51,6 +55,10 @@ IDLE_RESET_S = 180         # forget the conversation after this long without spe
 WAKE_IDLE_OFF_S = 45       # a conversation started by the wake word stops listening after this long without speech
 UNMUTE_TAIL_S = 0.35       # keep the mic muted this long after the speaker stops
 LOCAL_SPEECH = "http://127.0.0.1:8097"   # server/robot_speech: Parakeet STT + Kokoro TTS
+LOCAL_LLM = "http://127.0.0.1:8091/v1/chat/completions"   # server/robot_llm: llama-server on the Jetson
+LLM_MODES = ("auto", "lab", "robot")
+LAB_HEADERS_S = 3.0        # auto: the lab server must start answering within this, else the robot's model answers
+LAB_RETRY_S = 60.0         # auto: after a lab failure, ask the robot's model first for this long
 SENTENCE_END = re.compile(r"(?<=[.!?;:])\s+|\n+")
 # a short "stop" phrase cancels motion directly, before (and whatever) the model answers
 STOP_PHRASE = re.compile(r"\b(stop|halt|freeze|wait|stay|hold on|don'?t move|stand still)\b", re.I)
@@ -113,6 +121,8 @@ class VoiceChat:
         st = {**DEFAULT_SETTINGS, **{k: v for k, v in saved.items() if k in DEFAULT_SETTINGS}}
         if st["voice"] not in VOICES:
             st["voice"] = DEFAULT_SETTINGS["voice"]
+        if st["llm"] not in LLM_MODES:
+            st["llm"] = DEFAULT_SETTINGS["llm"]
         return st
 
     @staticmethod
@@ -139,6 +149,8 @@ class VoiceChat:
         for key in ("drive", "gestures", "wake_listen"):
             if key in changes:
                 self.settings[key] = bool(changes[key])
+        if changes.get("llm") in LLM_MODES:
+            self.settings["llm"] = changes["llm"]
         os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
         with open(SETTINGS_FILE, "w") as f:
             json.dump(self.settings, f)
@@ -345,15 +357,12 @@ class VoiceChat:
             tools = self._tools()
             first, spoken = None, False
             for round_ in range(MAX_TOOL_ROUNDS + 1):
-                body = {"model": conf.get("VOICE_LLM_MODEL", "pennyroyal"), "messages": msgs, "stream": True,
-                        "max_tokens": 300, "temperature": 0.3, "chat_template_kwargs": {"enable_thinking": False}}
+                body = {"messages": msgs, "stream": True, "max_tokens": 300, "temperature": 0.3,
+                        "chat_template_kwargs": {"enable_thinking": False}}
                 if tools and round_ < MAX_TOOL_ROUNDS:
                     body["tools"] = tools
                 pending, calls, part = "", {}, ""
-                async with self._session.post(conf["VOICE_LLM_URL"], json=body,
-                                              timeout=aiohttp.ClientTimeout(total=60)) as r:
-                    if r.status != 200:
-                        raise RuntimeError(f"model: HTTP {r.status} {(await r.text())[:100]}")
+                async with await self._llm_open(body, conf) as r:
                     async for raw in r.content:
                         line = raw.decode(errors="replace").strip()
                         if not line.startswith("data:") or line.endswith("[DONE]"):
@@ -422,6 +431,42 @@ class VoiceChat:
             self.last_speech = time.time()
             if self.enabled and self.state in ("thinking", "speaking"):
                 self._set("listening")
+
+    # ---- language model: lab server or the robot's own -------------------------------------------
+    _lab_down_until = 0.0
+
+    def _llm_targets(self, conf: dict) -> list[tuple[str, str, str]]:
+        lab = ("lab", conf.get("VOICE_LLM_URL", ""), conf.get("VOICE_LLM_MODEL", "pennyroyal"))
+        robot = ("robot", conf.get("VOICE_LOCAL_LLM_URL", LOCAL_LLM), conf.get("VOICE_LOCAL_LLM_MODEL", "local"))
+        mode = self.settings.get("llm", "auto")
+        if mode == "robot" or not lab[1]:
+            return [robot]
+        if mode == "lab":
+            return [lab]
+        return [robot, lab] if time.time() < self._lab_down_until else [lab, robot]
+
+    async def _llm_open(self, body: dict, conf: dict) -> aiohttp.ClientResponse:
+        """streaming chat request to the first model that starts answering (failover only before the reply starts)"""
+        errors = []
+        for where, url, model in self._llm_targets(conf):
+            try:
+                timeout = aiohttp.ClientTimeout(total=60, sock_connect=1.5 if where == "lab" else 5)
+                r = await asyncio.wait_for(self._session.post(url, json={**body, "model": model}, timeout=timeout),
+                                           LAB_HEADERS_S if where == "lab" else 30)
+                if r.status != 200:
+                    text = (await r.text())[:100]
+                    r.release()
+                    raise RuntimeError(f"HTTP {r.status} {text}")
+            except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, OSError) as e:
+                errors.append(f"{where}: {str(e)[:80] or type(e).__name__}")
+                if where == "lab":
+                    self._lab_down_until = time.time() + LAB_RETRY_S
+                continue
+            if where == "lab":
+                self._lab_down_until = 0.0
+            self.stats["llm_on"] = where
+            return r
+        raise RuntimeError("model: " + "; ".join(errors))
 
     # ---- knowledge + tools ---------------------------------------------------------------------
     _facts_used = 0
