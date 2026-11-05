@@ -51,7 +51,8 @@ from . import places as placelib
 from . import slam3d
 from .gpuprocs import GpuProcs
 from .sysstats import SysStats
-from .voice import VoiceChat
+from .voice import LOCAL_SPEECH, VoiceChat, load_conf as load_voice_conf
+from .wake_verify import WakeVerifier
 from .wifi import Wifi
 from std_msgs.msg import Bool, ColorRGBA, String
 from std_srvs.srv import SetBool, Trigger
@@ -535,12 +536,12 @@ class WebNode(Node):
             self.get_logger().info("E-stop released (base MCU back or arms powered)")
 
     def _on_wake(self, m: VoiceWake) -> None:
-        if self.wake_hook and not math.isnan(m.angle_deg):
-            self.wake_hook(m.angle_deg)
-        self.vb_wakes = ([{"t": time.time(), "keyword": m.keyword, "angle": None if math.isnan(m.angle_deg) else
-                           round(m.angle_deg, 1), "beam": m.beam,
-                           "score": None if math.isnan(m.score) else (round(m.score, 2) if m.score < 1.5 else round(m.score))}]
-                         + self.vb_wakes)[:30]
+        entry = {"t": time.time(), "keyword": m.keyword, "angle": None if math.isnan(m.angle_deg) else round(m.angle_deg, 1),
+                 "beam": m.beam, "score": None if math.isnan(m.score) else (round(m.score, 2) if m.score < 1.5 else round(m.score)),
+                 "check": None}      # filled in by the App: "ok" / "no" + "heard" (wake_verify.py)
+        self.vb_wakes = ([entry] + self.vb_wakes)[:30]
+        if self.wake_hook:
+            self.wake_hook(m.angle_deg, entry)
 
     def _on_vb_event(self, m: String) -> None:
         """voicefront JSON lines: keep the latest direction, voice activity and status for the Voice tab"""
@@ -662,6 +663,8 @@ class App:
         self.gestures = Gestures(node, node.arm_motion)   # body language for voice chat (switch "gestures")
         node.wake_hook = self._on_wake_word
         self.voice = VoiceChat(on_change=self._voice_changed, actions=self)   # kiosk Chat tab; actions = voice tools
+        vconf = load_voice_conf()
+        self.wake_verifier = WakeVerifier(vconf.get("VOICE_MIC", "default"), vconf.get("VOICE_SPEECH_URL", LOCAL_SPEECH))
         self.voice_version = 0
         node.waypoints_changed = self.save_waypoints
         os.makedirs(MAPS_DIR, exist_ok=True)
@@ -775,14 +778,25 @@ class App:
         if self.voice.settings.get("gestures"):
             self.gestures.talking(on)
 
-    def _on_wake_word(self, angle_deg: float) -> None:
-        """ROS thread: someone said the wake word from angle_deg -> look that way (gestures on only) and, if voice
-        chat is not listening, take one question (switch "wake_listen"), then wait for the wake word again"""
-        if self.voice.settings.get("gestures"):
-            self.gestures.look_at(angle_deg, VB_FRONT_DEG, VB_ANGLE_SIGN)
+    def _on_wake_word(self, angle_deg: float, entry: dict) -> None:
+        """ROS thread: the board heard the wake word from angle_deg. Confirmed by the speech recognizer (switch
+        "wake_verify"), then: look that way (gestures on only) and, if voice chat is not listening, take one
+        question (switch "wake_listen"), then wait for the wake word again"""
         loop = getattr(self, "loop", None)
-        if loop is not None and self.voice.settings.get("wake_listen"):
-            asyncio.run_coroutine_threadsafe(self.voice.wake(), loop)
+        if loop is not None:
+            asyncio.run_coroutine_threadsafe(self._wake_checked(angle_deg, entry), loop)
+
+    async def _wake_checked(self, angle_deg: float, entry: dict) -> None:
+        if self.voice.settings.get("wake_verify", True) and not self.voice.enabled:
+            ok, heard = await self.wake_verifier.verify()
+            entry["check"], entry["heard"] = ("ok" if ok else "no"), heard or self.wake_verifier.last.get("why", "")
+            self._voice_changed()
+            if not ok:
+                return
+        if self.voice.settings.get("gestures") and not math.isnan(angle_deg):
+            self.gestures.look_at(angle_deg, VB_FRONT_DEG, VB_ANGLE_SIGN)
+        if self.voice.settings.get("wake_listen"):
+            await self.voice.wake()
 
     def voice_status(self) -> dict:
         n = self.node
@@ -1346,6 +1360,7 @@ class App:
             stop = asyncio.Event()
             loop = asyncio.get_running_loop()
             self.loop = loop                     # ROS-thread callbacks (wake word) schedule voice work here
+            self.wake_verifier.start()           # keeps the last seconds of the beam for confirming wake words
             for sig in (signal.SIGINT, signal.SIGTERM):
                 loop.add_signal_handler(sig, stop.set)
             await stop.wait()

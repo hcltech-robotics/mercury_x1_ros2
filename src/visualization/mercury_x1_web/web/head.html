@@ -345,6 +345,7 @@
       <button id="v-test" class="primary" style="margin-top:12px;width:100%">Test voice</button>
       <div class="lbl" style="margin:14px 0 2px">Voice actions</div>
       <div class="switch" id="sw-vwake"><span>Listen after "hey mercury" <span class="muted small">(answers one question)</span></span><span class="track"></span></div>
+      <div class="switch" id="sw-vverify"><span>Confirm the wake word <span class="muted small">(speech recognition must hear "mercury")</span></span><span class="track"></span></div>
       <div class="switch warn" id="sw-vdrive"><span>Drive by voice <span class="muted small">("take me to the kitchen")</span></span><span class="track"></span></div>
       <div class="switch warn" id="sw-vgest"><span>Gestures <span class="muted small">(waist, head, arms)</span></span><span class="track"></span></div>
     </div>
@@ -714,6 +715,7 @@ function renderLlm(v, set) {
 }
 $("#v-test").onclick = () => api("voice", { op: "test" });
 const setVWake = bindSwitch($("#sw-vwake"), async (on) => { api("voice", { op: "settings", wake_listen: on }); });
+const setVVerify = bindSwitch($("#sw-vverify"), async (on) => { api("voice", { op: "settings", wake_verify: on }); });
 const setVDrive = bindSwitch($("#sw-vdrive"), async (on) => {
   if (on && !await ask("Let people send the robot to named places by voice? It drives with Nav2; keep the way clear and the e-stop at hand.", { ok: "Allow", danger: true })) return false;
   api("voice", { op: "settings", drive: on });
@@ -740,7 +742,7 @@ function renderVoice() {
   }
   renderLlm(v, set);
   $("#v-test").disabled = st === "thinking" || st === "speaking";
-  setVWake(!!set.wake_listen); setVDrive(!!set.drive); setVGest(!!set.gestures);
+  setVWake(!!set.wake_listen); setVVerify(set.wake_verify !== false); setVDrive(!!set.drive); setVGest(!!set.gestures);
   const s = v.stats || {};
   $("#v-stats").textContent = s.stt_ms != null ? `heard in ${s.stt_ms} ms · first word ${s.llm_first_s ?? "?"} s${s.llm_on ? ` (${s.llm_on === "robot" ? "on robot" : (s.llm_name || "network")})` : ""} · voice ${s.tts_ms ?? "?"} ms${s.tts_on ? ` (${s.tts_on})` : ""}${s.facts ? ` · ${s.facts} facts` : ""}${s.last_tool ? ` · tool ${s.last_tool}` : ""}` : "";
   const h = (v.transcript || []).map((m) => `<div class="msg ${m.role}">${esc(m.text)}<span class="t">${m.t}</span></div>`).join("");
@@ -838,14 +840,15 @@ function renderVoiceBoard() {
   if (lw) {
     const ago = Math.max(0, Math.round(now - lw.t));
     const when = ago < 60 ? ago + " s" : Math.round(ago / 60) + " min";
-    $("#wake-last").textContent = vf ? `${lw.keyword} · ${lw.angle ?? "?"}° · confidence ${lw.score ?? "?"} · ${when} ago` :
+    $("#wake-last").textContent = vf ? `${lw.keyword} · ${lw.angle ?? "?"}° · confidence ${lw.score ?? "?"}${lw.check === "no" ? " · not confirmed" : lw.check === "ok" ? " · confirmed" : ""} · ${when} ago` :
       `${lw.keyword} · ${lw.angle ?? "?"}° · beam ${lw.beam} · score ${lw.score ?? "?"} · ${when} ago`;
     $("#wake-last").className = now - lw.t < 15 ? "" : "muted";
   }
   const hhmmss = (t) => new Date(t * 1000).toTimeString().slice(0, 8);
   setHTML("#wake-list", !wakes.length ? "" : vf ?
-    `<table><tr><th>time</th><th>wake word</th><th>angle</th><th>confidence</th></tr>` +
-    wakes.map((w) => `<tr><td>${hhmmss(w.t)}</td><td>${esc(w.keyword)}</td><td>${w.angle ?? "—"}°</td><td>${w.score ?? "—"}</td></tr>`).join("") + "</table>" :
+    `<table><tr><th>time</th><th>wake word</th><th>angle</th><th>confidence</th><th>heard</th></tr>` +
+    wakes.map((w) => `<tr class="${w.check === "no" ? "muted" : ""}"><td>${hhmmss(w.t)}</td><td>${esc(w.keyword)}</td><td>${w.angle ?? "—"}°</td><td>${w.score ?? "—"}</td>` +
+      `<td>${w.check === "ok" ? "✓ " : w.check === "no" ? "✗ " : ""}${esc(w.heard || (w.check ? "" : "—"))}</td></tr>`).join("") + "</table>" :
     `<table><tr><th>time</th><th>wake word</th><th>angle</th><th>beam</th><th>score</th></tr>` +
     wakes.map((w) => `<tr><td>${hhmmss(w.t)}</td><td>${esc(w.keyword)}</td><td>${w.angle ?? "—"}°</td><td>${w.beam}</td><td>${w.score ?? "—"}</td></tr>`).join("") + "</table>");
 }

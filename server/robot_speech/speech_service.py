@@ -6,6 +6,7 @@
                   {"type": "speech_end"} / {"type": "final", "text", "stt_ms", "duration"} /
                   {"type": "dropped", "text", "why"}. Client messages: {"type": "mute", "on": bool}.
   POST /tts       {"text", "voice"?, "speed"?} -> audio/wav (24 kHz mono)
+  POST /stt       raw PCM16 LE 16 kHz mono (<= 10 s) -> {"text", "stt_ms", "duration"} (wake-word confirmation)
   GET  /health
 
 Listens on 127.0.0.1 only (no token). Own venv (~/mercury-speech, `setup.sh`), not ROS' Python: the Jetson
@@ -252,6 +253,16 @@ async def listen(req: web.Request) -> web.StreamResponse:
     return ws
 
 
+async def stt(req: web.Request) -> web.Response:
+    """one shot: the last seconds of the mic, for confirming a wake word"""
+    pcm = await req.read()
+    if len(pcm) < RATE * 2 // 5 or len(pcm) > RATE * 2 * 10:
+        raise web.HTTPBadRequest(text="0.2 to 10 s of PCM16 16 kHz mono expected")
+    eng: Engines = req.app["engines"]
+    r = await asyncio.get_running_loop().run_in_executor(None, eng.transcribe, pcm[: len(pcm) // 2 * 2])
+    return web.json_response(r)
+
+
 async def tts(req: web.Request) -> web.Response:
     body = await req.json()
     text = str(body.get("text", "")).strip()[:1000]
@@ -279,6 +290,7 @@ def main() -> None:
     app.router.add_get("/health", health)
     app.router.add_get("/listen", listen)
     app.router.add_post("/tts", tts)
+    app.router.add_post("/stt", stt)
     web.run_app(app, host="127.0.0.1", port=PORT, access_log=None, print=None)
 
 

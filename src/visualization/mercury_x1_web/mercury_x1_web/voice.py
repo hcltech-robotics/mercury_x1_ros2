@@ -38,7 +38,8 @@ DEFAULT_SETTINGS = {"volume": 46, "voice": "af_heart", "speed": 1.0,
                     "gestures": False,    # may move waist / neck / arms for gestures; off until tested
                     "llm": "auto",        # auto: network model, robot's own when it does not answer | lab (network) | robot
                     "llm_server": "1",    # which network model (network_llms id)
-                    "wake_listen": True}  # "hey mercury" takes one question (when not already listening)
+                    "wake_listen": True,  # "hey mercury" takes one question (when not already listening)
+                    "wake_verify": True}  # ... after the speech recognizer confirmed it heard "mercury" (wake_verify.py)
 TEST_PHRASE = "Hello, I am Mercury. This is how loud I speak."
 SYSTEM_PROMPT = (
     "You are Mercury, a friendly wheeled humanoid robot with two arms, made by Elephant Robotics and working in the "
@@ -190,7 +191,7 @@ class VoiceChat:
             self.settings["voice"] = changes["voice"]
         if "speed" in changes:
             self.settings["speed"] = round(max(0.7, min(1.4, float(changes["speed"]))), 2)
-        for key in ("drive", "gestures", "wake_listen"):
+        for key in ("drive", "gestures", "wake_listen", "wake_verify"):
             if key in changes:
                 self.settings[key] = bool(changes[key])
         if changes.get("llm") in LLM_MODES:
