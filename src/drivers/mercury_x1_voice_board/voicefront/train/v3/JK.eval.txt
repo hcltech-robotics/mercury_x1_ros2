@@ -1,0 +1,29 @@
+model ens/JK.onnx
+far-field held-out (mic0)    >= 0.5: wake 17/28  false 1/12
+far-field held-out (mic0)    >= 0.3: wake 18/28  false 1/12
+far-field seen voices mic0   >= 0.5: wake 15/28  false 0/0
+far-field seen voices mic0   >= 0.3: wake 17/28  false 0/0
+far-field seen voices mic2   >= 0.5: wake 12/28  false 0/0
+far-field seen voices mic2   >= 0.3: wake 15/28  false 0/0
+clean Kokoro                 >= 0.5: wake 53/56  false 2/12
+clean Kokoro                 >= 0.3: wake 54/56  false 2/12
+testclips clean TTS          >= 0.5: 6/6
+testclips clean TTS          >= 0.3: 6/6
+board mic native             >= 0.5: 3/5
+board mic native             >= 0.3: 3/5
+board mic x10                >= 0.5: 3/5
+board mic x10                >= 0.3: 3/5
+hdmi beam                    >= 0.5: 1/2
+hdmi beam                    >= 0.3: 1/2
+talk3 (negative)             max 0.001
+robot noise+talk stream      >= 0.5: 0 activations in 30 min (max 0.492)
+robot noise+talk stream      >= 0.3: 3 activations in 30 min (max 0.492)
+01_raw_mic0_as_recorded      person 4-16 s max 1.00 | robot 16-36 s max 0.01 | noise max 0.00
+31_live_raw_mic0_same_run    person 4-16 s max 0.99 | robot 16-36 s max 0.01 | noise max 0.00
+01_raw_mic0_stock_gain30     person 4-16 s max 1.00 | robot 16-36 s max 0.02 | noise max 0.00
+validation 10.7 h            >= 0.5: 3 false wakes = 0.28 / h
+validation 10.7 h            >= 0.3: 4 false wakes = 0.37 / h
+validation 10.7 h            >= 0.2: 12 false wakes = 1.12 / h
+validation 10.7 h            >= 0.15: 15 false wakes = 1.40 / h
+validation 10.7 h            >= 0.1: 19 false wakes = 1.78 / h
+SUMMARY ens/JK.onnx: ff 17/28@0.5 18/28@0.3 | ffneg 1/12@0.5 1/12@0.3 | val 0.28/h@0.5 0.37/h@0.3 | robot stream 0@0.5 3@0.3

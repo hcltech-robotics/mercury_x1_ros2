@@ -1,0 +1,29 @@
+model sweep_D/hey_mercury.onnx
+far-field held-out (mic0)    >= 0.5: wake 14/28  false 1/12
+far-field held-out (mic0)    >= 0.3: wake 20/28  false 1/12
+far-field seen voices mic0   >= 0.5: wake 19/28  false 0/0
+far-field seen voices mic0   >= 0.3: wake 23/28  false 0/0
+far-field seen voices mic2   >= 0.5: wake 15/28  false 0/0
+far-field seen voices mic2   >= 0.3: wake 18/28  false 0/0
+clean Kokoro                 >= 0.5: wake 54/56  false 1/12
+clean Kokoro                 >= 0.3: wake 54/56  false 1/12
+testclips clean TTS          >= 0.5: 6/6
+testclips clean TTS          >= 0.3: 6/6
+board mic native             >= 0.5: 4/5
+board mic native             >= 0.3: 5/5
+board mic x10                >= 0.5: 4/5
+board mic x10                >= 0.3: 4/5
+hdmi beam                    >= 0.5: 2/2
+hdmi beam                    >= 0.3: 2/2
+talk3 (negative)             max 0.001
+robot noise+talk stream      >= 0.5: 2 activations in 30 min (max 0.570)
+robot noise+talk stream      >= 0.3: 4 activations in 30 min (max 0.570)
+01_raw_mic0_as_recorded      person 4-16 s max 0.94 | robot 16-36 s max 0.02 | noise max 0.02
+31_live_raw_mic0_same_run    person 4-16 s max 0.95 | robot 16-36 s max 0.02 | noise max 0.02
+01_raw_mic0_stock_gain30     person 4-16 s max 0.98 | robot 16-36 s max 0.02 | noise max 0.01
+validation 10.7 h            >= 0.5: 21 false wakes = 1.96 / h
+validation 10.7 h            >= 0.3: 34 false wakes = 3.18 / h
+validation 10.7 h            >= 0.2: 51 false wakes = 4.77 / h
+validation 10.7 h            >= 0.15: 74 false wakes = 6.92 / h
+validation 10.7 h            >= 0.1: 106 false wakes = 9.91 / h
+SUMMARY sweep_D/hey_mercury.onnx: ff 14/28@0.5 20/28@0.3 | ffneg 1/12@0.5 1/12@0.3 | val 1.96/h@0.5 3.18/h@0.3 | robot stream 2@0.5 4@0.3

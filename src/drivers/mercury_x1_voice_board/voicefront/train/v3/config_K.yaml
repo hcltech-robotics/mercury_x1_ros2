@@ -1,0 +1,66 @@
+# Round 3: round 2 + the robot's own acoustics (recorded 2026-11-05 with the robot in front of a monitor):
+#  - robot_rirs_dup: measured monitor -> mic responses (4 mics x 70 copies ~ half of the reverberated batches)
+#  - robot_noise: the robot's fan hum + room (x15 ~ half of the background picks), speed-shifted +-6 %
+#  - positive_train also holds real far-field clips of 14 Kokoro voices (x25), negative_train pure hum pieces
+model_name: hey_mercury
+target_phrase:
+- hey mercury
+- hey, mercury
+- hey mercury!
+- hey murcury
+custom_negative_phrases:
+- hey mark
+- hey marcus
+- hey mercedes
+- mercury
+- hey there
+- hey mary
+- the planet mercury
+- hey siri
+- hey google
+- ok google
+- alexa
+n_samples: 100000
+n_samples_val: 2000
+tts_batch_size: 50
+augmentation_batch_size: 16
+piper_sample_generator_path: ./piper-sample-generator
+output_dir: ./sweep_v3_K
+rir_paths:
+- ./mit_rirs
+- ./r3/robot_rirs_dup
+background_paths:
+- ./audioset_16k
+- ./fma
+- ./r3/robot_noise
+background_paths_duplication_rate:
+- 1
+- 1
+- 15
+false_positive_validation_data_path: ./validation_set_features.npy
+augmentation_rounds: 1
+feature_data_files:
+  ACAV100M_sample: ./openwakeword_features_ACAV100M_2000_hrs_16bit.npy
+  positive_robot: ./r4/feat/positive_robot.npy
+  negative_robot: ./r4/feat/negative_robot.npy
+  positive_r2: ./r2_features/positive_features_train.npy
+  negative_r2: ./r2_features/negative_features_train.npy
+  positive_robot_hard: ./r4/feat_hard/positive_robot.npy
+  negative_robot_hard: ./r4/feat_hard/negative_robot.npy
+  noise_robot: ./r4/feat/noise_neg.npy
+batch_n_per_class:
+  ACAV100M_sample: 1024
+  adversarial_negative: 100
+  positive: 200
+  positive_robot: 120
+  negative_robot: 80
+  positive_r2: 100
+  negative_r2: 50
+  positive_robot_hard: 120
+  negative_robot_hard: 80
+  noise_robot: 32
+model_type: dnn
+layer_size: 128
+steps: 50000
+max_negative_weight: 750
+target_false_positives_per_hour: 0.2
