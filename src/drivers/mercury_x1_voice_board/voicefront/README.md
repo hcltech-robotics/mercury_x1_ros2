@@ -132,6 +132,32 @@ protocol. It maps:
 | CPU, board (Cortex-A53) | about 70 to 100 % of one core of 4, wake word on its own thread; the demo used about 25 % of one core |
 | Board reboot | comes back by itself: voicefront, gains, 6 USB channels, ROS node |
 
+## Measured (2026-11-05): hum, mic gain, echo
+
+Test: a person's sentences from a monitor speaker 2 m away, then the robot's own voice (Kokoro, speaker at 100 %),
+then both; levels in dBFS RMS on the Orin-side clean stream (`mx1_clean`, GTCRN), transcripts by Parakeet.
+
+| Change | Silence | Person | Robot's own voice left over | Notes |
+|---|---|---|---|---|
+| start of day: board beam, WebRTC NS, AGC | −42..−25 | −35 | −23 | words lost |
+| GTCRN on the Orin, AEC "call", AGC (PGA 4) | −56 | −25 | −48 | transcript exact |
+| + `--hum` (mics only) | | | 4 dB lower | AEC converges better without the 250 Hz line |
+| + mic PGA 4 → 0 (robot voice peaks −9.8 instead of −1.8 dBFS: no clipping) | | | 15 dB lower | high-band SNR 10 dB lower (ADC floor), transcript still exact |
+| + `--no-agc --out-gain-db 20` (final) | **−60** | **−39** | **−69** | the AGC lifted the echo residual as much as speech |
+
+- The hum: a cluster 246..255 Hz, 55..65 % of all noise power, 93..97 % of it below 300 Hz. `--hum` takes 9 dB
+  out of the hum band and 4 dB out of the floor for 1.5 dB of speech in 200..300 Hz. Filtering the reference
+  too (any filter, even a 100 Hz high-pass alone) broke AEC3: echo suppression fell from 30 dB to 6.
+- Speaker volume 100 → 80 % did not stop the mic clipping at PGA 4 (peak −1.9 dBFS): the mics sit next to the
+  speaker. PGA is the lever: ~2 dB per step.
+- **Speaking over the robot stays unrecoverable**: at the mic the person is 28 dB under the robot's voice; with
+  every AEC tuning (call / asr / light, AGC on or off) the double-talk transcript is empty or garbage.
+  Interrupting the robot would have to be detection (near-end energy in the AEC output), not transcription.
+- GTCRN on the board (A53, 1008 MHz, no cpufreq): through ONNX Runtime 13.9..17.7 ms per 16 ms hop = 134..157 %
+  of real time for the whole pipeline; the model is ~1 MFLOP/frame but 415 nodes, ~4 ms is ORT dispatch alone,
+  threads make it worse, int8 does not help (overhead, not arithmetic). A hand-written forward pass is the only
+  route.
+
 ## Known limits / next
 
 - **Wake recall on real voices is not measured yet.** The real recordings were only TTS through a monitor

@@ -35,6 +35,7 @@
 #include "apm.h"
 #include "denoise.h"
 #include "array.h"
+#include "hum.h"
 #include "json.h"
 #include "kws.h"
 #include "link.h"
@@ -60,6 +61,8 @@ struct Options {
   int ns_threads = 1;          // --ns gtcrn: onnxruntime intra-op threads
   bool events = true;          // --no-events: no vad / doa / status lines on stderr (no serial port)
   bool agc = true;
+  float hum_hz = 250.5f;       // --hum: centre of the robot's hum notches, 0 = off
+  float out_gain_db = 0.0f;    // --out-gain-db: fixed gain on the output (instead of the AGC, which lifts the echo residual as much as speech)
   bool kws = true;
   bool kws_agc = false;        // AGC on the wake-word input (no gain in recall)
   std::string kws_ns = "off";  // noise suppression on the wake-word input (hurts recall in noise)
@@ -99,6 +102,9 @@ void usage() {
                "  --vad-snr-db F      voice activity threshold (default 8)\n"
                "  --ns off|low|moderate|high|veryhigh|gtcrn  (default moderate; gtcrn = neural, model/gtcrn.onnx)\n"
                "  --no-agc\n"
+               "  --out-gain-db F     fixed gain on the output, for --no-agc (default 0)\n"
+               "  --hum F|off        notches at F-3 and F+3 Hz for the robot's ~250 Hz hum + 100 Hz high-pass on\n"
+               "                      the mics, before everything else (default 250.5)\n"
                "  --no-events         without a serial port: keep vad / doa / status lines off stderr\n"
                "  --model DIR         keyword model directory (default ./model)\n"
                "  --keywords \"a;b\"    wake words, plain English (default \"hey mercury\"; sherpa engine)\n"
@@ -162,6 +168,11 @@ bool parse_args(int argc, char** argv, Options& o) {
     else if (a == "--ns") o.ns = next("--ns");
     else if (a == "--ns-threads") o.ns_threads = std::atoi(next("--ns-threads").c_str());
     else if (a == "--no-events") o.events = false;
+    else if (a == "--out-gain-db") o.out_gain_db = static_cast<float>(std::atof(next("--out-gain-db").c_str()));
+    else if (a == "--hum") {
+      const std::string v = next("--hum");
+      o.hum_hz = v == "off" ? 0.0f : static_cast<float>(std::atof(v.c_str()));
+    }
     else if (a == "--no-agc") o.agc = false;
     else if (a == "--model") o.model_dir = next("--model");
     else if (a == "--keywords") o.keywords = split(next("--keywords"), ';');
@@ -511,6 +522,9 @@ int main(int argc, char** argv) {
 
   const int c = o.channels;
   std::vector<int16_t> in(static_cast<size_t>(kChunk) * c), mic(static_cast<size_t>(kChunk) * m), ref(kChunk, 0);
+  const float out_gain = std::pow(10.0f, o.out_gain_db / 20.0f);
+  std::unique_ptr<HumFilter> hum;  // mics only, never the reference (see hum.h)
+  if (o.hum_hz > 0) hum = std::make_unique<HumFilter>(kRate, m, o.hum_hz);
   std::vector<std::vector<float>> mf(m, std::vector<float>(kChunk));
   std::vector<const float*> mp(m);
   for (int i = 0; i < m; ++i) mp[i] = mf[i].data();
@@ -548,7 +562,8 @@ int main(int argc, char** argv) {
                     ",\"mode\":" + (fixed ? "\"fixed\"" : "\"auto\"") + ",\"beam\":" + fmt("%.1f", beam_angle) +
                     ",\"beamformer\":" + json_str(array.beamformer()) + ",\"speech\":" +
                     (array.speech() ? "true" : "false") + ",\"playback\":" + (far ? "true" : "false") +
-                    ",\"snr_db\":" + fmt("%.1f", array.snr_db()) + ",\"wakes\":" + std::to_string(wakes) +
+                    ",\"snr_db\":" + fmt("%.1f", array.snr_db()) + ",\"hum_hz\":" + fmt("%.1f", hum ? hum->f0() : 0.0f) +
+                    ",\"wakes\":" + std::to_string(wakes) +
                     ",\"dropped\":" + std::to_string(link.dropped());
     if (out_proc) s += ",\"out_restarts\":" + std::to_string(out_proc->restarts());
     if (erle_n > 50 && erle_out > 0.0) s += ",\"erle_db\":" + fmt("%.1f", 10.0 * std::log10(erle_in / erle_out));
@@ -645,8 +660,9 @@ int main(int argc, char** argv) {
       if (o.ref >= 0) ref[i] = f[o.ref];
       rs += static_cast<double>(ref[i]) * ref[i];
       for (int k = 0; k < m; ++k) mic[static_cast<size_t>(i) * m + k] = f[o.mics[k]];
-      mic0_in += static_cast<double>(mic[static_cast<size_t>(i) * m]) * mic[static_cast<size_t>(i) * m];
     }
+    if (hum) hum->process(mic.data(), kChunk, m);  // the robot's hum, out of the mics before the AEC sees them
+    for (int i = 0; i < kChunk; ++i) mic0_in += static_cast<double>(mic[static_cast<size_t>(i) * m]) * mic[static_cast<size_t>(i) * m];
 
     // speaker activity from the reference level (floor tracker + absolute minimum, 300 ms hangover)
     if (o.ref >= 0) {
@@ -715,6 +731,9 @@ int main(int argc, char** argv) {
       }
       used += kChunk;
       post.process(out.data());
+      if (out_gain != 1.0f)
+        for (int i = 0; i < kChunk; ++i)
+          out[i] = static_cast<int16_t>(std::max(-32768.0f, std::min(32767.0f, std::round(out[i] * out_gain))));
       if (out_proc) {
         out_proc->write(out.data(), kChunk, now_s(CLOCK_MONOTONIC));
       } else if (o.output && !write_full(1, out.data(), out.size() * sizeof(int16_t))) {

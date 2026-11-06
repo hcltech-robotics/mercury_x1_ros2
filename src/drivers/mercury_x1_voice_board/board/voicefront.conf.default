@@ -1,8 +1,8 @@
 # /data/build/voicefront/voicefront.conf on the voice board (sourced by voicefront.sh; restart to apply:
 #   killall voicefront   -> the runner starts it again within a second)
-MIC_GAIN=4      # AC107 PGA of the 4 mics, 0..31 (30 clips when the robot talks at full volume)
+MIC_GAIN=0      # AC107 PGA of the 4 mics, 0..31: 0 keeps the robot's own voice at full volume 10 dB under clipping (4 clipped; 30 = stock)
 REF_GAIN=20     # PGA of the speaker echo reference, 0..31
-KWS_GAIN_DB=20  # boost on the wake-word input: at MIC_GAIN 4 a talker 2 m away peaks around -33 dBFS
+KWS_GAIN_DB=28  # boost on the wake-word input: at MIC_GAIN 0 a talker 2 m away peaks around -41 dBFS
 # Wake-word engine: the trained openWakeWord model (model/hey_mercury.onnx) when it is installed, else the
 # open-vocabulary sherpa KWS. WAKE_MODEL=/data/build/voicefront/model/other.onnx picks another trained phrase.
 WAKE_MODEL=""

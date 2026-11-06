@@ -7,6 +7,7 @@ word ends, but the beam (board aplay -> USB gadget) 1.5 s later still, and that 
 import array
 import asyncio
 import difflib
+import math
 import os
 import re
 import time
@@ -19,7 +20,7 @@ TAIL_S = 1.0        # the wake event arrives as the word ends; the mic audio of 
 TAKE_S = 3.0        # audio sent to the recognizer: covers mic-path lags of 0.3 .. 1.3 s
 FRAMES = 800        # 50 ms at 16 kHz per ring chunk
 CHUNK = FRAMES * 2  # ... as mono PCM16 bytes
-MIC_DEVICE, MIC_CHANNELS, MIC_CHANNEL, MIC_GAIN = "mx1_mics", 5, 0, 10.0   # raw mic 0 of the voice board, +20 dB
+MIC_DEVICE, MIC_CHANNELS, MIC_CHANNEL, MIC_GAIN = "mx1_mics", 5, 0, 25.0   # raw mic 0 of the voice board, +28 dB (mic PGA 0 since 2026-11-05)
 DEBUG_FILE = "/tmp/mercury_wake_last.raw"          # written while /tmp/mercury_wake_last.raw.on exists (PCM16 16 kHz)
 # what Parakeet makes of "mercury" said from across the room
 HEARD = re.compile(r"merc(?:ur|er|ury|y)|murcur|mark\s*jury|mercuri|merkur|mccur", re.I)
@@ -39,6 +40,30 @@ def skeleton(word: str) -> str:
         w = w.replace(a, b)
     w = re.sub(r"[aeiouhwy']", "", w)
     return re.sub(r"(.)\1+", r"\1", w)
+
+
+def _biquad(x: list[float], b0: float, b1: float, b2: float, a1: float, a2: float) -> list[float]:
+    z1 = z2 = 0.0
+    out = []
+    for v in x:
+        y = b0 * v + z1
+        z1 = b1 * v - a1 * y + z2
+        z2 = b2 * v - a2 * y
+        out.append(y)
+    return out
+
+
+def dehum(pcm: bytes, fs: int = 16000, f0: float = 250.5) -> bytes:
+    """The robot's ~250 Hz hum out of a mono PCM16 clip: the same 100 Hz high-pass + notches at f0 -+ 3 Hz (12 Hz
+    wide) that voicefront's --hum applies to the mics (hum.h); it is 55..65 % of the noise power the recognizer sees"""
+    x = [float(v) for v in array.array("h", pcm)]
+    k = math.tan(math.pi * 100.0 / fs); k2 = k * k; n = 1.0 / (1.0 + math.sqrt(2.0) * k + k2)
+    x = _biquad(x, n, -2.0 * n, n, 2.0 * (k2 - 1.0) * n, (1.0 - math.sqrt(2.0) * k + k2) * n)
+    r = math.exp(-math.pi * 12.0 / fs)
+    for f in (f0 - 3.0, f0 + 3.0):
+        c = math.cos(2.0 * math.pi * f / fs); g = (1.0 - 2.0 * r * c + r * r) / (2.0 - 2.0 * c)
+        x = _biquad(x, g, -2.0 * c * g, g, -2.0 * r * c, r * r)
+    return array.array("h", (max(-32768, min(32767, int(round(v)))) for v in x)).tobytes()
 
 
 def heard_mercury(text: str) -> bool:
@@ -99,7 +124,7 @@ class WakeVerifier:
     async def verify(self) -> tuple[bool, str]:
         """(accepted, what was heard) for a wake candidate that just fired"""
         await asyncio.sleep(TAIL_S)
-        pcm = b"".join(self._ring)[-int(TAKE_S * 32000):]
+        pcm = dehum(b"".join(self._ring)[-int(TAKE_S * 32000):])
         t = time.time()
         if os.path.exists(DEBUG_FILE + ".on"):
             try:

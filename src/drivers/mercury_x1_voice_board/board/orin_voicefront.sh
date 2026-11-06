@@ -10,5 +10,5 @@
 # talks over the robot (the recognizer gets nothing in double talk either way).
 VF=/home/elephant/mercury_x1_ros2/src/drivers/mercury_x1_voice_board/voicefront
 exec arecord -q -D mx1_mics -c 5 -r 16000 -f S16_LE -t raw \
-    | "$VF/build/voicefront" --channels 5 --mics 0,1,2,3 --ref 4 --no-kws --no-events --model "$VF/model" --ns gtcrn --aec-tuning call \
+    | "$VF/build/voicefront" --channels 5 --mics 0,1,2,3 --ref 4 --no-kws --no-events --model "$VF/model" --ns gtcrn --aec-tuning call --no-agc --out-gain-db 20 \
           --out-cmd "aplay -q -D mx1_clean_out -c 1 -r 16000 -f S16_LE -t raw"
