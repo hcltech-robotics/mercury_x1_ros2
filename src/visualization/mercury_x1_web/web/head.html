@@ -368,6 +368,13 @@
     <div class="list" id="w-list"></div>
   </div>
   <div class="card">
+    <h2>Home pose</h2>
+    <div class="muted small">Waist and neck straight, camera level, arms hanging at the sides. The arms go first (planned
+      around each other), then the waist.</div>
+    <div class="row"><button id="home-go" class="primary">Return to home pose</button><button id="home-stop">Stop</button>
+      <span class="muted small" id="home-msg"></span></div>
+  </div>
+  <div class="card">
     <h2>Arms</h2>
     <div class="switch" id="sw-arms"><span>Arm power</span><span class="track"></span></div>
     <div class="switch warn" id="sw-free"><span>Freedrive <span class="muted small">(move the arms by hand)</span></span><span class="track"></span></div>
@@ -488,7 +495,7 @@ function render() {
   const slam = S.procs.slam, nav = S.procs.nav;
   $("#state").textContent = [slam.running ? `${slam.mode} · ${slam.map}` : "SLAM off", nav.running ? `Nav ${S.nav}` : "Nav off"].join("  ·  ");
   $("#estop").classList.toggle("show", !!S.estop);
-  renderBattery(); renderWifiChip(); renderSystem(); renderNodes(); renderGpuProcs(); renderArms(); renderWifi(); renderRemote(); renderVoice(); renderVoiceBoard();
+  renderBattery(); renderWifiChip(); renderSystem(); renderNodes(); renderGpuProcs(); renderArms(); renderHome(); renderWifi(); renderRemote(); renderVoice(); renderVoiceBoard();
 }
 
 function renderBattery() {
@@ -591,6 +598,21 @@ function renderArms() {
   setArms(arms.length > 0 && arms.every(([, a]) => a.powered));
   setFree(arms.some(([, a]) => a.freedrive));
   $("#arms-info").textContent = arms.length ? arms.map(([s, a]) => `${s}: ${a.connected ? (a.powered ? "powered" : "off") : "no link"}`).join("  ·  ") : "arm driver not running";
+}
+
+// ---- home pose
+$("#home-go").onclick = async () => {
+  if (!await ask("Move the waist, head and arms back to the home pose? Keep clear of the arms.", { ok: "Move", danger: true })) return;
+  api("home");
+};
+$("#home-stop").onclick = () => api("home", { stop: true });
+function renderHome() {
+  const h = S.home || {}, moving = h.state === "moving";
+  $("#home-go").disabled = moving;
+  $("#home-stop").disabled = !moving;
+  const word = { moving: "moving: ", done: "done: ", failed: "failed: ", stopped: "" }[h.state];
+  $("#home-msg").textContent = word === undefined ? "" : word + (h.message || "");
+  $("#home-msg").style.color = h.state === "failed" ? "var(--bad)" : h.state === "done" ? "var(--ok)" : "";
 }
 
 // ---- LED

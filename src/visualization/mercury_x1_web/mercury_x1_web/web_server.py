@@ -82,6 +82,12 @@ MAPPING_HEAD = {"head": 0.0, "eye": -5.7}
 # waist (URDF joint "body", firmware id 13): the URDF allows ±118°, the firmware ±160°; the pages keep to ±90°
 # (the arms swing with it; cable wrap untested beyond that)
 WAIST_LIMIT_DEG = 90.0
+# kiosk "Home pose": head straight with the camera level, arms hanging at the sides (SRDF "rest"), waist straight
+HOME_HEAD = MAPPING_HEAD
+HOME_ARM_POSE = "rest"
+HOME_ARM_SPEED = 0.2        # MoveIt velocity / acceleration scaling
+HOME_SPEED = 15             # firmware speed 1..100 for the head and the waist
+HOME_TOL_DEG = 3.0          # arm joints this close to "rest" count as there (MoveIt is not even started)
 BODY_JOINTS = ("body", "head", "eye")     # waist, neck, jaw: positions for the pages
 # head voice board (mercury_x1_voice_board): wake words to pick on the kiosk Voice tab, ";" = several at once,
 # each wake event says which one fired. With voicefront on the board (ours, English, plain text) the first group
@@ -666,6 +672,8 @@ class App:
         vconf = load_voice_conf()
         self.wake_verifier = WakeVerifier(vconf.get("VOICE_SPEECH_URL", LOCAL_SPEECH))
         self.voice_version = 0
+        self.home = {"state": "idle", "message": "", "t": 0.0}   # kiosk "Home pose" button
+        self._home_task: asyncio.Task | None = None
         node.waypoints_changed = self.save_waypoints
         os.makedirs(MAPS_DIR, exist_ok=True)
 
@@ -829,6 +837,91 @@ class App:
     def _voice_changed(self) -> None:
         self.voice_version += 1
 
+    # -- kiosk "Home pose" -------------------------------------------------------------------------
+    def _home_set(self, state: str, message: str) -> None:
+        self.home = {"state": state, "message": message, "t": time.time()}
+
+    def arms_at_rest(self) -> bool:
+        rest = next((p for p in self.node.arm_motion.poses if p["name"] == HOME_ARM_POSE), None)
+        j = self.node.arm_joints
+        return rest is not None and all(k in j and abs(j[k] - v) <= math.radians(HOME_TOL_DEG)
+                                        for k, v in rest["joints"].items())
+
+    def _body_cmd(self, joints: dict[str, float], speed: int) -> None:
+        jc = JointCommand(name=list(joints), position=[math.radians(v) for v in joints.values()], speed=speed)
+        self.node.post(lambda: self.node.pub_joint.publish(jc))
+
+    async def go_home(self) -> None:
+        """head straight + camera level at once; arms to rest through MoveIt (self-collision checked, move_group
+        started for it if needed and stopped again); then the waist straight - arms first, so they hang at the
+        sides while the torso turns. A failed arm move leaves the waist where it is."""
+        n, loop = self.node, asyncio.get_running_loop()
+        started_moveit = False
+        try:
+            self.gestures.stop()
+            self._home_set("moving", "head")
+            self._body_cmd(HOME_HEAD, HOME_SPEED)
+            arms = list(n.arms.values())
+            note = ""
+            if not arms or not all(a.connected and a.powered for a in arms):
+                note = "arms off - not moved"
+            elif not self.arms_at_rest():
+                am = n.arm_motion
+                if not am.client.server_is_ready():
+                    self._home_set("moving", "starting motion planning")
+                    if not self.sup.running("moveit"):
+                        await loop.run_in_executor(None, lambda: self.sup.start(
+                            "moveit", ["ros2", "launch", "mercury_x1_moveit_config", "move_group.launch.py"], {}))
+                        started_moveit = True
+                    for _ in range(90):
+                        if am.client.server_is_ready():
+                            break
+                        await asyncio.sleep(0.5)
+                    else:
+                        self._home_set("failed", "motion planning did not start - waist not moved")
+                        return
+                    await asyncio.sleep(2.0)     # move_group takes the joint states a moment after its action is up
+                self._home_set("moving", "arms")
+                t0 = time.time()
+                n.post(lambda: am.goto(HOME_ARM_POSE, HOME_ARM_SPEED))
+                deadline = time.monotonic() + 60.0
+                while not (am.t >= t0 and am.state in ("done", "failed", "stopped")):
+                    if time.monotonic() > deadline:
+                        n.post(am.stop)
+                        self._home_set("failed", "arms timed out - waist not moved")
+                        return
+                    await asyncio.sleep(0.2)
+                if am.state != "done":
+                    self._home_set("failed", f"arms: {am.message} - waist not moved")
+                    return
+            self._home_set("moving", "waist")
+            self._body_cmd({"body": 0.0}, HOME_SPEED)
+            deadline = time.monotonic() + 30.0
+            target = {"body": 0.0, **HOME_HEAD}
+            while any(abs(n.body_joints.get(k, v) - v) > 3.0 for k, v in target.items()):
+                if time.monotonic() > deadline:
+                    far = ", ".join(k for k, v in target.items() if abs(n.body_joints.get(k, v) - v) > 3.0)
+                    self._home_set("failed", f"not there yet: {far}")
+                    return
+                await asyncio.sleep(0.2)
+            self._home_set("done", "home pose" + (f" ({note})" if note else ""))
+        except asyncio.CancelledError:
+            self._home_set("stopped", "stopped")
+            raise
+        finally:
+            if started_moveit:
+                await loop.run_in_executor(None, lambda: self.sup.stop("moveit"))
+
+    def stop_home(self) -> None:
+        n = self.node
+        if self._home_task and not self._home_task.done():
+            self._home_task.cancel()
+        n.post(n.arm_motion.stop)
+        n.post(lambda: n.call("arms_stop", Trigger.Request()))
+        held = {k: n.body_joints[k] for k in ("body", *HOME_HEAD) if k in n.body_joints}
+        if held:                          # head / waist: stay where they are now
+            self._body_cmd(held, HOME_SPEED)
+
     def head_status(self) -> dict:
         st = self.node.status()
         return {"battery": st["battery"], "battery_pct": st["battery_pct"], "charge": st["charge"],
@@ -836,7 +929,7 @@ class App:
                 "procs": self.sup.status(), "map_name": self.map_name, "system": self.sysstats.snapshot(),
                 "nodes": self.node.node_names, "wifi": self.wifi.snapshot(), "ros": self.ros_network(),
                 "time": time.strftime("%H:%M"), "voice": self.voice.snapshot(), "gpu_procs": self.gpuprocs.snapshot(),
-                "voice_board": self.node.voice_board_status(), "now": time.time(), "page_v": self.head_page_version()}
+                "voice_board": self.node.voice_board_status(), "now": time.time(), "page_v": self.head_page_version(), "home": self.home}
 
     async def head_ws(self, req):
         ws = web.WebSocketResponse(heartbeat=10)
@@ -1306,6 +1399,13 @@ class App:
         elif action == "arm_pose":        # {"name": SRDF group_state, "speed": 0.05..0.5}: MoveIt plan + execute
             name, speed = str(body.get("name", "")), float(body.get("speed", 0.3))
             n.post(lambda: n.arm_motion.goto(name, speed))
+        elif action == "home":            # {"stop"?: bool}: kiosk "Home pose" - head, arms (MoveIt), then the waist
+            if body.get("stop"):
+                self.stop_home()
+            elif self._home_task and not self._home_task.done():
+                return web.json_response({"ok": False, "error": "already moving to the home pose"})
+            else:
+                self._home_task = asyncio.create_task(self.go_home())
         elif action == "arm_stop":        # cancel the MoveIt goal and stop both arms
             n.post(n.arm_motion.stop)
             n.post(lambda: n.call("arms_stop", Trigger.Request()))
