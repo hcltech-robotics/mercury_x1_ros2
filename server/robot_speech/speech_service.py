@@ -16,7 +16,8 @@ onnxruntime-gpu wheel needs NumPy 1.x. Measured with the robot stack running:
     the CPU (2 threads: ~0.38 / ~1.44 s, ~1 GB) when the fp16 files are missing or the GPU load fails; int8 itself
     does not fit on CUDA (ORT's int8 kernels are CPU kernels; on CUDA it ran out of memory).
   * TTS: Kokoro fp32 on CUDA (GPU arena capped): ~0.35 s for a short sentence, ~0.75 s for 5 s of speech,
-    ~0.9 GB; GPU-bound (shared with nvblox). The fp16 model is slower here (casts).
+    ~0.9 GB; GPU-bound (shared with nvblox). The fp16 model is slower here (casts). Long sentences are spoken in
+    clause-sized phrases (TTS_PHRASE_WORDS): the arena cap does not hold the activations of 25+ words at once.
   * VAD: Silero v6, streaming, on the CPU (~1 % of a core).
 """
 from __future__ import annotations
@@ -26,6 +27,7 @@ import io
 import json
 import logging
 import os
+import re
 import threading
 import time
 import wave
@@ -41,6 +43,10 @@ MODELS = os.environ.get("SPEECH_MODELS", os.path.join(HOME, "models"))
 PORT = int(os.environ.get("SPEECH_PORT", "8097"))
 TTS_MODEL = os.environ.get("TTS_MODEL", "kokoro-v1.0.onnx")
 TTS_GPU_MEM_MB = int(os.environ.get("TTS_GPU_MEM_MB", "768"))
+TTS_PHRASE_WORDS = int(os.environ.get("TTS_PHRASE_WORDS", "14"))   # longest phrase synthesized in one pass
+TTS_CPU_FALLBACK = os.environ.get("TTS_CPU_FALLBACK", "1") == "1"
+TTS_RATE = 24000
+CLAUSE_PAUSE, SENTENCE_PAUSE = 0.1, 0.25                            # kokoro_onnx's own join pauses
 STT_MODEL = "nemo-parakeet-tdt-0.6b-v2"
 STT_DIR = os.path.join(MODELS, "parakeet-tdt-0.6b-v2")
 STT_THREADS = int(os.environ.get("STT_THREADS", "2"))     # 4 is no faster: the CPU is busy with ROS
@@ -65,6 +71,58 @@ NOISE_WORDS = {"", "mm", "hmm", "uh", "um", "ah", "oh"}   # what a noise burst c
 log = logging.getLogger("speech")
 
 
+_MARK = re.compile(r"([,;:.!?])[\"')\]]*$")     # a word that ends a clause / sentence (closing quotes allowed)
+_PAUSE = {**dict.fromkeys(",;:", CLAUSE_PAUSE), **dict.fromkeys(".!?", SENTENCE_PAUSE)}
+
+
+def phrases(text: str, max_words: int = TTS_PHRASE_WORDS) -> list[tuple[str, float]]:
+    """(phrase, pause after it in s): the text in pieces of at most max_words, cut at clause marks when there are any
+
+    Kokoro's HiFiGAN activations grow with the input, and its GPU arena is capped (TTS_GPU_MEM_MB): a sentence of
+    ~25+ words did not fit and the whole request failed. Kokoro trims the silence at a phrase's edges, so the
+    pieces joined with the pause their punctuation calls for sound like one sentence. A short sentence is one piece.
+    """
+    words = text.split()
+    if len(words) <= max_words:
+        return [(text, 0.0)] if words else []
+    # clause = up to and including a word that ends with , ; : . ! ? (or the end of the text)
+    clauses: list[list[str]] = [[]]
+    for w in words:
+        clauses[-1].append(w)
+        if _MARK.search(w):
+            clauses.append([])
+    clauses = [c for c in clauses if c]
+    # pack whole clauses up to max_words; a clause longer than that is cut into even pieces
+    out: list[list[str]] = []
+    cur: list[str] = []
+    for c in clauses:
+        if len(c) > max_words:
+            if cur:
+                out.append(cur)
+                cur = []
+            n = -(-len(c) // max_words)
+            step = -(-len(c) // n)
+            out += [c[i:i + step] for i in range(0, len(c), step)]
+        elif len(cur) + len(c) > max_words:
+            out.append(cur)
+            cur = list(c)
+        else:
+            cur += c
+    if cur:
+        out.append(cur)
+    res = []
+    for i, piece in enumerate(out):
+        m = _MARK.search(piece[-1])
+        pause = 0.0 if i == len(out) - 1 else _PAUSE.get(m.group(1), 0.04) if m else 0.04   # 40 ms: cut inside a clause
+        res.append((" ".join(piece), pause))
+    return res
+
+
+def _is_oom(e: Exception) -> bool:
+    s = str(e)
+    return "bfc_arena" in s or "Available memory" in s or "out of memory" in s.lower() or "CUDA" in s and "alloc" in s.lower()
+
+
 def _quiet_session_options(threads: int) -> ort.SessionOptions:
     o = ort.SessionOptions()
     o.log_severity_level = 3
@@ -83,6 +141,7 @@ class Engines:
                                     providers=[("CUDAExecutionProvider", cuda), "CPUExecutionProvider"])
         self.tts_provider = sess.get_providers()[0]
         self.kokoro = Kokoro.from_session(sess, os.path.join(MODELS, "voices-v1.0.bin"))
+        self.kokoro_cpu: Kokoro | None = None
         # warm Kokoro up before Parakeet loads: the first runs per input length pick their kernels (~1 s each),
         # and its GPU arena is claimed right after the memory compaction (systemd ExecStartPre)
         for _ in range(2):
@@ -123,17 +182,73 @@ class Engines:
         return m
 
     def speak(self, text: str, voice: str, speed: float) -> bytes:
+        # voice prefix a* = American, b* = British English (Kokoro voice naming)
+        lang = "en-gb" if voice[:1] == "b" else "en-us"
+        parts: list[np.ndarray] = []
+        failed = 0
         with self.tts_lock:
-            # voice prefix a* = American, b* = British English (Kokoro voice naming)
-            audio, sr = self.kokoro.create(text, voice=voice, speed=speed, lang="en-gb" if voice[:1] == "b" else "en-us")
+            for phrase, pause in phrases(text):
+                audio = self._say(phrase, voice, speed, lang)
+                if audio is None:
+                    failed += 1
+                    continue
+                parts.append(audio)
+                if pause:
+                    parts.append(np.zeros(int(pause * TTS_RATE), np.float32))
+        if failed:
+            log.warning("dropped %d phrase(s) of %r", failed, text[:60])
+        audio = np.concatenate(parts) if parts else np.zeros(TTS_RATE // 10, np.float32)
         pcm = (np.clip(audio, -1, 1) * 32767).astype(np.int16).tobytes()
         buf = io.BytesIO()
         with wave.open(buf, "wb") as w:
             w.setnchannels(1)
             w.setsampwidth(2)
-            w.setframerate(sr)
+            w.setframerate(TTS_RATE)
             w.writeframes(pcm)
         return buf.getvalue()
+
+    def _say(self, phrase: str, voice: str, speed: float, lang: str) -> np.ndarray | None:
+        """one phrase on the GPU; if its activations do not fit the arena cap, in halves, then on the CPU"""
+        try:
+            return self.kokoro.create(phrase, voice=voice, speed=speed, lang=lang)[0]
+        except Exception as e:  # noqa: BLE001
+            if not _is_oom(e):
+                log.warning("Kokoro failed on %r: %s", phrase[:60], str(e)[-160:])
+                return None
+            log.warning("GPU arena full for %d words %r; retrying in halves", len(phrase.split()), phrase[:60])
+        words = phrase.split()
+        if len(words) >= 4:
+            halves = [" ".join(words[: len(words) // 2]), " ".join(words[len(words) // 2:])]
+            try:
+                return np.concatenate([self.kokoro.create(h, voice=voice, speed=speed, lang=lang)[0] for h in halves])
+            except Exception as e:  # noqa: BLE001
+                if not _is_oom(e):
+                    log.warning("Kokoro failed on %r: %s", phrase[:60], str(e)[-160:])
+                    return None
+        cpu = self._cpu_kokoro()
+        if cpu is None:
+            return None
+        try:
+            return cpu.create(phrase, voice=voice, speed=speed, lang=lang)[0]
+        except Exception as e:  # noqa: BLE001
+            log.warning("Kokoro on the CPU failed on %r: %s", phrase[:60], str(e)[-160:])
+            return None
+
+    def _cpu_kokoro(self) -> Kokoro | None:
+        """Kokoro on the CPU, loaded the first time the GPU runs out (~350 MB of RAM, so not before)"""
+        if not TTS_CPU_FALLBACK:
+            return None
+        if self.kokoro_cpu is None:
+            t = time.time()
+            try:
+                sess = ort.InferenceSession(os.path.join(MODELS, TTS_MODEL), _quiet_session_options(STT_THREADS),
+                                            providers=["CPUExecutionProvider"])
+                self.kokoro_cpu = Kokoro.from_session(sess, os.path.join(MODELS, "voices-v1.0.bin"))
+            except Exception as e:  # noqa: BLE001
+                log.error("Kokoro CPU fallback failed to load: %s", str(e)[-160:])
+                return None
+            log.warning("Kokoro CPU fallback loaded in %.1f s", time.time() - t)
+        return self.kokoro_cpu
 
     def transcribe(self, pcm: bytes) -> dict:
         audio = np.frombuffer(pcm, np.int16).astype(np.float32) / 32768.0
