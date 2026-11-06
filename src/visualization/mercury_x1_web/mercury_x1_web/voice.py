@@ -392,6 +392,9 @@ class VoiceChat:
         self._muted = False
         self._set("listening")
         pump = asyncio.create_task(self._pump_mic())
+        # a dead microphone ends the session now, with its error (before, it sat "listening" and deaf until the
+        # speech service closed the socket)
+        pump.add_done_callback(lambda t: self._ws is not None and not self._ws.closed and asyncio.ensure_future(self._ws.close()))
         try:
             async for msg in self._ws:
                 if msg.type != aiohttp.WSMsgType.TEXT:
