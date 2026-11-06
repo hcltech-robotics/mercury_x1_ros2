@@ -156,7 +156,31 @@ then both; levels in dBFS RMS on the Orin-side clean stream (`mx1_clean`, GTCRN)
 - GTCRN on the board (A53, 1008 MHz, no cpufreq): through ONNX Runtime 13.9..17.7 ms per 16 ms hop = 134..157 %
   of real time for the whole pipeline; the model is ~1 MFLOP/frame but 415 nodes, ~4 ms is ORT dispatch alone,
   threads make it worse, int8 does not help (overhead, not arithmetic). A hand-written forward pass is the only
-  route.
+  route - see the next section.
+
+## Measured (2026-11-05): GTCRN hand-written (`--ns gtcrn`, `src/gtcrn_native.cpp`)
+
+The same net as `model/gtcrn.onnx`, written out as plain loops over the 415 ONNX nodes (`model/gtcrn.bin`, 194 KB,
+made by `test/gtcrn_export.py`; BatchNorm folded, decoder ConvTranspose weights flipped into causal convs).
+`--ns gtcrn` takes it whenever `model/gtcrn.bin` is there; `--ns gtcrn-ort` keeps the ONNX Runtime path.
+Checked with `test/gtcrn_check.py` on `dn_in_beam.wav` (1063 frames, voicefront framing, ×10 input gain):
+
+| Where | Per frame (16 ms hop) | Notes |
+|---|---|---|
+| Output vs ONNX Runtime | SNR 111 dB (spectra), 112 dB (time signal), state max err 2.7e-4 | float rounding only; Orin and board outputs equal the x86 ones to 129 dB |
+| x86 (this PC, `-O3 -ffast-math`) | 0.046 ms | ORT: 0.5 ms |
+| Orin, 1.42 GHz cap | 0.10 ms alone, 0.12 ms `ns_ms` in the pipeline | ORT `ns_ms` 1.64 ms; whole pipeline 15.4 → 5.1 % of real time |
+| Board, Cortex-A53 1008 MHz | **1.25 ms** alone, 1.44..1.67 ms `ns_ms` in the pipeline | ORT 13.9..17.7 ms; target was ≤ 4 ms |
+| Board, 60 s live mics, `--no-kws` | 51 % of one core, 0 dropped, 1 920 000 output bytes for 960 000 input frames, 60.1 s wall | AEC3 + DOA + beam + GTCRN |
+| Board, 60 s live mics, live wake-word config | main thread ≈ 52 %, process 145 % (the openWakeWord thread is ~95 % on its own core), 0 dropped, output byte count exact | one arecord overrun while the models load (the known restart glitch) |
+
+Where the 1.25 ms goes on the board: the two DPGRNN stages 0.43 ms (4 intra GRU chains × 33 steps + the inter
+GRUs), the 6 GTConv blocks 0.44 ms, ERB / inverse-ERB mapping 0.19 ms, convs and mask 0.19 ms. What made the
+difference to a first straightforward version (2.6 ms): the A53 is in-order, so a plain `y += a*x` loop pays the
+load → FMA → store latency every 4 lanes (126 MMAC/s measured); every conv now runs through one kernel that keeps
+8 independent vector accumulators across frequency (≈ 0.6..1 GMAC/s), and all GRU gates go through a vectorised
+Cephes `exp` instead of libm (`tanhf` is 212 ns per call there). GCC vector extensions, no intrinsics: the same
+code is SSE on x86 for the tests.
 
 ## Known limits / next
 
@@ -171,5 +195,7 @@ then both; levels in dBFS RMS on the Orin-side clean stream (`mx1_clean`, GTCRN)
 - **Restart glitch.** While voicefront starts (model load), the raw-mic relay `rawmic.sh` can underrun for a
   few seconds, and USB channels 0 to 4 are zero during that time.
 
-Test tools are in `test/`: `make_synthetic.py` makes array signals, and `eval_kws.py` measures wake-word
-recall and false wakes.
+Test tools are in `test/`: `make_synthetic.py` makes array signals, `eval_kws.py` measures wake-word
+recall and false wakes, `gtcrn_export.py` writes `model/gtcrn.bin` from the ONNX model (after checking its numpy
+reading of the graph against onnxruntime), and `gtcrn_check.py` + `gtcrn_test.cpp` (built as `build/gtcrn_test`)
+compare the hand-written GTCRN with onnxruntime on a wav.

@@ -33,8 +33,9 @@
 #include <vector>
 
 #include "apm.h"
-#include "denoise.h"
 #include "array.h"
+#include "denoise.h"
+#include "gtcrn_native.h"
 #include "hum.h"
 #include "json.h"
 #include "kws.h"
@@ -100,7 +101,8 @@ void usage() {
                "  --pitch-mm F        mic spacing (default 35)\n"
                "  --beamformer ds|mvdr  (default ds)\n"
                "  --vad-snr-db F      voice activity threshold (default 8)\n"
-               "  --ns off|low|moderate|high|veryhigh|gtcrn  (default moderate; gtcrn = neural, model/gtcrn.onnx)\n"
+               "  --ns off|low|moderate|high|veryhigh|gtcrn  (default moderate; gtcrn = neural: model/gtcrn.bin\n"
+               "                      hand-written, else model/gtcrn.onnx via onnxruntime; gtcrn-native|gtcrn-ort force one)\n"
                "  --no-agc\n"
                "  --out-gain-db F     fixed gain on the output, for --no-agc (default 0)\n"
                "  --hum F|off        notches at F-3 and F+3 Hz for the robot's ~250 Hz hum + 100 Hz high-pass on\n"
@@ -454,17 +456,33 @@ int main(int argc, char** argv) {
 
   std::unique_ptr<EchoCanceller> aec;
   if (o.aec) aec = std::make_unique<EchoCanceller>(m, o.aec_delay_ms, o.kws && o.kws_input == "linear", o.aec_tuning);
-  std::unique_ptr<SpecDenoiser> denoiser;
-  if (o.ns == "gtcrn") {
-    denoiser = std::make_unique<SpecDenoiser>();
+  const bool gtcrn = o.ns == "gtcrn" || o.ns == "gtcrn-native" || o.ns == "gtcrn-ort";
+  std::unique_ptr<SpectralNs> denoiser;
+  if (gtcrn) {
+    // "gtcrn" takes the hand-written net when its weights are there (model/gtcrn.bin, ~1 ms per frame on the
+    // board), otherwise the ONNX Runtime graph (model/gtcrn.onnx, too slow for the board: ~14 ms per frame)
+    struct stat bs{};
+    const bool native = o.ns == "gtcrn-native" || (o.ns == "gtcrn" && stat((o.model_dir + "/gtcrn.bin").c_str(), &bs) == 0);
     std::string derr;
-    if (!denoiser->load(o.model_dir + "/gtcrn.onnx", 10.0f, o.ns_threads, derr)) {
-      log("gtcrn: " + derr);
-      return 1;
+    if (native) {
+      auto d = std::make_unique<GtcrnNative>();
+      if (!d->load(o.model_dir + "/gtcrn.bin", 10.0f, derr)) {
+        log("gtcrn: " + derr);
+        return 1;
+      }
+      denoiser = std::move(d);
+    } else {
+      auto d = std::make_unique<SpecDenoiser>();
+      if (!d->load(o.model_dir + "/gtcrn.onnx", 10.0f, o.ns_threads, derr)) {
+        log("gtcrn: " + derr);
+        return 1;
+      }
+      denoiser = std::move(d);
     }
+    log(std::string("gtcrn: ") + (native ? "native" : "onnxruntime"));
     array.set_denoiser(denoiser.get());
   }
-  PostFilter post(o.ns == "gtcrn" ? "off" : o.ns, o.agc);
+  PostFilter post(gtcrn ? "off" : o.ns, o.agc);
   const bool kws_filter = o.kws_ns != "off" || o.kws_agc;
   const float kws_gain = std::pow(10.0f, o.kws_gain_db / 20.0f);
   PostFilter kws_post(o.kws_ns, o.kws_agc);  // optional own NS / AGC for the wake-word input

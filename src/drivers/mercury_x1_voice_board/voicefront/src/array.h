@@ -11,7 +11,7 @@
 
 #include "fft.h"
 
-class SpecDenoiser;
+class SpectralNs;
 
 struct ArrayConfig {
   int mics = 4;
@@ -53,7 +53,7 @@ class ArrayProcessor {
   bool angle_between(int64_t s0, int64_t s1, float& deg, float& conf) const;
 
   void set_beamformer(const std::string& kind);
-  void set_denoiser(SpecDenoiser* d) { dn_ = d; }   // on the beam spectrum, before synthesis
+  void set_denoiser(SpectralNs* d) { dn_ = d; }   // on the beam spectrum, before synthesis
   const std::string& beamformer() const { return cfg_.beamformer; }
   void set_vad_snr_db(float db) { cfg_.vad_snr_db = db; }
   void set_doa_during_playback(bool on) { doa_during_far_ = on; }
@@ -103,6 +103,6 @@ class ArrayProcessor {
   int rnn_frames_ = 0, frames_since_w_ = 0;
   bool w_dirty_ = true;
 
-  SpecDenoiser* dn_ = nullptr;
+  SpectralNs* dn_ = nullptr;
   int64_t samples_in_ = 0;
 };

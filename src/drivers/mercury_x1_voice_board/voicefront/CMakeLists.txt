@@ -14,13 +14,16 @@ set(VF_WEBRTC_SRC "${CMAKE_CURRENT_SOURCE_DIR}/deps/webrtc-audio-processing/webr
 # Fully static binary: runs on the voice board's old glibc (Tina Linux, glibc 2.23) as well as on the Orin.
 option(VF_STATIC "link fully static" ON)
 
-add_executable(voicefront src/main.cpp src/array.cpp src/apm.cpp src/kws.cpp src/oww.cpp src/link.cpp src/denoise.cpp)
+add_executable(voicefront src/main.cpp src/array.cpp src/apm.cpp src/kws.cpp src/oww.cpp src/link.cpp src/denoise.cpp
+  src/gtcrn_native.cpp)
 target_compile_options(voicefront PRIVATE -O2 -fcx-limited-range -Wall -Wextra -Wno-unused-parameter)
 target_include_directories(voicefront PRIVATE
   ${VF_DEPS}/include/webrtc-audio-processing-2
   ${VF_DEPS}/include/absl
   ${VF_DEPS}/include/onnxruntime
   ${VF_DEPS}/include)
+# the hand-written GTCRN is plain loops meant for auto-vectorisation (NEON on aarch64)
+set_source_files_properties(src/gtcrn_native.cpp PROPERTIES COMPILE_OPTIONS "-O3;-ffast-math")
 set_source_files_properties(src/apm.cpp PROPERTIES
   COMPILE_DEFINITIONS "WEBRTC_POSIX;WEBRTC_LINUX;WEBRTC_ARCH_ARM64;WEBRTC_APM_DEBUG_DUMP=0;WEBRTC_LIBRARY_IMPL;NDEBUG"
   INCLUDE_DIRECTORIES "${VF_WEBRTC_SRC}")
@@ -35,4 +38,15 @@ target_link_libraries(voicefront PRIVATE
   pthread dl m rt)
 if(VF_STATIC)
   target_link_options(voicefront PRIVATE -static)
+endif()
+
+# offline check of the native GTCRN against onnxruntime (test/gtcrn_check.py drives it); no other dependencies
+option(VF_GTCRN_TEST "build test/gtcrn_test" ON)
+if(VF_GTCRN_TEST)
+  add_executable(gtcrn_test test/gtcrn_test.cpp src/gtcrn_native.cpp)
+  target_compile_options(gtcrn_test PRIVATE -O3 -ffast-math -Wall -Wextra)
+  target_include_directories(gtcrn_test PRIVATE src)
+  if(VF_STATIC)
+    target_link_options(gtcrn_test PRIVATE -static)
+  endif()
 endif()
