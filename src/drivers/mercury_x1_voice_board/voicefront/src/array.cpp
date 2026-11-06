@@ -1,5 +1,7 @@
 #include "array.h"
 
+#include "denoise.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -178,6 +180,7 @@ void ArrayProcessor::process_frame(bool far_active) {
     for (int m = 0; m < m_; ++m) y += std::conj(w_[m][k]) * x_[m][k];
     work_[k] = y;
   }
+  if (dn_) dn_->process(work_.data(), kK);
   work_[0] = cf(work_[0].real(), 0.0f);
   work_[kN / 2] = cf(work_[kN / 2].real(), 0.0f);
   for (int k = 1; k < kN / 2; ++k) work_[kN - k] = std::conj(work_[k]);

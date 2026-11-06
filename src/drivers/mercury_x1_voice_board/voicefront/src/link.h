@@ -13,6 +13,7 @@ class Link {
   bool open(const std::string& path, int baud, std::string& err);
   // Writes one line. Never blocks: when the device cannot take it, the line is dropped and counted.
   void send(const std::string& line);
+  void set_quiet(bool q) { quiet_ = q; }   // stderr fallback off (events dropped when there is no device)
   // Complete lines received since the last call (non-blocking).
   std::vector<std::string> poll();
   long dropped() const { return dropped_; }
@@ -20,6 +21,7 @@ class Link {
 
  private:
   int fd_ = -1;
+  bool quiet_ = false;
   std::string rx_;
   std::mutex mu_;
   long dropped_ = 0;

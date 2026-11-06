@@ -1,0 +1,17 @@
+# Mercury X1 clean speech on the Orin: voicefront (echo cancellation, beamforming, GTCRN denoising, AGC) on the
+# head voice board's raw USB channels -> ALSA loopback "mx1_clean" (the voice chat's microphone).
+# Needs snd-aloop (/etc/modules-load.d/mercury-aloop.conf) and the ALSA names from
+# src/drivers/mercury_x1_voice_board/alsa/. Logs: journalctl -u mercury-voicefront
+[Unit]
+Description=Mercury X1 clean speech front end (voicefront + GTCRN on the Orin)
+After=sound.target
+
+[Service]
+User=elephant
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do arecord -l | grep -q XFMDPV0018 && exit 0; sleep 2; done; exit 1'
+ExecStart=/home/elephant/mercury_x1_ros2/src/drivers/mercury_x1_voice_board/board/orin_voicefront.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

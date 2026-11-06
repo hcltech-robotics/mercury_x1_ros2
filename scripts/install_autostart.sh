@@ -5,7 +5,7 @@
 #   scripts/install_autostart.sh --remove   disable + remove
 # Afterwards: sudo systemctl start|stop|restart mercury-x1 / mercury-x1-head, journalctl -u <unit>
 set -e
-UNITS="mercury-clocks mercury-x1 mercury-x1-head"
+UNITS="mercury-clocks mercury-x1 mercury-x1-head mercury-voicefront"
 if [ "$1" = "--remove" ]; then
   for u in $UNITS; do
     sudo systemctl disable "$u" 2>/dev/null || true

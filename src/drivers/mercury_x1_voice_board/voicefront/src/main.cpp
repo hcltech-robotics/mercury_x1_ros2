@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "apm.h"
+#include "denoise.h"
 #include "array.h"
 #include "json.h"
 #include "kws.h"
@@ -56,6 +57,8 @@ struct Options {
   std::string beamformer = "ds";
   float vad_snr_db = 8.0f;
   std::string ns = "moderate";
+  int ns_threads = 1;          // --ns gtcrn: onnxruntime intra-op threads
+  bool events = true;          // --no-events: no vad / doa / status lines on stderr (no serial port)
   bool agc = true;
   bool kws = true;
   bool kws_agc = false;        // AGC on the wake-word input (no gain in recall)
@@ -94,8 +97,9 @@ void usage() {
                "  --pitch-mm F        mic spacing (default 35)\n"
                "  --beamformer ds|mvdr  (default ds)\n"
                "  --vad-snr-db F      voice activity threshold (default 8)\n"
-               "  --ns off|low|moderate|high|veryhigh  (default moderate)\n"
+               "  --ns off|low|moderate|high|veryhigh|gtcrn  (default moderate; gtcrn = neural, model/gtcrn.onnx)\n"
                "  --no-agc\n"
+               "  --no-events         without a serial port: keep vad / doa / status lines off stderr\n"
                "  --model DIR         keyword model directory (default ./model)\n"
                "  --keywords \"a;b\"    wake words, plain English (default \"hey mercury\"; sherpa engine)\n"
                "  --oww FILE.onnx     openWakeWord model for one trained phrase (the file name), replaces the\n"
@@ -156,6 +160,8 @@ bool parse_args(int argc, char** argv, Options& o) {
     else if (a == "--beamformer") o.beamformer = next("--beamformer");
     else if (a == "--vad-snr-db") o.vad_snr_db = std::strtof(next("--vad-snr-db").c_str(), nullptr);
     else if (a == "--ns") o.ns = next("--ns");
+    else if (a == "--ns-threads") o.ns_threads = std::atoi(next("--ns-threads").c_str());
+    else if (a == "--no-events") o.events = false;
     else if (a == "--no-agc") o.agc = false;
     else if (a == "--model") o.model_dir = next("--model");
     else if (a == "--keywords") o.keywords = split(next("--keywords"), ';');
@@ -416,6 +422,7 @@ int main(int argc, char** argv) {
 
   Link link;
   std::string err;
+  link.set_quiet(!o.events);
   if (!link.open(o.serial, o.baud, err)) {
     std::fprintf(stderr, "voicefront: %s\n", err.c_str());
     return 1;
@@ -436,7 +443,17 @@ int main(int argc, char** argv) {
 
   std::unique_ptr<EchoCanceller> aec;
   if (o.aec) aec = std::make_unique<EchoCanceller>(m, o.aec_delay_ms, o.kws && o.kws_input == "linear", o.aec_tuning);
-  PostFilter post(o.ns, o.agc);
+  std::unique_ptr<SpecDenoiser> denoiser;
+  if (o.ns == "gtcrn") {
+    denoiser = std::make_unique<SpecDenoiser>();
+    std::string derr;
+    if (!denoiser->load(o.model_dir + "/gtcrn.onnx", 10.0f, o.ns_threads, derr)) {
+      log("gtcrn: " + derr);
+      return 1;
+    }
+    array.set_denoiser(denoiser.get());
+  }
+  PostFilter post(o.ns == "gtcrn" ? "off" : o.ns, o.agc);
   const bool kws_filter = o.kws_ns != "off" || o.kws_agc;
   const float kws_gain = std::pow(10.0f, o.kws_gain_db / 20.0f);
   PostFilter kws_post(o.kws_ns, o.kws_agc);  // optional own NS / AGC for the wake-word input
@@ -535,6 +552,7 @@ int main(int argc, char** argv) {
                     ",\"dropped\":" + std::to_string(link.dropped());
     if (out_proc) s += ",\"out_restarts\":" + std::to_string(out_proc->restarts());
     if (erle_n > 50 && erle_out > 0.0) s += ",\"erle_db\":" + fmt("%.1f", 10.0 * std::log10(erle_in / erle_out));
+    if (denoiser) s += ",\"ns_ms\":" + fmt("%.2f", denoiser->avg_ms());
     if (o.kws) {
       s += ",\"keywords\":" + str_list(spotter->keywords()) + ",\"kw_threshold\":" + fmt("%.3f", spotter->threshold()) +
            ",\"kws_engine\":" + json_str(spotter->engine());

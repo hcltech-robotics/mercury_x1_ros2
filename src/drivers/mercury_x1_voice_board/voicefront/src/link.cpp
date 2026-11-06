@@ -55,8 +55,10 @@ void Link::send(const std::string& line) {
   std::lock_guard<std::mutex> lk(mu_);
   const std::string s = line + "\n";
   if (fd_ < 0) {
-    std::fputs(s.c_str(), stderr);
-    std::fflush(stderr);
+    if (!quiet_) {
+      std::fputs(s.c_str(), stderr);
+      std::fflush(stderr);
+    }
     return;
   }
   size_t off = 0;

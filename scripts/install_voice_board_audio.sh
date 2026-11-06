@@ -38,9 +38,10 @@ grep -E "Channels" /proc/asound/XFMDPV0018/stream0 || true
 
 if [ "$MODE" = install ]; then
     sudo install -m 0644 $PKG/alsa/60-mercury-voice-board.conf /etc/alsa/conf.d/60-mercury-voice-board.conf
+    echo snd-aloop | sudo tee /etc/modules-load.d/mercury-aloop.conf >/dev/null; sudo modprobe snd-aloop   # mx1_clean
     MIC=mx1_beam
 else
-    sudo rm -f /etc/alsa/conf.d/60-mercury-voice-board.conf
+    sudo rm -f /etc/alsa/conf.d/60-mercury-voice-board.conf /etc/modules-load.d/mercury-aloop.conf
     MIC=plughw:CARD=XFMDPV0018,DEV=0
 fi
 if [ -f "$VENV" ]; then

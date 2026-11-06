@@ -14,7 +14,7 @@ set(VF_WEBRTC_SRC "${CMAKE_CURRENT_SOURCE_DIR}/deps/webrtc-audio-processing/webr
 # Fully static binary: runs on the voice board's old glibc (Tina Linux, glibc 2.23) as well as on the Orin.
 option(VF_STATIC "link fully static" ON)
 
-add_executable(voicefront src/main.cpp src/array.cpp src/apm.cpp src/kws.cpp src/oww.cpp src/link.cpp)
+add_executable(voicefront src/main.cpp src/array.cpp src/apm.cpp src/kws.cpp src/oww.cpp src/link.cpp src/denoise.cpp)
 target_compile_options(voicefront PRIVATE -O2 -fcx-limited-range -Wall -Wextra -Wno-unused-parameter)
 target_include_directories(voicefront PRIVATE
   ${VF_DEPS}/include/webrtc-audio-processing-2
