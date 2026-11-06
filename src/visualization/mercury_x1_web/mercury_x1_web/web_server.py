@@ -852,15 +852,14 @@ class App:
         self.node.post(lambda: self.node.pub_joint.publish(jc))
 
     async def go_home(self) -> None:
-        """head straight + camera level at once; arms to rest through MoveIt (self-collision checked, move_group
-        started for it if needed and stopped again); then the waist straight - arms first, so they hang at the
-        sides while the torso turns. A failed arm move leaves the waist where it is."""
+        """arms to rest through MoveIt (self-collision checked, move_group started for it if needed and stopped
+        again); then waist, neck and camera in ONE command - the driver sends all three to the right arm's board,
+        where a new command replaces the pending one (separate head + waist commands: only the waist moved).
+        Arms first, so they hang at the sides while the torso turns. A failed arm move leaves the rest as it is."""
         n, loop = self.node, asyncio.get_running_loop()
         started_moveit = False
         try:
             self.gestures.stop()
-            self._home_set("moving", "head")
-            self._body_cmd(HOME_HEAD, HOME_SPEED)
             arms = list(n.arms.values())
             note = ""
             if not arms or not all(a.connected and a.powered for a in arms):
@@ -878,7 +877,7 @@ class App:
                             break
                         await asyncio.sleep(0.5)
                     else:
-                        self._home_set("failed", "motion planning did not start - waist not moved")
+                        self._home_set("failed", "motion planning did not start - waist and head not moved")
                         return
                     await asyncio.sleep(2.0)     # move_group takes the joint states a moment after its action is up
                 self._home_set("moving", "arms")
@@ -888,19 +887,19 @@ class App:
                 while not (am.t >= t0 and am.state in ("done", "failed", "stopped")):
                     if time.monotonic() > deadline:
                         n.post(am.stop)
-                        self._home_set("failed", "arms timed out - waist not moved")
+                        self._home_set("failed", "arms timed out - waist and head not moved")
                         return
                     await asyncio.sleep(0.2)
                 if am.state != "done":
-                    self._home_set("failed", f"arms: {am.message} - waist not moved")
+                    self._home_set("failed", f"arms: {am.message} - waist and head not moved")
                     return
-            self._home_set("moving", "waist")
-            self._body_cmd({"body": 0.0}, HOME_SPEED)
-            deadline = time.monotonic() + 30.0
+            self._home_set("moving", "waist and head")
             target = {"body": 0.0, **HOME_HEAD}
+            self._body_cmd(target, HOME_SPEED)
+            deadline = time.monotonic() + 30.0
             while any(abs(n.body_joints.get(k, v) - v) > 3.0 for k, v in target.items()):
                 if time.monotonic() > deadline:
-                    far = ", ".join(k for k, v in target.items() if abs(n.body_joints.get(k, v) - v) > 3.0)
+                    far = ", ".join({"body": "waist", "head": "neck", "eye": "camera"}.get(k, k) for k, v in target.items() if abs(n.body_joints.get(k, v) - v) > 3.0)
                     self._home_set("failed", f"not there yet: {far}")
                     return
                 await asyncio.sleep(0.2)
