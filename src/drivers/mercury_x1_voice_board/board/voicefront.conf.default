@@ -9,4 +9,5 @@ WAKE_MODEL=""
 KW_THRESHOLD="0.3"  # openWakeWord: low on purpose, the Orin confirms each wake with speech recognition
                     # (mercury_x1_web wake_verify.py); empty = engine default (openWakeWord 0.5, sherpa 0.25)
 # extra voicefront options, e.g. --keywords "hey mercury;ok mercury" (sherpa only) --beamformer mvdr
-VF_ARGS=""
+VF_ARGS="--ns gtcrn --aec-tuning call --no-agc --out-gain-db 20"  # the whole chain on the board (2026-11-06): the
+        # beam (USB ch 5, mx1_beam) is the voice chat's microphone; same settings as board/orin_voicefront.sh had

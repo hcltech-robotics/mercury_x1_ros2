@@ -356,6 +356,8 @@ class KwsRunner {
 
 // The beam's consumer (e.g. aplay into the USB gadget). aplay exits with EIO whenever the USB host stops
 // reading; the wake word and direction must keep working, so the consumer is respawned instead of us dying.
+constexpr int kOutPipeBytes = 4096;  // see spawn()
+
 class OutProc {
  public:
   explicit OutProc(std::string cmd) : cmd_(std::move(cmd)) {}
@@ -380,6 +382,7 @@ class OutProc {
     }
   }
   long restarts() const { return restarts_; }
+  long dropped() const { return dropped_; }
 
  private:
   void spawn() {
@@ -402,6 +405,11 @@ class OutProc {
     pid_ = pid;
     fcntl(fd_, F_SETFL, fcntl(fd_, F_GETFL) | O_NONBLOCK);
     fcntl(fd_, F_SETFD, FD_CLOEXEC);
+    // The pipe is the only elastic buffer between us and the player, and whatever fills it stays: both ends run
+    // at the same 16 kHz, so a backlog built while the player started (or stalled) never drains, and the default
+    // 64 KB (2 s of mono) showed up as a 1.5..2.3 s lag of the board's beam that differed from one start to the
+    // next (2026-11-06). One page (128 ms) bounds that lag; a stalled player then costs drops, not delay.
+    fcntl(fd_, F_SETPIPE_SZ, kOutPipeBytes);
   }
   void close_pipe() {
     if (fd_ >= 0) ::close(fd_);
@@ -583,7 +591,7 @@ int main(int argc, char** argv) {
                     ",\"snr_db\":" + fmt("%.1f", array.snr_db()) + ",\"hum_hz\":" + fmt("%.1f", hum ? hum->f0() : 0.0f) +
                     ",\"wakes\":" + std::to_string(wakes) +
                     ",\"dropped\":" + std::to_string(link.dropped());
-    if (out_proc) s += ",\"out_restarts\":" + std::to_string(out_proc->restarts());
+    if (out_proc) s += ",\"out_restarts\":" + std::to_string(out_proc->restarts()) + ",\"out_dropped\":" + std::to_string(out_proc->dropped());
     if (erle_n > 50 && erle_out > 0.0) s += ",\"erle_db\":" + fmt("%.1f", 10.0 * std::log10(erle_in / erle_out));
     if (denoiser) s += ",\"ns_ms\":" + fmt("%.2f", denoiser->avg_ms());
     if (o.kws) {

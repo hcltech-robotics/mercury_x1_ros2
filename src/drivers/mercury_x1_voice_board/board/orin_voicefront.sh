@@ -1,10 +1,10 @@
 #!/bin/bash
-# Runs ON THE ORIN (mercury-voicefront.service): the voicefront front end on the raw USB channels of the head voice
-# board (4 mics + speaker echo reference, mx1_mics), with GTCRN neural noise suppression, into the ALSA loopback
-# that mx1_clean reads. The board's own voicefront keeps the wake word; its beam (mx1_beam) stays as a fallback.
-# GTCRN is too slow for the board's Cortex-A53 (1.6x real time, measured 2026-11-05); here it is ~16 % of a core.
-# The raw channels reach the Orin with a fixed ~0.6 s USB lag; the board's beam path adds a lag that grows across
-# board restarts, which this avoids.
+# FALLBACK since 2026-11-06 (mercury-voicefront.service, disabled): the same chain the board now runs itself, on the
+# Orin, on the raw USB channels of the head voice board (4 mics + speaker echo reference, mx1_mics), into the ALSA
+# loopback that mx1_clean reads. Use it (systemctl enable --now mercury-voicefront; VOICE_MIC=mx1_clean in
+# ~/.config/mercury_x1/voice.env) if the board cannot keep up. Measured 2026-11-06, board beam vs this: silence
+# -61.6/-62.6, person -43.7/-44.8, robot residual -65.0/-66.6 dBFS, same transcripts; the beam arrives 0.6 s
+# earlier (the board's output pipe is bounded to 128 ms now; it used to hold 1.5..2.3 s).
 # AEC tuning "call" (WebRTC's default), not the board's "asr": with GTCRN after it, the robot's own voice ends up
 # 19 dB lower (-42 vs -23 dBFS after AGC, 2026-11-05) and the person 2 dB lower; neither tuning keeps a person who
 # talks over the robot (the recognizer gets nothing in double talk either way).

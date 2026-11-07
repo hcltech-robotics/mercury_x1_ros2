@@ -158,6 +158,27 @@ then both; levels in dBFS RMS on the Orin-side clean stream (`mx1_clean`, GTCRN)
   threads make it worse, int8 does not help (overhead, not arithmetic). A hand-written forward pass is the only
   route - see the next section.
 
+## Measured (2026-11-06): the whole chain on the board
+
+The board now runs the final chain itself (`VF_ARGS="--ns gtcrn --aec-tuning call --no-agc --out-gain-db 20"`,
+hum notch on by default) and its beam on USB channel 5 (`mx1_beam`) is the voice chat's microphone again; the
+Orin-side copy (`mercury-voicefront.service`, `mx1_clean`) is disabled and kept as a fallback. Same test as above,
+both streams recorded in the same run:
+
+| Stream | Silence | Person | Robot's own voice left over | Both | SNR 300..600 / 600..1200 / 1200..2500 Hz |
+|---|---|---|---|---|---|
+| board beam `mx1_beam` | −61.6 | −43.7 | −65.0 | −46.3 | 30.5 / 27.9 / 19.5 dB |
+| Orin `mx1_clean` | −62.6 | −44.8 | −66.6 | −47.1 | 29.4 / 27.7 / 19.4 dB |
+
+Transcripts identical and exact on both (double talk empty on both). Board process 105..107 % of one core with the
+wake word on its own thread, 0 input drops. Wake → verify → question → answer works end to end on the beam.
+
+- **Lag.** The beam used to arrive 1.5..2.3 s after the raw channels, differently after every start. Cause: the
+  pipe from voicefront to `aplay` (64 KB = 2 s of mono) filled while the player started and never drained, both
+  ends running at 16 kHz. `OutProc` now sets the pipe to one page (`F_SETPIPE_SZ`, 128 ms); a stalled player
+  costs drops (`out_dropped` in `status`) instead of delay. Now the beam arrives 0.19 s *before* the raw
+  channels (which go through `rawmic.sh`, two more pipes) and 0.6 s before the Orin-side clean stream.
+
 ## Measured (2026-11-05): GTCRN hand-written (`--ns gtcrn`, `src/gtcrn_native.cpp`)
 
 The same net as `model/gtcrn.onnx`, written out as plain loops over the 415 ONNX nodes (`model/gtcrn.bin`, 194 KB,
