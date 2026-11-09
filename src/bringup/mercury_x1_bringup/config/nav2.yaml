@@ -140,6 +140,13 @@ local_costmap:
       footprint_padding: 0.02
       transform_tolerance: 0.3
       plugins: ["voxel_layer", "nvblox_layer", "range_layer", "inflation_layer"]
+      # keep-out zones drawn on the page (web_server publishes the mask + filter info, keepout.py)
+      filters: ["keepout_filter"]
+      keepout_filter:
+        plugin: "nav2_costmap_2d::KeepoutFilter"
+        enabled: true
+        filter_info_topic: "/costmap_filter_info"
+        transform_tolerance: 0.3
       nvblox_layer:
         plugin: "nvblox::nav2::NvbloxCostmapLayer"
         enabled: true
@@ -209,6 +216,13 @@ global_costmap:
       track_unknown_space: true
       transform_tolerance: 0.3
       plugins: ["static_layer", "obstacle_layer", "nvblox_layer", "inflation_layer"]
+      # keep-out zones drawn on the page (web_server publishes the mask + filter info, keepout.py)
+      filters: ["keepout_filter"]
+      keepout_filter:
+        plugin: "nav2_costmap_2d::KeepoutFilter"
+        enabled: true
+        filter_info_topic: "/costmap_filter_info"
+        transform_tolerance: 0.3
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: true

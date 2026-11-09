@@ -100,7 +100,7 @@
     border-radius: 6px; padding: 5px 8px; font-size: 12px; min-width: 0; }
   label { color: var(--muted); font-size: 12px; display: inline-flex; gap: 5px; align-items: center; }
   .muted { color: var(--muted); }
-  #mapwrap { position: relative; height: 300px; background: #0f1114; border: 1px solid var(--line);
+  #mapwrap { position: relative; height: 420px; background: #0f1114; border: 1px solid var(--line);
     border-radius: 6px; overflow: hidden; touch-action: none; }
   #map { width: 100%; height: 100%; display: block; cursor: crosshair; }
   #mapmsg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -128,7 +128,19 @@
   .badge { display: inline-block; font-size: 10px; font-weight: 600; padding: 0 6px; border-radius: 999px;
     background: #1b4f6e; color: #fff; margin-left: 4px; vertical-align: 1px; }
   .badge.mapping { background: #5a4410; }
-  #navstate { font-size: 12px; }
+  #navstate { font-size: 13px; }
+  #mapmenu { position: absolute; z-index: 5; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
+    padding: 6px; display: flex; flex-direction: column; gap: 4px; min-width: 170px; box-shadow: 0 6px 20px rgba(0,0,0,.5); }
+  #mapmenu[hidden] { display: none; }
+  #mapmenu .hd { font-size: 11px; color: var(--muted); padding: 0 4px 2px; display: flex; gap: 6px; align-items: center; }
+  #mapmenu .hd b { color: var(--text); }
+  #mapmenu .hd button { margin-left: auto; background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 14px; }
+  #mapmenu > button { text-align: left; background: none; border: 0; color: var(--text); padding: 6px 8px; border-radius: 5px;
+    cursor: pointer; font-size: 13px; }
+  #mapmenu > button:hover { background: #1b4f6e; }
+  #mapmenu > button.del { color: #ff8a99; }
+  #mapmenu .in { display: flex; gap: 4px; }
+  #mapmenu .in input { flex: 1; min-width: 0; }
   .pad { display: grid; grid-template-columns: repeat(3, 52px); gap: 6px; justify-content: center; margin: 4px 0 8px; }
   .pad button { height: 44px; background: var(--panel2); border: 1px solid var(--line); color: var(--text);
     border-radius: 8px; font-size: 18px; cursor: pointer; user-select: none; touch-action: none; }
@@ -223,39 +235,50 @@
         <div class="muted" style="font-size:11px">▶ localize on a map (Nav2 uses it) · ✎ continue mapping it (only links up if the robot re-finds a known place; else the map splits into pieces) · ✕ delete (kept 7 days in ~/maps/.trash).</div>
       </section>
       <section>
-        <h2>Localization &amp; navigation</h2>
+        <h2>Navigation</h2>
         <div class="row">
-          <button class="b primary" id="b-nav">Start Nav2</button>
-          <button class="b danger" id="b-navstop">Stop Nav2</button>
+          <span id="navstate" class="muted">idle</span>
           <span class="spacer"></span>
-          <button class="b" id="b-export" title="Save a .pgm/.yaml copy of the 2D map in ~/maps">Save 2D map</button>
+          <button class="b danger" id="b-navcancel" title="cancel the goal / route and stop the base">■ Stop</button>
         </div>
         <div class="row">
           <div class="seg" id="tool">
-            <button data-tool="waypoint" class="active" title="click = waypoint, drag = heading">+ Waypoint</button>
-            <button data-tool="delete" title="click a waypoint (map or 3D view) to delete it">✕ Waypoint</button>
-            <button data-tool="goto" title="click/drag: navigate here now">Go to</button>
-            <button data-tool="pose" title="click/drag: tell the localizer where the robot is">Set pose</button>
-            <button data-tool="off" title="clicks only select / inspect">View</button>
+            <button data-tool="point" class="active" title="click the map: Go here / Save as place / Add to route / Robot is here">Point</button>
+            <button data-tool="keepout" title="draw an area the robot must never enter: click the corners; 2 points = a wall line (glass wall)">⛔ Keep-out zone</button>
           </div>
+          <span id="ko-draw" class="row" style="margin:0;gap:6px" hidden>
+            <input type="text" id="ko-name" placeholder="name, e.g. glass wall" style="width:150px">
+            <button class="b primary" id="b-ko-done">Finish</button>
+            <button class="b" id="b-ko-undo">Undo point</button>
+            <button class="b" id="b-ko-cancel">Cancel</button>
+          </span>
         </div>
-        <div id="mapwrap"><canvas id="map"></canvas><div id="mapmsg">No map yet. Start mapping or localization.</div></div>
-        <div class="row muted" style="margin-top:6px;font-size:11px">Clicks in the map and in the 3D view follow the tool above · select a waypoint (its row, or View + click) and press Delete · wheel: zoom · right/shift-drag: pan · double-click: center on robot</div>
-        <h2 style="margin-top:12px">Waypoints <span id="wpmap" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
-        <table id="wptable"></table>
-        <div class="row" style="margin-top:8px">
-          <button class="b primary" id="b-runonce">Run once</button>
-          <button class="b primary" id="b-cruise">Cruise ⟳</button>
-          <span class="spacer"></span>
-          <button class="b danger" id="b-clear">Delete all</button>
-        </div>
-        <div id="navstate" class="muted">idle</div>
-        <h2 style="margin-top:12px">Places <span class="muted" style="text-transform:none;letter-spacing:0">· voice: "take me to the kitchen"</span></h2>
+        <div id="mapwrap"><canvas id="map"></canvas><div id="mapmsg">No map yet. Start mapping or localization.</div><div id="mapmenu" hidden></div></div>
+        <div class="row muted" style="margin-top:6px;font-size:11px">Click the map (or a point in the 3D view) for a menu · hold and drag to set the heading · click a place, route point or zone to change it · wheel: zoom · right/shift-drag: pan · double-click: center on the robot</div>
+        <h2 style="margin-top:12px">Places <span class="muted" style="text-transform:none;letter-spacing:0">· voice / agent: "take me to the kitchen"</span></h2>
         <table id="pltable"></table>
         <div class="row" style="margin-top:8px">
           <input type="text" id="pl-name" placeholder="name, e.g. kitchen" style="flex:1;min-width:0" title="saved where the robot stands now, facing its current heading">
-          <button class="b primary" id="b-plsave" title="save the robot's current pose under this name">Save robot's spot</button>
+          <button class="b" id="b-plsave" title="save the robot's current pose under this name">Save where the robot is</button>
         </div>
+        <h2 style="margin-top:12px">Keep-out zones <span class="muted" style="text-transform:none;letter-spacing:0">· Nav2 never plans or drives into them</span></h2>
+        <table id="kotable"></table>
+        <h2 style="margin-top:12px">Route <span id="wpmap" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
+        <table id="wptable"></table>
+        <div class="row" style="margin-top:8px">
+          <button class="b primary" id="b-runonce">Run once</button>
+          <button class="b primary" id="b-cruise">Loop ⟳</button>
+          <span class="spacer"></span>
+          <button class="b danger" id="b-clear">Clear route</button>
+        </div>
+        <details><summary>Nav2 and map file</summary>
+          <div class="row" style="margin-top:6px">
+            <button class="b" id="b-nav">Start Nav2</button>
+            <button class="b" id="b-navstop">Stop Nav2</button>
+            <span class="spacer"></span>
+            <button class="b" id="b-export" title="Save a .pgm/.yaml copy of the 2D map in ~/maps">Save 2D map</button>
+          </div>
+        </details>
       </section>
       <section>
         <h2>3D view</h2>
@@ -395,7 +418,7 @@ let ST = null;           // latest status from /ws
 const LAYER_SEL = "#view-layers [data-layer], #nvblox-layers [data-layer], #slam-layers [data-layer]";
 let MAP = null;          // {info, img}
 let WAYPOINTS = [];
-let tool = "waypoint";
+let tool = "point";
 const toast = (t) => { const e = $("#toast"); e.textContent = t; e.classList.add("show"); clearTimeout(e._t); e._t = setTimeout(() => e.classList.remove("show"), 2400); };
 const api = async (action, body = {}) => {
   try {
@@ -420,16 +443,15 @@ async function startViewer() {
       const v = new WebViewer();
       await v.start(grpcUrl, el, { hide_welcome_screen: true, width: "100%", height: "100%", theme: "dark" });
       viewer = v;
-      // a plain click on any 3D point is sent to the robot,
-      // which turns it into a waypoint / goal / pose according to the current click mode
+      // a plain click on any 3D point opens the map menu there (or adds a keep-out corner while drawing)
       let lastClick = 0;
       v.on("selection_change", (ev) => {
-        if (tool === "off") return;
         const it = (ev.items || []).find((i) => i.type === "entity" && i.position);
-        if (!it || Date.now() - lastClick < 150) return;
+        if (!it || Date.now() - lastClick < 150 || !MAP) return;
         lastClick = Date.now();
-        const [x, y, z] = it.position;
-        api("click", { x, y, z, entity: it.entity_path });
+        const [x, y] = it.position;     // the 3D view is in the map frame: same menu as a 2D click
+        if (tool === "keepout") { const [sx, sy] = w2s(x, y); addDraftPoint(x, y, sx, sy); return; }
+        openMenu({ kind: "spot" }, x, y, defaultYaw(x, y));
       });
       return;
     } catch (e) { console.warn("embedded viewer failed, falling back to iframe", e); }
@@ -505,8 +527,8 @@ function onStatus() {
   $("#wpmap").textContent = s.map_name ? `· map ${s.map_name}` : "";
   if (JSON.stringify(s.waypoints) !== JSON.stringify(WAYPOINTS) && !dragging) { WAYPOINTS = s.waypoints; renderTable(); }
   renderPlaces(s.places || []);
+  if (JSON.stringify(s.keepout || []) !== JSON.stringify(KEEPOUT)) { KEEPOUT = s.keepout || []; renderKeepout(); drawMap(); }
   if (s.map_version !== mapVersion) { mapVersion = s.map_version; loadMap(); }
-  if (s.click_mode && s.click_mode !== tool && Date.now() - toolChanged > 1500) setTool(s.click_mode, false);
   if (s.last_click && s.last_click.t !== lastClickT) {
     if (lastClickT !== null) toast(`${s.last_click.source} click (${s.last_click.x}, ${s.last_click.y}): ${s.last_click.result}`);
     lastClickT = s.last_click.t;
@@ -782,11 +804,17 @@ function drawMap() {
     ctx.beginPath(); ctx.arc(sx, sy, Math.max(r, 5 * dpr), 0, 7); ctx.fill(); ctx.stroke();
     arrow(p.x, p.y, p.yaw, Math.max(r * 1.4, 14 * dpr), "#3ddc84", 2.5);
   }
+  drawOverlay();
   if (preview) arrow(preview.x, preview.y, preview.yaw, 22 * dpr, preview.color, 3);
 }
 
-// interactions
+// interactions: one "Point" mode (click = pin + menu: Go here / Save as place / Add to route / Robot is here; clicking
+// a place, a route point or a zone opens its own menu) and a "Keep-out zone" drawing mode (click the corners)
 let dragging = null, panning = null;
+let PLACES = [], KEEPOUT = [];
+let draft = null;          // keep-out zone being drawn: [[x, y], ...]
+let pin = null;            // {x, y, yaw} of the open menu
+const KO_MARGIN = 0.25, KO_WALL = 0.05;     // keepout.py: clearance around zones, half width of a 2-point wall
 const evPt = (e) => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * devicePixelRatio, (e.clientY - r.top) * devicePixelRatio]; };
 cv.addEventListener("contextmenu", (e) => e.preventDefault());
 cv.addEventListener("pointerdown", (e) => {
@@ -795,68 +823,212 @@ cv.addEventListener("pointerdown", (e) => {
   const [sx, sy] = evPt(e);
   if (e.button === 2 || e.shiftKey) { panning = { sx, sy, ox: view.ox, oy: view.oy }; return; }
   const [x, y] = s2w(sx, sy);
-  dragging = { x, y, sx, sy };
-  if (tool === "off") { dragging = null; selWp = nearestWaypoint(sx, sy); renderTable(); drawMap(); return; }
-  if (tool === "delete") return;
-  preview = { x, y, yaw: 0, color: tool === "waypoint" ? "#ffd400" : tool === "goto" ? "#4cc2ff" : "#ff5ec4" };
-  drawMap();
+  dragging = { x, y, sx, sy, moved: false };
+  if (tool === "point") { closeMenu(); preview = { x, y, yaw: defaultYaw(x, y), color: "#4cc2ff" }; drawMap(); }
 });
 cv.addEventListener("pointermove", (e) => {
   const [sx, sy] = evPt(e);
-  if (panning) { view.ox = panning.ox + sx - panning.sx; view.oy = panning.oy + sy - panning.sy; drawMap(); return; }
+  if (panning) { view.ox = panning.ox + sx - panning.sx; view.oy = panning.oy + sy - panning.sy; drawMap(); placeMenu(); return; }
   if (!dragging || !preview) return;
-  if (Math.hypot(sx - dragging.sx, sy - dragging.sy) > 6 * devicePixelRatio) preview.yaw = Math.atan2(-(sy - dragging.sy), sx - dragging.sx);
+  if (Math.hypot(sx - dragging.sx, sy - dragging.sy) > 6 * devicePixelRatio) {
+    dragging.moved = true; preview.yaw = Math.atan2(-(sy - dragging.sy), sx - dragging.sx);
+  }
   drawMap();
 });
-cv.addEventListener("pointerup", (e) => {
+cv.addEventListener("pointerup", () => {
   if (panning) { panning = null; return; }
   if (!dragging) return;
-  const { x, y, sx, sy } = dragging, yaw = preview ? preview.yaw : 0;
-  dragging = null; preview = null;
-  if (tool === "off") { /* view only */ }
-  else if (tool === "delete") deleteWaypointAt(sx, sy);
-  else if (tool === "waypoint") addWaypoint(x, y, yaw);
-  else if (tool === "goto") { api("goto", { x, y, yaw }); toast(`navigating to ${x.toFixed(2)}, ${y.toFixed(2)}`); }
-  else if (tool === "pose") { api("initialpose", { x, y, yaw }); toast("initial pose sent"); }
-  drawMap();
+  const d = dragging; dragging = null;
+  if (tool === "keepout") { addDraftPoint(d.x, d.y, d.sx, d.sy); return; }
+  const yaw = preview ? preview.yaw : 0; preview = null;
+  if (!d.moved) {                      // a click on something that exists opens its menu
+    const hit = hitTest(d.sx, d.sy);
+    if (hit) { openMenu(hit, d.x, d.y); return; }
+  }
+  openMenu({ kind: "spot" }, d.x, d.y, yaw);
 });
 cv.addEventListener("wheel", (e) => {
   e.preventDefault(); const [sx, sy] = evPt(e), k = Math.exp(-e.deltaY * 0.0015);
-  view.ox = sx - (sx - view.ox) * k; view.oy = sy - (sy - view.oy) * k; view.s *= k; drawMap();
+  view.ox = sx - (sx - view.ox) * k; view.oy = sy - (sy - view.oy) * k; view.s *= k; drawMap(); placeMenu();
 }, { passive: false });
 cv.addEventListener("dblclick", () => {
+  if (tool === "keepout") { finishDraft(); return; }
   if (!ST || !ST.pose || !MAP) return; const [sx, sy] = w2s(ST.pose.x, ST.pose.y);
-  view.ox += cv.width / 2 - sx; view.oy += cv.height / 2 - sy; drawMap();
+  view.ox += cv.width / 2 - sx; view.oy += cv.height / 2 - sy; drawMap(); placeMenu();
 });
-function setTool(t, tellRobot = true) {
-  tool = t;
+window.addEventListener("keydown", (e) => {
+  if (e.target.closest && e.target.closest("input, textarea, select")) return;
+  if (e.key === "Escape") { closeMenu(); if (draft) cancelDraft(); }
+  if (e.key === "Enter" && draft) finishDraft();
+});
+function defaultYaw(x, y) {           // no drag: face away from the robot (the way it would arrive)
+  const p = ST && ST.pose && ST.pose.frame === "map" ? ST.pose : null;
+  return p && Math.hypot(x - p.x, y - p.y) > 0.2 ? Math.atan2(y - p.y, x - p.x) : 0;
+}
+function setTool(t) {
+  tool = t; closeMenu(); if (t !== "keepout") cancelDraft();
   document.querySelectorAll("#tool button").forEach((x) => x.classList.toggle("active", x.dataset.tool === t));
-  if (tellRobot) { toolChanged = Date.now(); api("click_mode", { mode: t }); }
+  $("#ko-draw").hidden = t !== "keepout";
+  if (t === "keepout") { draft = []; toast("click the corners of the zone · 2 points = a wall line · Finish, Enter or double-click to save"); }
+  drawMap();
 }
 document.querySelectorAll("#tool button").forEach((b) => b.onclick = () => setTool(b.dataset.tool));
 
-// ---------------- waypoints ----------------
+// what is under a click: a place, a route point or a keep-out zone
+function hitTest(sx, sy) {
+  const r = 14 * devicePixelRatio;
+  for (const p of PLACES) { const [px, py] = w2s(p.x, p.y); if (Math.hypot(px - sx, py - sy) < r) return { kind: "place", p }; }
+  for (let k = 0; k < WAYPOINTS.length; k++) { const [px, py] = w2s(WAYPOINTS[k].x, WAYPOINTS[k].y); if (Math.hypot(px - sx, py - sy) < r) return { kind: "wp", k }; }
+  const [x, y] = s2w(sx, sy);
+  for (let k = 0; k < KEEPOUT.length; k++) if (zoneHit(KEEPOUT[k].points, x, y)) return { kind: "zone", k };
+  return null;
+}
+function segDist(x, y, [ax, ay], [bx, by]) {
+  const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy, t = L ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / L)) : 0;
+  return Math.hypot(x - ax - t * dx, y - ay - t * dy);
+}
+function zoneHit(pts, x, y) {
+  const edges = pts.length === 2 ? [[pts[0], pts[1]]] : pts.map((p, i) => [p, pts[(i + 1) % pts.length]]);
+  if (Math.min(...edges.map(([a, b]) => segDist(x, y, a, b))) < 0.15) return true;
+  if (pts.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i], [xj, yj] = pts[j];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+// the menu at a point
+const fmt = (v) => v.toFixed(2);
+function openMenu(hit, x, y, yaw = 0) {
+  const m = $("#mapmenu"); let h = "";
+  const head = (t) => `<div class="hd">${t}<button data-a="close" title="close (Esc)">✕</button></div>`;
+  if (hit.kind === "spot") {
+    pin = { x, y, yaw };
+    h = head(`${fmt(x)}, ${fmt(y)} · ${(yaw * 180 / Math.PI).toFixed(0)}°`) +
+      `<button data-a="go">➜ Go here</button>` +
+      `<div class="in"><input id="mm-name" placeholder="place name"><button class="b" data-a="save">★ Save</button></div>` +
+      `<button data-a="route">＋ Add to route</button>` +
+      `<button data-a="pose" title="tell the localizer the robot stands here, facing the arrow">📍 Robot is here</button>`;
+  } else if (hit.kind === "place") {
+    pin = { x: hit.p.x, y: hit.p.y, yaw: hit.p.yaw, place: hit.p.name };
+    h = head(`place <b>${escHtml(hit.p.name)}</b>`) + `<button data-a="pgo">➜ Go to ${escHtml(hit.p.name)}</button>` +
+      `<button data-a="proute">＋ Add to route</button><button class="del" data-a="pdel">✕ Delete place</button>`;
+  } else if (hit.kind === "wp") {
+    const w = WAYPOINTS[hit.k]; pin = { x: w.x, y: w.y, yaw: w.yaw, wp: hit.k };
+    h = head(`route point <b>${hit.k + 1}</b>`) + `<button data-a="wgo">➜ Go here</button><button class="del" data-a="wdel">✕ Remove from route</button>`;
+  } else if (hit.kind === "zone") {
+    const z = KEEPOUT[hit.k]; pin = { x, y, yaw: 0, zone: hit.k };
+    h = head(`keep-out <b>${escHtml(z.name)}</b>`) + `<button class="del" data-a="zdel">✕ Delete zone</button>`;
+  }
+  m.innerHTML = h; m.hidden = false; placeMenu(); drawMap();
+  const inp = m.querySelector("#mm-name"); if (inp) inp.onkeydown = (e) => { if (e.key === "Enter") menuAction("save"); };
+}
+function placeMenu() {
+  const m = $("#mapmenu"); if (m.hidden || !pin || !MAP) return;
+  const [sx, sy] = w2s(pin.x, pin.y), d = devicePixelRatio, W = cv.width / d, H = cv.height / d;
+  const x = Math.min(Math.max(sx / d + 14, 4), W - m.offsetWidth - 4), y = Math.min(Math.max(sy / d - 10, 4), H - m.offsetHeight - 4);
+  m.style.left = `${x}px`; m.style.top = `${y}px`;
+}
+function closeMenu() { $("#mapmenu").hidden = true; pin = null; drawMap(); }
+$("#mapmenu").addEventListener("click", (e) => { const b = e.target.closest("button[data-a]"); if (b) menuAction(b.dataset.a); });
+async function menuAction(a) {
+  const p = pin; if (!p) return;
+  if (a === "close") { closeMenu(); return; }
+  if (a === "go" || a === "wgo") { api("goto", { x: p.x, y: p.y, yaw: p.yaw }); toast(`navigating to ${fmt(p.x)}, ${fmt(p.y)}`); }
+  if (a === "save") {
+    const name = ($("#mm-name").value || "").trim(); if (!name) { toast("type a name first"); $("#mm-name").focus(); return; }
+    const j = await api("place_save", { name, x: p.x, y: p.y, yaw: p.yaw }); if (j && j.ok) { toast(`saved '${name}'`); PLACES = j.places; }
+  }
+  if (a === "route" || a === "proute") { addWaypoint(p.x, p.y, p.yaw); toast(`route point ${WAYPOINTS.length} added`); }
+  if (a === "pose") { api("initialpose", { x: p.x, y: p.y, yaw: p.yaw }); toast("robot pose sent to the localizer"); }
+  if (a === "pgo") { const j = await api("place_go", { name: p.place }); if (j && j.ok) toast(`driving to ${p.place}`); }
+  if (a === "pdel" && await ask(`Delete the place '${p.place}'?`, { ok: "Delete", danger: true })) api("place_delete", { name: p.place });
+  if (a === "wdel") deleteWaypoint(p.wp);
+  if (a === "zdel" && await ask(`Delete the keep-out zone '${KEEPOUT[p.zone].name}'? The robot may drive there again.`, { ok: "Delete", danger: true })) {
+    saveKeepout(KEEPOUT.filter((_, k) => k !== p.zone));
+  }
+  closeMenu();
+}
+$("#b-navcancel").onclick = () => { api("stop"); toast("stopping"); };
+
+// keep-out drawing
+function addDraftPoint(x, y, sx, sy) {
+  if (!draft) draft = [];
+  if (draft.length) {                        // a click on the first corner closes the polygon; ignore double taps
+    const [fx, fy] = w2s(draft[0][0], draft[0][1]), [lx, ly] = w2s(...draft[draft.length - 1]);
+    if (draft.length >= 3 && Math.hypot(fx - sx, fy - sy) < 12 * devicePixelRatio) { finishDraft(); return; }
+    if (Math.hypot(lx - sx, ly - sy) < 4 * devicePixelRatio) return;
+  }
+  draft.push([+x.toFixed(3), +y.toFixed(3)]); drawMap();
+}
+function finishDraft() {
+  if (!draft || draft.length < 2) { toast("click at least 2 points (a wall) or 3+ (an area)"); return; }
+  const name = ($("#ko-name").value || "").trim() || `zone ${KEEPOUT.length + 1}`;
+  saveKeepout([...KEEPOUT, { name, points: draft }]);
+  toast(`keep-out zone '${name}' saved - Nav2 avoids it from now on`);
+  $("#ko-name").value = ""; setTool("point");
+}
+function cancelDraft() { draft = tool === "keepout" ? [] : null; drawMap(); }
+$("#b-ko-done").onclick = finishDraft;
+$("#b-ko-undo").onclick = () => { if (draft && draft.length) { draft.pop(); drawMap(); } };
+$("#b-ko-cancel").onclick = () => setTool("point");
+async function saveKeepout(zones) {
+  KEEPOUT = zones; renderKeepout(true); drawMap();
+  const j = await api("keepout", { zones }); if (j && j.ok) { KEEPOUT = j.keepout; renderKeepout(true); drawMap(); }
+}
+let koKey = "";
+function renderKeepout(force = false) {
+  const key = JSON.stringify(KEEPOUT); if (!force && key === koKey) return; koKey = key;
+  $("#kotable").innerHTML = KEEPOUT.length ? KEEPOUT.map((z, k) => `<tr><td>⛔</td><td>${escHtml(z.name)}</td><td class="muted">${z.points.length === 2 ? "wall line" : `${z.points.length} corners`}</td>
+    <td class="act"><button data-k="${k}" class="del" title="delete">✕</button></td></tr>`).join("")
+    : `<tr><td></td><td class="muted" colspan="3">None. Pick "⛔ Keep-out zone" above and click the corners (2 points = a wall line, e.g. a glass wall).</td></tr>`;
+}
+$("#kotable").addEventListener("click", async (e) => {
+  const b = e.target.closest("button"); if (!b) return; const z = KEEPOUT[+b.dataset.k]; if (!z) return;
+  if (await ask(`Delete the keep-out zone '${z.name}'? The robot may drive there again.`, { ok: "Delete", danger: true })) saveKeepout(KEEPOUT.filter((x) => x !== z));
+});
+
+// map overlay: keep-out zones (with the clearance Nav2 keeps), the zone being drawn, places, the open pin
+function drawOverlay() {
+  const dpr = devicePixelRatio, mpx = view.s / MAP.info.resolution;   // screen px per metre
+  const path = (pts, close) => { ctx.beginPath(); pts.forEach(([x, y], k) => { const [sx, sy] = w2s(x, y); k ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); }); if (close) ctx.closePath(); };
+  ctx.lineJoin = "round"; ctx.lineCap = "round";
+  for (const z of KEEPOUT) {
+    const wall = z.points.length === 2;
+    path(z.points, !wall);
+    ctx.strokeStyle = "rgba(255,84,104,.18)"; ctx.lineWidth = 2 * (KO_MARGIN + (wall ? KO_WALL : 0)) * mpx; ctx.stroke();
+    if (!wall) { ctx.fillStyle = "rgba(255,84,104,.35)"; ctx.fill(); }
+    ctx.strokeStyle = "#ff5468"; ctx.lineWidth = wall ? Math.max(2 * dpr, 2 * KO_WALL * mpx) : 2 * dpr; ctx.stroke();
+    const [cx, cy] = w2s(z.points.reduce((a, p) => a + p[0], 0) / z.points.length, z.points.reduce((a, p) => a + p[1], 0) / z.points.length);
+    ctx.fillStyle = "#ffb3bd"; ctx.font = `${11 * dpr}px system-ui`; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(z.name, cx, cy - 10 * dpr);
+  }
+  if (draft && draft.length) {
+    path(draft, false); ctx.setLineDash([6 * dpr, 4 * dpr]); ctx.strokeStyle = "#ff5468"; ctx.lineWidth = 2 * dpr; ctx.stroke(); ctx.setLineDash([]);
+    draft.forEach(([x, y], k) => { const [sx, sy] = w2s(x, y); ctx.fillStyle = k ? "#ff5468" : "#fff"; ctx.beginPath(); ctx.arc(sx, sy, 5 * dpr, 0, 7); ctx.fill(); });
+  }
+  for (const p of PLACES) {
+    const [sx, sy] = w2s(p.x, p.y);
+    arrow(p.x, p.y, p.yaw, 14 * dpr, "#c58cff");
+    ctx.fillStyle = "#c58cff"; ctx.beginPath(); ctx.arc(sx, sy, 6 * dpr, 0, 7); ctx.fill();
+    ctx.font = `600 ${11 * dpr}px system-ui`; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    ctx.strokeStyle = "#0f1114"; ctx.lineWidth = 3 * dpr; ctx.strokeText(p.name, sx + 9 * dpr, sy); ctx.fillStyle = "#e6d4ff"; ctx.fillText(p.name, sx + 9 * dpr, sy);
+  }
+  if (pin && !$("#mapmenu").hidden) {
+    const [sx, sy] = w2s(pin.x, pin.y);
+    ctx.strokeStyle = "#4cc2ff"; ctx.lineWidth = 2.5 * dpr; ctx.beginPath(); ctx.arc(sx, sy, 10 * dpr, 0, 7); ctx.stroke();
+    if (pin.place == null && pin.wp == null && pin.zone == null) arrow(pin.x, pin.y, pin.yaw, 24 * dpr, "#4cc2ff", 3);
+  }
+}
+
+// ---------------- route (waypoints) ----------------
 function pushWaypoints() { api("waypoints", { waypoints: WAYPOINTS }); renderTable(); drawMap(); }
 function addWaypoint(x, y, yaw) { WAYPOINTS.push({ x, y, yaw }); pushWaypoints(); }
-let selWp = null;           // selected waypoint (table row / map click with View) -> Delete key
-window.addEventListener("keydown", (e) => {
-  if (driving || selWp == null || !["Delete", "Backspace"].includes(e.key)) return;
-  if (e.target.closest && e.target.closest("input, textarea, select")) return;
-  e.preventDefault(); const k = selWp; selWp = null; deleteWaypoint(k); toast(`deleted waypoint ${k + 1}`);
-});
+let selWp = null;
 function deleteWaypoint(k) {
   WAYPOINTS.splice(k, 1); if (selWp === k) selWp = null; renderTable(); drawMap();
   api("waypoint_delete", { index: k });
-}
-function nearestWaypoint(sx, sy) {         // marker within ~18 px of a map click, or null
-  let best = null, bd = 18 * devicePixelRatio;
-  WAYPOINTS.forEach((w, k) => { const [wx, wy] = w2s(w.x, w.y), d = Math.hypot(wx - sx, wy - sy); if (d < bd) { bd = d; best = k; } });
-  return best;
-}
-function deleteWaypointAt(sx, sy) {
-  const best = nearestWaypoint(sx, sy);
-  if (best == null) { toast("no waypoint there"); return; }
-  deleteWaypoint(best); toast(`deleted waypoint ${best + 1}`);
 }
 let lastTableKey = "";
 function renderTable(onlyIfChanged = false) {
@@ -866,35 +1038,33 @@ function renderTable(onlyIfChanged = false) {
   if (onlyIfChanged && key === lastTableKey) return;
   lastTableKey = key;
   $("#wptable").innerHTML = WAYPOINTS.length ? WAYPOINTS.map((w, k) => `<tr data-k="${k}" class="${k === cur ? "cur" : ""}${k === selWp ? " sel" : ""}"><td>${k + 1}</td><td>${w.x.toFixed(2)}, ${w.y.toFixed(2)}</td><td>${(w.yaw * 180 / Math.PI).toFixed(0)}°</td>
-    <td class="act"><button data-a="go" data-k="${k}" title="go here">➜</button><button data-a="up" data-k="${k}" title="move up">↑</button><button data-a="del" class="del" data-k="${k}" title="delete">✕</button></td></tr>`).join("")
-    : `<tr><td></td><td class="muted" colspan="3">Click the map to add waypoints (drag to set heading).</td></tr>`;
+    <td class="act"><button data-a="go" data-k="${k}" title="go here">➜</button><button data-a="up" data-k="${k}" title="move up">↑</button><button data-a="del" class="del" data-k="${k}" title="remove">✕</button></td></tr>`).join("")
+    : `<tr><td></td><td class="muted" colspan="3">Empty. Click the map, then "＋ Add to route" (or add a place).</td></tr>`;
 }
 $("#wptable").addEventListener("click", (e) => {
   const b = e.target.closest("button");
-  if (!b) {                                   // click on a row: select it (Delete key removes it)
-    const tr = e.target.closest("tr[data-k]"); if (!tr) return;
-    selWp = selWp === +tr.dataset.k ? null : +tr.dataset.k; renderTable(); drawMap(); return;
-  }
+  if (!b) { const tr = e.target.closest("tr[data-k]"); if (!tr) return; selWp = selWp === +tr.dataset.k ? null : +tr.dataset.k; renderTable(); drawMap(); return; }
   const k = +b.dataset.k;
   if (b.dataset.a === "del") { deleteWaypoint(k); return; }
   if (b.dataset.a === "up" && k > 0) [WAYPOINTS[k - 1], WAYPOINTS[k]] = [WAYPOINTS[k], WAYPOINTS[k - 1]];
   if (b.dataset.a === "go") { const w = WAYPOINTS[k]; api("goto", w); return; }
   pushWaypoints();
 });
-$("#b-clear").onclick = async () => { if (WAYPOINTS.length && await ask(`Delete all ${WAYPOINTS.length} waypoints of this map?`, { ok: "Delete", danger: true })) { WAYPOINTS = []; pushWaypoints(); } };
+$("#b-clear").onclick = async () => { if (WAYPOINTS.length && await ask(`Clear all ${WAYPOINTS.length} route points of this map?`, { ok: "Clear", danger: true })) { WAYPOINTS = []; pushWaypoints(); } };
 $("#b-runonce").onclick = () => api("run", { loop: false });
 $("#b-cruise").onclick = () => api("run", { loop: true });
 
-// ---------------- named places (voice "go to X"); stored per map next to the waypoints ----------------
+// ---------------- named places (voice / agent "go to X"); stored per map ----------------
 const escHtml = (t) => String(t).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 let placesKey = "";
 function renderPlaces(places) {
+  PLACES = places;
   const key = JSON.stringify(places);
   if (key === placesKey) return;
-  placesKey = key;
-  $("#pltable").innerHTML = places.length ? places.map((p, k) => `<tr><td>${escHtml(p.name)}</td><td>${p.x.toFixed(2)}, ${p.y.toFixed(2)}</td><td>${(p.yaw * 180 / Math.PI).toFixed(0)}°</td>
+  placesKey = key; drawMap();
+  $("#pltable").innerHTML = places.length ? places.map((p, k) => `<tr><td style="color:#c58cff">★</td><td>${escHtml(p.name)}</td><td class="muted">${p.x.toFixed(2)}, ${p.y.toFixed(2)}</td>
     <td class="act"><button data-a="go" data-k="${k}" title="drive there">➜</button><button data-a="del" class="del" data-k="${k}" title="delete">✕</button></td></tr>`).join("")
-    : `<tr><td></td><td class="muted" colspan="3">Drive the robot to a spot, type a name, Save.</td></tr>`;
+    : `<tr><td></td><td class="muted" colspan="3">None. Click the map and "★ Save", or drive the robot somewhere and save where it is.</td></tr>`;
   $("#pltable")._places = places;
 }
 $("#pltable").addEventListener("click", async (e) => {

@@ -254,7 +254,7 @@
       <rect id="batt-fill" x="4" y="5" width="0" height="14" rx="2" fill="#3ddc84"/>
       <path id="batt-bolt" d="M22 3 L14 13 H19 L16 21 L25 10 H20 Z" fill="#ffd400" stroke="#101216" stroke-width="1" visibility="hidden"/>
     </svg>
-    <span><span id="batt-pct">--</span> <span class="sub" id="batt-v"></span></span>
+    <span><span class="sub">Robot</span> <span id="batt-pct">--</span> <span class="sub" id="batt-v"></span></span>
   </span>
 </div>
 <div id="estop">E-STOP<span>Base and arm power are cut. Release the button, then switch the arms back on (Settings → Arms).</span></div>
@@ -887,7 +887,8 @@ function setHTML(sel, h) { const e = $(sel); if (e._h !== h) { e.innerHTML = h; 
 function renderRemoteInd(r) {
   const U = RemoteUI, conn = r && r.state === "connected", lk = U.lock(r);
   $("#remote-chip").classList.toggle("off", !conn);
-  setHTML("#remote-ind", conn ? (lk ? U.lockIcon(lk.open, lk.color, 22) : "") + U.battery(r.battery, 20) + U.signal(r.rssi, 20) : "");
+  setHTML("#remote-ind", conn ? (lk ? U.lockIcon(lk.open, lk.color, 22) : "") + U.battery(r.battery, 20) +
+    `<span class="sub">${r.battery ?? "?"} %</span>` + U.signal(r.rssi, 20) : "");
   $("#remote-txt").textContent = conn ? (lk ? lk.short : "") : !r ? "" : r.autoconnect ? "waiting" : "off";
   setHTML("#r-ind", !conn ? "" :
     (lk ? `<span class="rm-badge ${lk.cls}">${U.lockIcon(lk.open, lk.color, 22)}${lk.long}</span>` : `<span class="rm-badge muted">lock state unknown</span>`) +

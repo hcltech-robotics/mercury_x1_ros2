@@ -32,6 +32,7 @@ from geometry_msgs.msg import Pose, PoseArray, PoseStamped, PoseWithCovarianceSt
 from mercury_x1_msgs.msg import ArmState, BaseState, JointCommand, VoiceBoardState, VoiceWake
 from mercury_x1_msgs.srv import SetWakeWord
 from nav2_msgs.action import FollowWaypoints, NavigateToPose
+from nav2_msgs.msg import CostmapFilterInfo
 from nav_msgs.msg import OccupancyGrid, Path
 from PIL import Image as PILImage
 from rclpy.action import ActionClient
@@ -47,6 +48,7 @@ from tf2_msgs.msg import TFMessage
 from .arm_motion import ArmMotion
 from .gestures import Gestures
 from .pose_chain import PoseChain
+from . import keepout as keepoutlib
 from . import places as placelib
 from . import slam3d
 from .gpuprocs import GpuProcs
@@ -233,6 +235,10 @@ class WebNode(Node):
         self.pub_cmd = self.create_publisher(Twist, "/cmd_vel", 10)
         self.pub_init = self.create_publisher(PoseWithCovarianceStamped, "/initialpose", 10)
         self.pub_wps = self.create_publisher(PoseArray, "/web/waypoints", LATCHED)
+        # keep-out zones for Nav2's KeepoutFilter (keepout.py): mask + filter info, latched
+        self.keepout: list[dict] = []
+        self.pub_ko_mask = self.create_publisher(OccupancyGrid, keepoutlib.MASK_TOPIC, LATCHED)
+        self.pub_ko_info = self.create_publisher(CostmapFilterInfo, keepoutlib.INFO_TOPIC, LATCHED)
         self.pub_led = self.create_publisher(ColorRGBA, "/base/led", 10)
         self.pub_joint = self.create_publisher(JointCommand, "/upper_body/joint_command", 10)
         self.pub_remote = self.create_publisher(String, "/remote/cmd", 10)
@@ -358,6 +364,11 @@ class WebNode(Node):
         return {"frame": p[0], "x": p[1], "y": p[2], "yaw": p[3]}
 
     # -- commands --------------------------------------------------------------------------------
+    def publish_keepout(self) -> None:
+        m, info = keepoutlib.messages(self.keepout, self.get_clock().now().to_msg())
+        self.pub_ko_mask.publish(m)
+        self.pub_ko_info.publish(info)
+
     def publish_waypoints(self) -> None:
         pa = PoseArray()
         pa.header.frame_id = "map"
@@ -637,6 +648,7 @@ class WebNode(Node):
             "plan": self.plan,
             "waypoints": self.waypoints,
             "places": self.places,
+            "keepout": self.keepout,
             "click_mode": self.click_mode,
             "last_click": self.last_click,
             "remote": self.remote,
@@ -735,6 +747,20 @@ class App:
 
     def load_places(self) -> None:
         self.node.places = placelib.load(self.places_file())
+        self.load_keepout()
+
+    # -- keep-out zones (per map, keepout.py) ---------------------------------------------------
+    def keepout_file(self) -> str:
+        return os.path.join(MAPS_DIR, f"{self.map_name}.keepout.json")
+
+    def load_keepout(self) -> None:
+        self.node.keepout = keepoutlib.load(self.keepout_file())
+        self.node.post(self.node.publish_keepout)
+
+    def save_keepout(self, zones) -> None:
+        self.node.keepout = keepoutlib.clean(zones)
+        keepoutlib.save(self.keepout_file(), self.node.keepout)
+        self.node.post(self.node.publish_keepout)
 
     def place_save(self, name: str, x=None, y=None, yaw=None) -> str:
         """save a place at (x, y, yaw) or at the robot's pose now; returns an error text or "" """
@@ -1169,7 +1195,7 @@ class App:
         """move <name>.db and its side files to ~/maps/.trash/<name>-<time>/ (3D exports stay)"""
         dest = os.path.join(TRASH_DIR, f"{name}-{time.strftime('%Y%m%d-%H%M%S')}")
         os.makedirs(dest, exist_ok=True)
-        for ext in (".db", ".waypoints.json", ".pgm", ".yaml"):
+        for ext in (".db", ".waypoints.json", ".places.json", ".keepout.json", ".pgm", ".yaml"):
             src = os.path.join(MAPS_DIR, name + ext)
             if os.path.exists(src):
                 shutil.move(src, os.path.join(dest, name + ext))
@@ -1254,6 +1280,9 @@ class App:
             dest = await loop.run_in_executor(None, lambda: self.delete_map(name))
             self._maps_t = 0.0
             return web.json_response({"ok": True, "trash": dest})
+        elif action == "keepout":       # {"zones": [{"name", "points": [[x, y], ...]}]}: the whole list of this map
+            self.save_keepout(body.get("zones", []))
+            return web.json_response({"ok": True, "keepout": n.keepout})
         elif action == "waypoint_delete":   # {"index"}
             k = int(body.get("index", -1))
             if not 0 <= k < len(n.waypoints):
