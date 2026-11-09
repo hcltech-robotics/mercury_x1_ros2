@@ -342,10 +342,6 @@
           <label class="switch" id="sw-arms" title="Arm servo power (both arms)"><input type="checkbox"><span class="track"></span>Arms</label>
           <label class="switch warn" id="sw-free" title="Freedrive: move the arms by hand (remote: Select). Hold the arm when switching on."><input type="checkbox"><span class="track"></span>Freedrive</label>
         </div>
-        <div class="row">
-          <label class="switch" id="sw-moveit" title="MoveIt move_group: arm motion planning with IK and self-collision checks (arm vs arm, arm vs body). ~90 MB RAM. Planning alone moves nothing."><input type="checkbox"><span class="track"></span>Motion planning (MoveIt)</label>
-          <span class="muted" id="moveit-st"></span>
-        </div>
         <div class="row" id="arm-poses" title="Planned by MoveIt with self-collision checks, then executed. The arms MOVE."></div>
         <div class="row">
           <label style="width:70px">speed</label>
@@ -524,10 +520,8 @@ function onStatus() {
   renderRemote();
   const armsList = Object.values(s.arms || {});
   setArmsSwitch(armsList.length > 0 && armsList.every((a) => a.powered));
-  const mv = (s.procs || {}).moveit || {};
-  setMoveitSwitch(!!mv.running);
-  $("#moveit-st").textContent = mv.running ? ((s.nodes || []).includes("move_group") ? "planning ready" : "starting…") : "";
-  renderArmMotion(s.arm_motion, !!mv.running);
+  // MoveIt runs all the time (web_server starts it); the pose buttons wait for move_group
+  renderArmMotion(s.arm_motion, (s.nodes || []).includes("move_group"));
   setFreeSwitch(armsList.some((a) => a.freedrive));
   setHoldSwitch(s.head_hold !== false);
   if (s.viz_layers && Date.now() > layersUntil) {
@@ -1101,15 +1095,12 @@ function renderArmMotion(m, moveitOn) {
   const busy = ["planning", "moving"].includes(m.state);
   for (const b of $("#arm-poses").querySelectorAll("button")) b.disabled = !moveitOn || !m.ready || busy;
   const words = { idle: "", planning: "planning…", moving: "moving…", done: "done", failed: "failed", stopped: "stopped" };
-  $("#arm-st").textContent = !moveitOn ? "switch on Motion planning to use the poses" :
+  $("#arm-st").textContent = !moveitOn ? "motion planning is starting…" :
     [words[m.state] || m.state, m.state === "failed" ? m.message : busy ? m.message : m.pose].filter(Boolean).join(" · ");
   $("#arm-st").style.color = m.state === "failed" ? "#ff5468" : busy ? "#ffb020" : "";
 }
 $("#b-arm-stop").onclick = () => { api("arm_stop", {}); toast("stopping the arms"); };
 
-const setMoveitSwitch = bindSwitch("#sw-moveit", (on) => {
-  api("moveit", { on }); toast(on ? "starting MoveIt (~15 s)" : "stopping MoveIt");
-});
 // nvblox layers in the 3D view: the bridge subscribes only to the layers that are on
 let layersUntil = 0;
 for (const el of document.querySelectorAll(LAYER_SEL)) {

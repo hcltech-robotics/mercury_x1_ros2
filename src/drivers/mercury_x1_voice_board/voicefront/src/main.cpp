@@ -60,6 +60,7 @@ struct Options {
   float vad_snr_db = 8.0f;
   std::string ns = "moderate";
   int ns_threads = 1;          // --ns gtcrn: onnxruntime intra-op threads
+  float ns_gain_db = 20.0f;  // --ns-gain-db: input scaling for GTCRN (net expects speech near normal level)
   bool events = true;          // --no-events: no vad / doa / status lines on stderr (no serial port)
   bool agc = true;
   float hum_hz = 250.5f;       // --hum: centre of the robot's hum notches, 0 = off
@@ -104,6 +105,7 @@ void usage() {
                "  --ns off|low|moderate|high|veryhigh|gtcrn  (default moderate; gtcrn = neural: model/gtcrn.bin\n"
                "                      hand-written, else model/gtcrn.onnx via onnxruntime; gtcrn-native|gtcrn-ort force one)\n"
                "  --no-agc\n"
+               "  --ns-gain-db F      scale the beam before the GTCRN net, undone after (default 20)\n"
                "  --out-gain-db F     fixed gain on the output, for --no-agc (default 0)\n"
                "  --hum F|off        notches at F-3 and F+3 Hz for the robot's ~250 Hz hum + 100 Hz high-pass on\n"
                "                      the mics, before everything else (default 250.5)\n"
@@ -176,6 +178,7 @@ bool parse_args(int argc, char** argv, Options& o) {
       o.hum_hz = v == "off" ? 0.0f : static_cast<float>(std::atof(v.c_str()));
     }
     else if (a == "--no-agc") o.agc = false;
+    else if (a == "--ns-gain-db") o.ns_gain_db = std::stof(next("--ns-gain-db"));
     else if (a == "--model") o.model_dir = next("--model");
     else if (a == "--keywords") o.keywords = split(next("--keywords"), ';');
     else if (a == "--kw-threshold") o.kw_threshold = std::strtof(next("--kw-threshold").c_str(), nullptr);
@@ -474,14 +477,14 @@ int main(int argc, char** argv) {
     std::string derr;
     if (native) {
       auto d = std::make_unique<GtcrnNative>();
-      if (!d->load(o.model_dir + "/gtcrn.bin", 10.0f, derr)) {
+      if (!d->load(o.model_dir + "/gtcrn.bin", std::pow(10.0f, o.ns_gain_db / 20.0f), derr)) {
         log("gtcrn: " + derr);
         return 1;
       }
       denoiser = std::move(d);
     } else {
       auto d = std::make_unique<SpecDenoiser>();
-      if (!d->load(o.model_dir + "/gtcrn.onnx", 10.0f, o.ns_threads, derr)) {
+      if (!d->load(o.model_dir + "/gtcrn.onnx", std::pow(10.0f, o.ns_gain_db / 20.0f), o.ns_threads, derr)) {
         log("gtcrn: " + derr);
         return 1;
       }

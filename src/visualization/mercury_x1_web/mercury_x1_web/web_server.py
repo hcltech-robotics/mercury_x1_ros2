@@ -650,6 +650,9 @@ class App:
         self.node, self.port = node, port
         self.grpc_port, self.viewer_port = grpc_port, viewer_port
         self.sup = Supervisor(os.path.expanduser("~/.ros/mercury_x1_web"))
+        # MoveIt move_group runs all the time (user, 2026-11-09: no switch on the page); ~0.3-0.5 GB RAM
+        if not self.sup.running("moveit"):
+            self.sup.start("moveit", ["ros2", "launch", "mercury_x1_moveit_config", "move_group.launch.py"], {})
         self.map_name = "default"
         self.restarting = False
         self.static_dir = os.path.join(get_package_share_directory("mercury_x1_web"), "web")

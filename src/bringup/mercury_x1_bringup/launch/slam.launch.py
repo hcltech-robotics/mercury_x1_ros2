@@ -126,7 +126,7 @@ def generate_launch_description():
         DeclareLaunchArgument("fresh", default_value="false", description="mapping: delete the db first"),
         DeclareLaunchArgument("camera", default_value="true", description="fuse the RGB-D camera"),
         DeclareLaunchArgument("nvblox", default_value="true", description="GPU 3D mapping (Isaac ROS nvblox)"),
-        DeclareLaunchArgument("cuvslam", default_value="true",
+        DeclareLaunchArgument("cuvslam", default_value="false",
                               description="cuVSLAM RGB-D visual odometry on the GPU (/vslam/odom, comparison only)"),
         OpaqueFunction(function=_nodes),
     ])

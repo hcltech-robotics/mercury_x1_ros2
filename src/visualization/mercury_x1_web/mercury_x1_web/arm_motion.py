@@ -53,7 +53,8 @@ class ArmMotion:
     def snapshot(self) -> dict:
         return {"state": self.state, "message": self.message, "pose": self.pose, "t": self.t,
                 "ready": self.client.server_is_ready(),
-                "poses": [{k: p[k] for k in ("name", "group", "label")} for p in self.poses]}
+                # the page shows only the default pose (user, 2026-11-09); reach_forward_* etc. stay for gestures
+                "poses": [{"name": p["name"], "group": p["group"], "label": "Default pose"} for p in self.poses if p["name"] == "rest"]}
 
     def _set(self, state: str, message: str = "") -> None:
         self.state, self.message, self.t = state, message, time.time()

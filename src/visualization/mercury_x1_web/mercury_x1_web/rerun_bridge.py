@@ -127,7 +127,8 @@ class RerunBridge(Node):
         web_port = int(p("web_port", 9090).value)
         # the server keeps this much history and replays it to every newly connected viewer; newest first,
         # so a new viewer shows the live state at once and the history fills in behind it
-        mem = p("memory_limit", "64MiB").value
+        # 64 MiB took a reloaded page 120..300 s to catch up (the replay runs at well under 1 MB/s into the browser)
+        mem = p("memory_limit", "8MiB").value
         self.img_hz = float(p("image_rate", 4.0).value)
         self.cloud_hz = float(p("cloud_rate", 3.0).value)
         self.scan_hz = float(p("scan_rate", 10.0).value)
