@@ -22,6 +22,25 @@ HANDSHAKE_POSE = "reach_forward_R"
 REST_POSE = "rest"
 PUMP_JOINT = "joint4_R"     # elbow; a handshake = small up/down here
 PUMP_DEG = 4.0
+ARM_SPEED = 0.3             # MoveIt velocity scaling for gesture poses (handshake was 0.15: twice as fast, 2026-11-09)
+FAST = 40                   # firmware speed for the small joint wiggles (the cap in _send)
+WAVE_JOINT = "joint4_R"     # in the wave_R pose the elbow joint swings the raised hand sideways, the elbow stays put
+WAVE_DEG = 16.0
+BOW_EYE_DEG = 18.0          # head pitch down for the bow ("eye" + = down, as in the nod)
+# name -> what it means; the voice chat gets these as the gesture tool's choices
+GESTURES = {
+    "nod": "nod: yes / agreement",
+    "shake_head": "shake the head: no",
+    "handshake": "offer the right hand for a handshake",
+    "thank_you": "Japanese thank-you bow: hands together in front, head lowered",
+    "wave": "wave hello or goodbye with the right hand",
+    "high_five": "raise the right hand for a high five",
+    "point": "point forward-right with the right arm: this way",
+    "welcome": "open both arms: welcome",
+    "shrug": "shrug: I don't know",
+    "look_around": "look around the room",
+}
+ARM_GESTURES = {"handshake", "thank_you", "wave", "high_five", "point", "welcome", "shrug"}
 
 
 class Gestures:
@@ -34,13 +53,15 @@ class Gestures:
 
     # -- public ----------------------------------------------------------------------------------
     def names(self) -> list[str]:
-        return ["nod", "shake_head", "handshake"]
+        return list(GESTURES)
 
     def run(self, name: str) -> tuple[bool, str]:
-        seq = {"nod": self._nod, "shake_head": self._shake, "handshake": self._handshake}.get(name)
+        seq = {"nod": self._nod, "shake_head": self._shake, "handshake": self._handshake,
+               "thank_you": self._thank_you, "wave": self._wave, "high_five": self._high_five, "point": self._point,
+               "welcome": self._welcome, "shrug": self._shrug, "look_around": self._look_around}.get(name)
         if seq is None:
             return False, f"unknown gesture {name}"
-        if name == "handshake" and not self.arm.client.server_is_ready():
+        if name in ARM_GESTURES and not self.arm.client.server_is_ready():
             return False, "arm planning (MoveIt) is not running"
         return self._start(name, seq)
 
@@ -61,7 +82,7 @@ class Gestures:
 
     def stop(self) -> None:
         self._stop.set()
-        if self.busy == "handshake":
+        if self.busy in ARM_GESTURES:
             self.node.post(self.arm.stop)
 
     # -- internals -------------------------------------------------------------------------------
@@ -141,17 +162,81 @@ class Gestures:
         return False
 
     def _handshake(self) -> None:
-        if not self._moveit(HANDSHAKE_POSE, 0.15):
+        if not self._moveit(HANDSHAKE_POSE, ARM_SPEED):
             self.node.get_logger().warn(f"handshake: {self.arm.message}")
             return
         base = math.degrees(self.arm_joint(PUMP_JOINT))
         for sgn in (1, -1, 1, -1, 1, -1):
-            self._send({PUMP_JOINT: base + sgn * PUMP_DEG}, 20)
-            if not self._wait(0.5):
+            self._send({PUMP_JOINT: base + sgn * PUMP_DEG}, FAST)
+            if not self._wait(0.25):
                 break
-        self._send({PUMP_JOINT: base}, 20)
-        self._wait(1.0)
-        self._moveit(REST_POSE, 0.15)
+        self._send({PUMP_JOINT: base}, FAST)
+        self._wait(0.5)
+        self._moveit(REST_POSE, ARM_SPEED)
+
+    def _pose_hold(self, pose: str, hold: float, during=None) -> None:
+        """arm pose, then `during` (or a plain wait for `hold` s), then back to rest; a stop leaves the arm where it is
+        (_moveit returns at once once stopped)"""
+        if not self._moveit(pose, ARM_SPEED):
+            self.node.get_logger().warn(f"{pose}: {self.arm.message}")
+        elif during:
+            during()
+        else:
+            self._wait(hold)
+        self._moveit(REST_POSE, ARM_SPEED)
+
+    def _thank_you(self) -> None:
+        home = self._now("eye")
+        def bow():
+            self._send({"eye": home["eye"] + BOW_EYE_DEG}, SPEED + 8)
+            self._wait(1.6)
+            self._send(home, SPEED + 8)
+            self._wait(0.6)
+        self._pose_hold("thank_you", 0, bow)
+
+    def _wave(self) -> None:
+        def wave():
+            base = math.degrees(self.arm_joint(WAVE_JOINT))
+            for sgn in (1, -1, 1, -1, 1, -1):
+                self._send({WAVE_JOINT: base + sgn * WAVE_DEG}, FAST)
+                if not self._wait(0.35):
+                    break
+            self._send({WAVE_JOINT: base}, FAST)
+            self._wait(0.4)
+        self._pose_hold("wave_R", 0, wave)
+
+    def _high_five(self) -> None:
+        self._pose_hold("high_five_R", 3.0)
+
+    def _point(self) -> None:
+        home = self._now("head")
+        def look():
+            self._send({"head": home["head"] - 25.0}, SPEED + 8)   # look where the hand points (to the right)
+            self._wait(2.0)
+            self._send(home, SPEED + 8)
+        self._pose_hold("point_R", 0, look)
+
+    def _welcome(self) -> None:
+        self._pose_hold("welcome", 2.0)
+
+    def _shrug(self) -> None:
+        home = self._now("head")
+        def tilt():
+            for d in (-10.0, 10.0):
+                self._send({"head": home["head"] + d}, SPEED + 10)
+                if not self._wait(0.5):
+                    break
+            self._send(home, SPEED + 10)
+            self._wait(0.5)
+        self._pose_hold("shrug", 0, tilt)
+
+    def _look_around(self) -> None:
+        home = self._now("head", "eye")
+        for d in (40.0, -40.0, 0.0):
+            self._send({"head": home["head"] + d, "eye": home["eye"] - 5.0}, SPEED + 6)
+            if not self._wait(1.4):
+                break
+        self._send(home, SPEED + 6)
 
     def arm_joint(self, name: str) -> float:
         pos = getattr(self.node, "arm_joints", {}).get(name)

@@ -44,7 +44,7 @@ TEST_PHRASE = "Hello, I am Mercury. This is how loud I speak."
 SYSTEM_PROMPT = (
     "You are Mercury, a friendly wheeled humanoid robot with two arms, made by Elephant Robotics and working in the "
     "HCLTech robotics lab as a lab companion. You are talking out loud with people standing in front of you, so "
-    "answer in one to three short spoken sentences, in plain words: no lists, no markdown, no emojis, no code. Say "
+    "answer in at most three short spoken sentences (never more than four), in plain words: no lists, no markdown, no emojis, no code. Say "
     "numbers the way a person would. If you did not understand, ask briefly. For questions about HCLTech, the lab or "
     "yourself, answer only from the facts you are given: copy names and numbers exactly, say the period of a figure, "
     "prefer the most recent date, and if the facts do not say it, say you do not know. Call a tool only when the "
@@ -72,6 +72,7 @@ LLM_ENV = os.path.expanduser("~/.config/mercury_x1/llm.env")   # server/robot_ll
 LLM_CHECK_MIN_S = 5.0      # reachability checks for the page: at most this often
 LAB_HEADERS_S = 3.0        # auto: the lab server must start answering within this, else the robot's model answers
 LAB_RETRY_S = 60.0         # auto: after a lab failure, ask the robot's model first for this long
+MAX_SENTENCES = 4          # spoken answer cap (user, 2026-11-09: "not more than 3-4 sentences"); the rest is dropped
 SENTENCE_END = re.compile(r"(?<=[.!?;:])\s+|\n+")
 # a short "stop" phrase cancels motion directly, before (and whatever) the model answers
 STOP_PHRASE = re.compile(r"\b(stop|halt|freeze|wait|stay|hold on|don'?t move|stand still)\b", re.I)
@@ -459,7 +460,7 @@ class VoiceChat:
         try:
             msgs = self._messages(text)
             tools = self._tools()
-            first, spoken = None, False
+            first, spoken, n_sent, capped = None, False, 0, False
             for round_ in range(MAX_TOOL_ROUNDS + 1):
                 body = {"messages": msgs, "stream": True, "max_tokens": 300, "temperature": 0.3,
                         "chat_template_kwargs": {"enable_thinking": False}}
@@ -491,14 +492,19 @@ class VoiceChat:
                             spoken, pending = True, pending[clause.end():]
                             continue
                         for sentence in parts[:-1]:      # complete sentences go to speech right away
-                            if speakable(sentence):
+                            if speakable(sentence) and not capped:
                                 await queue.put(speakable(sentence))
-                                spoken = True
+                                spoken, n_sent = True, n_sent + 1
+                                capped = n_sent >= MAX_SENTENCES
                         pending = parts[-1]
-                if speakable(pending):
+                        if capped:                       # long answer: stop reading, say no more
+                            part = part[:len(part) - len(pending)]
+                            pending = ""
+                            break
+                if speakable(pending) and not capped:
                     await queue.put(speakable(pending))
                 answer += part
-                if not calls:
+                if not calls or capped:
                     break
                 ordered = [calls[i] for i in sorted(calls)]
                 msgs.append({"role": "assistant", "content": part or None, "tool_calls": [
@@ -658,7 +664,10 @@ class VoiceChat:
         ]
         gestures = getattr(self.actions, "voice_gesture_names", lambda: [])()
         if gestures:
-            tools.append(fn("gesture", "Do a body gesture with the waist, head and arms.",
+            from .gestures import GESTURES
+            tools.append(fn("gesture", "Do a body gesture with the waist, head and arms. " +
+                            "; ".join(f"{k} = {v}" for k, v in GESTURES.items() if k in gestures) +
+                            ". Use thank_you when someone thanks you or you thank them, wave for hello and goodbye.",
                             {"name": {"type": "string", "enum": gestures}}, ["name"]))
         return tools
 

@@ -1401,6 +1401,13 @@ class App:
         elif action == "arm_pose":        # {"name": SRDF group_state, "speed": 0.05..0.5}: MoveIt plan + execute
             name, speed = str(body.get("name", "")), float(body.get("speed", 0.3))
             n.post(lambda: n.arm_motion.goto(name, speed))
+        elif action == "gesture":         # {"name"}: one of gestures.GESTURES (page / agent / tests); "stop" ends it
+            name = str(body.get("name", ""))
+            if name == "stop":
+                self.gestures.stop()
+                return web.json_response({"ok": True})
+            ok, msg = self.gestures.run(name)
+            return web.json_response({"ok": ok, "message": msg})
         elif action == "home":            # {"stop"?: bool}: kiosk "Home pose" - head, arms (MoveIt), then the waist
             if body.get("stop"):
                 self.stop_home()

@@ -60,6 +60,89 @@
     <joint name="joint6_R" value="0.6"/>
     <joint name="joint7_R" value="0"/>
   </group_state>
+  <!-- gesture poses (gestures.py), 2026-11-09: solved from the URDF kinematics (hand position + palm direction),
+       all pass MoveIt check_state_validity; the page shows only "rest" -->
+  <!-- hands together in front of the belly (Japanese bow, with the head lowered) -->
+  <group_state name="thank_you" group="both_arms">
+    <joint name="joint1_L" value="0.728"/>
+    <joint name="joint2_L" value="0.587"/>
+    <joint name="joint3_L" value="0.141"/>
+    <joint name="joint4_L" value="-1.763"/>
+    <joint name="joint5_L" value="-0.864"/>
+    <joint name="joint6_L" value="0.959"/>
+    <joint name="joint7_L" value="0.0"/>
+    <joint name="joint1_R" value="-0.728"/>
+    <joint name="joint2_R" value="0.587"/>
+    <joint name="joint3_R" value="-0.141"/>
+    <joint name="joint4_R" value="-1.763"/>
+    <joint name="joint5_R" value="0.864"/>
+    <joint name="joint6_R" value="0.959"/>
+    <joint name="joint7_R" value="0.0"/>
+  </group_state>
+  <!-- right hand up beside the head, palm forward, elbow out -->
+  <group_state name="wave_R" group="right_arm">
+    <joint name="joint1_R" value="0.057"/>
+    <joint name="joint2_R" value="-0.239"/>
+    <joint name="joint3_R" value="1.463"/>
+    <joint name="joint4_R" value="-1.534"/>
+    <joint name="joint5_R" value="-1.847"/>
+    <joint name="joint6_R" value="0.117"/>
+    <joint name="joint7_R" value="0.0"/>
+  </group_state>
+  <!-- right hand raised forward, palm forward -->
+  <group_state name="high_five_R" group="right_arm">
+    <joint name="joint1_R" value="0.715"/>
+    <joint name="joint2_R" value="0.698"/>
+    <joint name="joint3_R" value="0.22"/>
+    <joint name="joint4_R" value="-1.044"/>
+    <joint name="joint5_R" value="0.719"/>
+    <joint name="joint6_R" value="2.664"/>
+    <joint name="joint7_R" value="0.0"/>
+  </group_state>
+  <!-- right arm straight forward-right (this way) -->
+  <group_state name="point_R" group="right_arm">
+    <joint name="joint1_R" value="0.031"/>
+    <joint name="joint2_R" value="0.085"/>
+    <joint name="joint3_R" value="0.029"/>
+    <joint name="joint4_R" value="-0.937"/>
+    <joint name="joint5_R" value="0.001"/>
+    <joint name="joint6_R" value="0.645"/>
+    <joint name="joint7_R" value="0.0"/>
+  </group_state>
+  <!-- both arms open at chest height, palms forward -->
+  <group_state name="welcome" group="both_arms">
+    <joint name="joint1_L" value="-0.259"/>
+    <joint name="joint2_L" value="-0.823"/>
+    <joint name="joint3_L" value="0.251"/>
+    <joint name="joint4_L" value="-1.881"/>
+    <joint name="joint5_L" value="-1.024"/>
+    <joint name="joint6_L" value="1.572"/>
+    <joint name="joint7_L" value="0.0"/>
+    <joint name="joint1_R" value="0.259"/>
+    <joint name="joint2_R" value="-0.823"/>
+    <joint name="joint3_R" value="-0.251"/>
+    <joint name="joint4_R" value="-1.881"/>
+    <joint name="joint5_R" value="1.024"/>
+    <joint name="joint6_R" value="1.572"/>
+    <joint name="joint7_R" value="-0.0"/>
+  </group_state>
+  <!-- elbows out, forearms forward, palms up -->
+  <group_state name="shrug" group="both_arms">
+    <joint name="joint1_L" value="-0.687"/>
+    <joint name="joint2_L" value="-0.823"/>
+    <joint name="joint3_L" value="1.192"/>
+    <joint name="joint4_L" value="-1.776"/>
+    <joint name="joint5_L" value="-0.873"/>
+    <joint name="joint6_L" value="-0.299"/>
+    <joint name="joint7_L" value="0.0"/>
+    <joint name="joint1_R" value="0.687"/>
+    <joint name="joint2_R" value="-0.823"/>
+    <joint name="joint3_R" value="-1.192"/>
+    <joint name="joint4_R" value="-1.776"/>
+    <joint name="joint5_R" value="0.873"/>
+    <joint name="joint6_R" value="-0.299"/>
+    <joint name="joint7_R" value="0.0"/>
+  </group_state>
   <group_state name="straight" group="waist">
     <joint name="body" value="0"/>
   </group_state>
