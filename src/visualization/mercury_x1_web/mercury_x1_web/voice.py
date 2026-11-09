@@ -211,7 +211,13 @@ class VoiceChat:
         """say a fixed phrase with the current settings (to hear the level); not while answering"""
         if self._reply_task and not self._reply_task.done():
             return
+        await self.announce(TEST_PHRASE, log=False)
+
+    async def announce(self, text: str, log: bool = True) -> None:
+        """say `text` outside a conversation (the agent's say tool, the voice test); mic muted meanwhile"""
         conf = load_conf()
+        if log:
+            self._say("robot", text)
         if not self._vol_applied:
             await self.apply_volume()
         own = self._session is None
@@ -220,11 +226,14 @@ class VoiceChat:
         self._session = session
         try:
             await self._mute(True)
-            wav = await self._tts(conf, TEST_PHRASE)
-            await self._play(wav, conf)
+            self._talking(True)
+            for sentence in [x for x in SENTENCE_END.split(text) if speakable(x)] or [text]:
+                wav = await self._tts(conf, speakable(sentence) or sentence)
+                await self._play(wav, conf)
         except Exception as e:  # noqa: BLE001 - shown in the conversation
-            self._say("note", f"voice test failed: {str(e)[:120] or type(e).__name__}")
+            self._say("note", f"speaking failed: {str(e)[:120] or type(e).__name__}")
         finally:
+            self._talking(False)
             await self._mute(False)
             if own:
                 await session.close()
@@ -662,6 +671,12 @@ class VoiceChat:
                ["place"]),
             fn("stop_moving", "Stop driving immediately (cancel navigation). Use it when someone says stop or wait."),
         ]
+        if hasattr(self.actions, "voice_task"):
+            tools.append(fn("do_task", "Hand a task that needs searching or several steps to your planning brain, which "
+                            "drives and looks around on its own: find something or someone (find the sink, find a "
+                            "person and tell them something), go somewhere that is not a named place, check on "
+                            "something. Say in one short sentence that you are on it; the result is said when done.",
+                            {"task": {"type": "string", "description": "the task in the person's words"}}, ["task"]))
         gestures = getattr(self.actions, "voice_gesture_names", lambda: [])()
         if gestures:
             from .gestures import GESTURES
@@ -690,6 +705,12 @@ class VoiceChat:
                 return {"ok": ok, "result" if ok else "error": msg}
             if name == "stop_moving":
                 return {"ok": True, "result": a.voice_stop()}
+            if name == "do_task":
+                if not self.settings.get("drive"):
+                    return {"ok": False, "error": "driving by voice is switched off (kiosk Voice tab)"}
+                ok, msg = a.voice_task(str(args.get("task", "")))
+                self._say("note", f"agent: {msg}")
+                return {"ok": ok, "result" if ok else "error": msg}
             if name == "gesture":
                 if not self.settings.get("gestures"):
                     return {"ok": False, "error": "gestures are switched off (kiosk Voice tab)"}

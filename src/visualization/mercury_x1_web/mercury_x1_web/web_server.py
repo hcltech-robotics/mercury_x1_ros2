@@ -45,6 +45,7 @@ from rtabmap_msgs.msg import MapGraph
 from sensor_msgs.msg import BatteryState, JointState, PointCloud2, PointField
 from tf2_msgs.msg import TFMessage
 
+from .agent import Agent
 from .arm_motion import ArmMotion
 from .gestures import Gestures
 from .pose_chain import PoseChain
@@ -684,6 +685,7 @@ class App:
         self.gestures = Gestures(node, node.arm_motion)   # body language for voice chat (switch "gestures")
         node.wake_hook = self._on_wake_word
         self.voice = VoiceChat(on_change=self._voice_changed, actions=self)   # kiosk Chat tab; actions = voice tools
+        self.agent = Agent(self)             # the network VLM drives the robot through tools (agent.py, page Agent tab)
         vconf = load_voice_conf()
         self.wake_verifier = WakeVerifier(vconf.get("VOICE_SPEECH_URL", LOCAL_SPEECH))
         self.voice_version = 0
@@ -801,9 +803,13 @@ class App:
 
     def voice_stop(self) -> str:
         n = self.node
+        self.agent.stop()
         n.post(n.cancel)
         self.gestures.stop()
         return "stopped"
+
+    def voice_task(self, task: str) -> tuple[bool, str]:
+        return self.agent.start(task, source="voice")
 
     def voice_gesture_names(self) -> list[str]:
         return self.gestures.names()
@@ -983,6 +989,12 @@ class App:
             raise web.HTTPNotFound()
         return web.Response(body=self.node.map_png, content_type="image/png",
                             headers={"Cache-Control": "no-store"})
+
+    async def agent_img(self, req):
+        img = self.agent.images.get(int(req.match_info["id"]) if req.match_info["id"].isdigit() else -1)
+        if img is None:
+            raise web.HTTPNotFound()
+        return web.Response(body=img, content_type="image/jpeg", headers={"Cache-Control": "max-age=3600"})
 
     async def map_info(self, req):
         m = self.node.map_msg
@@ -1224,6 +1236,7 @@ class App:
                 st["ros"] = self.ros_network()
                 st["nodes"] = self.node.node_names
                 st["versions"] = self.versions()
+                st["agent"] = self.agent.snapshot()
                 if time.monotonic() - self._maps_t > 3.0:     # saved maps: cheap, but no need at 5 Hz
                     self._maps_cache, self._maps_t = self.map_list(), time.monotonic()
                 st["maps"] = self._maps_cache
@@ -1258,6 +1271,7 @@ class App:
                 return web.json_response({"ok": False, "error": f"bad mode {mode}"})
             n.click_mode = mode
         elif action == "stop":
+            self.agent.stop()
             n.post(n.cancel)
         elif action == "goto":
             n.post(lambda: n.go_to(body["x"], body["y"], body.get("yaw", 0.0)))
@@ -1430,6 +1444,12 @@ class App:
         elif action == "arm_pose":        # {"name": SRDF group_state, "speed": 0.05..0.5}: MoveIt plan + execute
             name, speed = str(body.get("name", "")), float(body.get("speed", 0.3))
             n.post(lambda: n.arm_motion.goto(name, speed))
+        elif action == "agent":           # {"op": "run", "task"} | {"op": "stop"}: the VLM agent (agent.py)
+            if body.get("op") == "stop":
+                self.agent.stop()
+                return web.json_response({"ok": True})
+            ok, msg = self.agent.start(str(body.get("task", "")))
+            return web.json_response({"ok": ok, "error": "" if ok else msg})
         elif action == "gesture":         # {"name"}: one of gestures.GESTURES (page / agent / tests); "stop" ends it
             name = str(body.get("name", ""))
             if name == "stop":
@@ -1472,6 +1492,7 @@ class App:
         app.router.add_get("/ws", self.ws)
         app.router.add_get("/map.png", self.map_png)
         app.router.add_get("/map.json", self.map_info)
+        app.router.add_get("/agent/img/{id}", self.agent_img)
         app.router.add_get("/maps", self.maps)
         app.router.add_get("/vendor/rerun/{name}", self.vendor)
         app.router.add_post("/api/{action}", self.api)

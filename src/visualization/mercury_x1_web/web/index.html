@@ -129,6 +129,14 @@
     background: #1b4f6e; color: #fff; margin-left: 4px; vertical-align: 1px; }
   .badge.mapping { background: #5a4410; }
   #navstate { font-size: 13px; }
+  #ag-log .e { display: grid; grid-template-columns: 46px 1fr; gap: 6px; font-size: 12px; align-items: start; }
+  #ag-log .e .k { color: var(--muted); font-variant-numeric: tabular-nums; }
+  #ag-log .e.thought .x { color: #cfe3ff; font-style: italic; }
+  #ag-log .e.tool .x { color: #ffd400; font-family: ui-monospace, monospace; }
+  #ag-log .e.result .x { color: var(--muted); font-family: ui-monospace, monospace; word-break: break-all; }
+  #ag-log .e.error .x { color: var(--bad); }
+  #ag-log .e.done .x, #ag-log .e.task .x { color: var(--text); font-weight: 600; }
+  #ag-log img { max-width: 100%; max-height: 260px; border-radius: 4px; border: 1px solid var(--line); display: block; margin-top: 4px; cursor: zoom-in; }
   #mapmenu { position: absolute; z-index: 5; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
     padding: 6px; display: flex; flex-direction: column; gap: 4px; min-width: 170px; box-shadow: 0 6px 20px rgba(0,0,0,.5); }
   #mapmenu[hidden] { display: none; }
@@ -219,7 +227,7 @@
     <span class="k" data-k="0,1">A</span><span class="k" data-k="-1,0">S</span><span class="k" data-k="0,-1">D</span></div>
     <div id="hud-speed" style="text-align:center">⇧ shift = fast</div></div></div>
   <aside>
-    <div class="tabs"><button class="active" data-tab="nav">Navigate</button><button data-tab="robot">Robot</button><button data-tab="status">Status</button></div>
+    <div class="tabs"><button class="active" data-tab="nav">Navigate</button><button data-tab="agent">Agent</button><button data-tab="robot">Robot</button><button data-tab="status">Status</button></div>
 
     <div data-pane="nav">
       <section>
@@ -321,6 +329,27 @@
       </section>
     </div>
 
+    <div data-pane="agent" class="hidden">
+      <section>
+        <h2>Agent <span class="muted" style="text-transform:none;letter-spacing:0">· the network model (Qwen, sees the map and the camera) drives the robot</span></h2>
+        <textarea id="ag-task" rows="3" style="width:100%;box-sizing:border-box;resize:vertical" placeholder="e.g. Find the sink. / Find a person and tell them lunch is ready. / Go and check whether the door is open."></textarea>
+        <div class="row" id="ag-examples" style="flex-wrap:wrap;gap:4px;margin-top:4px">
+          <button class="b" data-t="Find the sink.">find the sink</button>
+          <button class="b" data-t="Find a person, go to them, wave and tell them that lunch is ready.">find a person · lunch</button>
+          <button class="b" data-t="Look around and tell me what you see in this room.">look around</button>
+          <button class="b" data-t="Go to the door and check whether it is open.">check the door</button>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <button class="b primary" id="ag-run">▶ Run</button>
+          <button class="b danger" id="ag-stop">■ Stop</button>
+          <span class="spacer"></span>
+          <span id="ag-state" class="muted">idle</span>
+        </div>
+        <div class="muted" style="font-size:11px">The robot drives (Nav2, keep-out zones respected), turns its head and talks. Stop also cancels the drive. By voice: "Hey Mercury, find the sink" (Drive switch on in the kiosk Voice tab).</div>
+        <div id="ag-answer" style="margin-top:8px;font-weight:600"></div>
+        <div id="ag-log" style="margin-top:8px;display:flex;flex-direction:column;gap:6px;max-height:640px;overflow:auto"></div>
+      </section>
+    </div>
     <div data-pane="robot" class="hidden">
       <section>
         <h2>Unitree remote · Bluetooth</h2>
@@ -527,6 +556,7 @@ function onStatus() {
   $("#wpmap").textContent = s.map_name ? `· map ${s.map_name}` : "";
   if (JSON.stringify(s.waypoints) !== JSON.stringify(WAYPOINTS) && !dragging) { WAYPOINTS = s.waypoints; renderTable(); }
   renderPlaces(s.places || []);
+  renderAgent(s.agent);
   if (JSON.stringify(s.keepout || []) !== JSON.stringify(KEEPOUT)) { KEEPOUT = s.keepout || []; renderKeepout(); drawMap(); }
   if (s.map_version !== mapVersion) { mapVersion = s.map_version; loadMap(); }
   if (s.last_click && s.last_click.t !== lastClickT) {
@@ -1079,6 +1109,30 @@ $("#b-plsave").onclick = async () => {
   const j = await api("place_save", { name });
   if (j && j.ok) { toast(`saved '${name}'`); $("#pl-name").value = ""; }
 };
+
+// ---------------- agent (agent.py) ----------------
+let agKey = "";
+function renderAgent(a) {
+  if (!a) return;
+  const run = a.state === "running";
+  $("#ag-run").disabled = run; $("#ag-stop").disabled = !run;
+  $("#ag-state").textContent = a.state + (a.elapsed ? ` · ${a.elapsed.toFixed(0)} s` : "") + (a.source === "voice" ? " · by voice" : "");
+  $("#ag-state").style.color = run ? "var(--warn)" : a.state === "error" ? "var(--bad)" : "var(--muted)";
+  const key = JSON.stringify([a.state, a.log.length, a.answer]);
+  if (key === agKey) return; agKey = key;
+  $("#ag-answer").textContent = a.answer ? `→ ${a.answer}` : "";
+  const icon = { task: "task", thought: "think", tool: "do", result: "got", image: "map", done: "done", error: "error" };
+  const box = $("#ag-log"), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+  box.innerHTML = a.log.map((e) => `<div class="e ${e.kind}"><span class="k">${e.t.toFixed(0)}s ${icon[e.kind] || e.kind}</span><span class="x">${escHtml(e.text)}` +
+    (e.img ? `<img src="/agent/img/${e.img}" loading="lazy" onclick="window.open(this.src)">` : "") + `</span></div>`).join("");
+  if (atEnd) box.scrollTop = box.scrollHeight;
+}
+$("#ag-examples").addEventListener("click", (e) => { const b = e.target.closest("button[data-t]"); if (b) $("#ag-task").value = b.dataset.t; });
+$("#ag-run").onclick = async () => {
+  const task = $("#ag-task").value.trim(); if (!task) { toast("type a task first"); return; }
+  const j = await api("agent", { op: "run", task }); if (j && j.ok) toast("agent started");
+};
+$("#ag-stop").onclick = () => { api("agent", { op: "stop" }); toast("stopping the agent"); };
 
 // ---------------- SLAM / Nav ----------------
 // saved maps (~/maps/*.db), newest first; the status carries the list
