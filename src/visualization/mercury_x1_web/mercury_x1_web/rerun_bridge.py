@@ -381,7 +381,15 @@ class RerunBridge(Node):
         """whole map, 3 cm voxels in the map frame (web_server): kept, then drawn at the page's size / shape"""
         offs = {f.name: f.offset for f in msg.fields}
         n = msg.width * msg.height
-        if n == 0 or not all(k in offs for k in ("x", "y", "z")):
+        if n == 0:                       # web_server: the map was deleted or is being re-made - clear the view
+            self.slam3d_cloud = None
+            blanked = 0
+            for s in VOXEL_SHAPES:
+                blanked += len(self.slam3d_tiles[s])
+                self._blank_tiles(s, list(self.slam3d_tiles[s]))
+            self.get_logger().info(f"voxel map cleared ({blanked} tiles)")
+            return
+        if not all(k in offs for k in ("x", "y", "z")):
             return
         buf = np.frombuffer(msg.data, dtype=np.uint8).reshape(n, msg.point_step)
         xyz = np.stack([buf[:, offs[k]:offs[k] + 4].copy().view(np.float32)[:, 0] for k in "xyz"], 1)

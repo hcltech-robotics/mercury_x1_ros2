@@ -365,6 +365,12 @@ class WebNode(Node):
         return {"frame": p[0], "x": p[1], "y": p[2], "yaw": p[3]}
 
     # -- commands --------------------------------------------------------------------------------
+    def clear_cloud3d(self) -> None:
+        """an empty whole-map cloud: the topic is latched and the bridge keeps its tiles, so without this a deleted
+        or re-made map stays in the 3D view until the next export"""
+        self.pub_cloud3d.publish(cloud_msg(np.zeros((0, 3), np.float32), np.zeros((0, 3), np.uint8), "map",
+                                           self.get_clock().now().to_msg()))
+
     def publish_keepout(self) -> None:
         m, info = keepoutlib.messages(self.keepout, self.get_clock().now().to_msg())
         self.pub_ko_mask.publish(m)
@@ -1292,6 +1298,8 @@ class App:
             if slam["running"] and slam.get("map") == name:
                 return web.json_response({"ok": False, "error": f"'{name}' is in use - stop SLAM first"})
             dest = await loop.run_in_executor(None, lambda: self.delete_map(name))
+            if name == self.map_name:
+                n.post(n.clear_cloud3d)
             self._maps_t = 0.0
             return web.json_response({"ok": True, "trash": dest})
         elif action == "keepout":       # {"zones": [{"name", "points": [[x, y], ...]}]}: the whole list of this map
@@ -1417,6 +1425,8 @@ class App:
                     await loop.run_in_executor(None, lambda: self.sup.stop("slam"))
                 # replacing a map: the old one (and its waypoints) goes to the trash, not lost
                 await loop.run_in_executor(None, lambda: self.delete_map(name))
+            if name != self.map_name or (mode == "mapping" and fresh):
+                n.post(n.clear_cloud3d)          # the live loop exports the new map's cloud when it has one
             self.map_name = name
             self.load_waypoints()
             self.load_places()
