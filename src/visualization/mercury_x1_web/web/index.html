@@ -985,6 +985,7 @@ function renderKeepout(force = false) {
     <td class="act"><button data-k="${k}" class="del" title="delete">✕</button></td></tr>`).join("")
     : `<tr><td></td><td class="muted" colspan="3">None. Pick "⛔ Keep-out zone" above and click the corners (2 points = a wall line, e.g. a glass wall).</td></tr>`;
 }
+renderKeepout(true);
 $("#kotable").addEventListener("click", async (e) => {
   const b = e.target.closest("button"); if (!b) return; const z = KEEPOUT[+b.dataset.k]; if (!z) return;
   if (await ask(`Delete the keep-out zone '${z.name}'? The robot may drive there again.`, { ok: "Delete", danger: true })) saveKeepout(KEEPOUT.filter((x) => x !== z));
