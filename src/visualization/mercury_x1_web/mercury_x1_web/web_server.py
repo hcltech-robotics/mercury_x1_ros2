@@ -529,6 +529,11 @@ class WebNode(Node):
             Parameter(name="voxel_shape", value=ParameterValue(type=ParameterType.PARAMETER_STRING, string_value=shape)),
             Parameter(name="voxel_size", value=ParameterValue(type=ParameterType.PARAMETER_DOUBLE, double_value=size))]))
 
+    def bridge_resend(self) -> None:
+        """a page's viewer connected: the bridge re-sends the map, robot model and other static data"""
+        self.call("bridge_params", SetParameters.Request(parameters=[Parameter(
+            name="resend", value=ParameterValue(type=ParameterType.PARAMETER_INTEGER, integer_value=int(time.time())))]))
+
     def sample_graph(self) -> None:
         """subscribe /mapGraph until one message arrived (runs on the ROS thread)"""
         if self.sub_graph is None:
@@ -1454,6 +1459,8 @@ class App:
         elif action == "arm_pose":        # {"name": SRDF group_state, "speed": 0.05..0.5}: MoveIt plan + execute
             name, speed = str(body.get("name", "")), float(body.get("speed", 0.3))
             n.post(lambda: n.arm_motion.goto(name, speed))
+        elif action == "viewer_hello":    # the page's Rerun viewer just connected (index.html startViewer)
+            n.post(n.bridge_resend)
         elif action == "agent":           # {"op": "run", "task"} | {"op": "stop"}: the VLM agent (agent.py)
             if body.get("op") == "stop":
                 self.agent.stop()

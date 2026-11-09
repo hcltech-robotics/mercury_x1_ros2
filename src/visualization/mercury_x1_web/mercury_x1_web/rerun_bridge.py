@@ -122,6 +122,11 @@ def cloud_xyz(msg: PointCloud2) -> np.ndarray:
 class RerunBridge(Node):
     def __init__(self) -> None:
         super().__init__("rerun_bridge")
+        # every static log by entity path (its latest version), replayed when a page's viewer connects ("resend"):
+        # the server's history buffer is small (memory_limit, for fast page loads) and drops static data too
+        # (2026-11-09: a page opened after the map was sent showed an empty 3D view, not even the robot model)
+        self._statics: dict[str, tuple] = {}
+        self.resend_wanted = False
         p = self.declare_parameter
         grpc_port = int(p("grpc_port", 9876).value)
         web_port = int(p("web_port", 9090).value)
@@ -219,6 +224,7 @@ class RerunBridge(Node):
         self.layers_wanted: list[str] | None = None
         self.show_camera = True                    # "camera" layer: frustums with the live image
         p("nvblox_layers", self._saved_layers())
+        p("resend", 0)                             # web_server bumps it when a page's viewer connects
         self.add_on_set_parameters_callback(self._on_params)
         self._apply_layers(list(self.get_parameter("nvblox_layers").value))
         self.create_timer(0.2, self._layers_tick)
@@ -228,6 +234,8 @@ class RerunBridge(Node):
         self.log_t = t
 
     def _log(self, *args, **kwargs) -> None:
+        if kwargs.get("static") and args and isinstance(args[0], str):
+            self._statics[args[0]] = (args, kwargs)
         item = (self.log_t, args, kwargs)
         try:
             self.log_q.put_nowait(item)
@@ -289,6 +297,8 @@ class RerunBridge(Node):
                 if not VOXEL_SIZES[0] <= float(prm.value) <= VOXEL_SIZES[1]:
                     return SetParametersResult(successful=False, reason=f"voxel_size: {VOXEL_SIZES} m")
                 self.voxel_size, self.voxel_changed = float(prm.value), True
+            elif prm.name == "resend":
+                self.resend_wanted = True
             elif prm.name == "nvblox_layers":
                 bad = [k for k in prm.value if k and k not in NVBLOX_LAYERS and k not in VIEW_LAYERS]
                 if bad:
@@ -297,6 +307,12 @@ class RerunBridge(Node):
         return SetParametersResult(successful=True)
 
     def _layers_tick(self) -> None:
+        if self.resend_wanted:                    # a viewer connected: give it everything static again
+            self.resend_wanted = False
+            items = list(self._statics.values())
+            for args, kwargs in items:
+                self._log(*args, **kwargs)
+            self.get_logger().info(f"viewer connected: re-sent {len(items)} static entities")
         if self.voxel_changed:                    # page changed shape / size: re-draw from the kept cloud
             self.voxel_changed = False
             self._render_slam3d()

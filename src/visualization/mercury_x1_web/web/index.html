@@ -139,7 +139,7 @@
   #ag-log img { max-width: 100%; max-height: 260px; border-radius: 4px; border: 1px solid var(--line); display: block; margin-top: 4px; cursor: zoom-in; }
   #mapmenu { position: absolute; z-index: 5; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
     padding: 6px; display: flex; flex-direction: column; gap: 4px; min-width: 170px; box-shadow: 0 6px 20px rgba(0,0,0,.5); }
-  #mapmenu[hidden] { display: none; }
+  #mapmenu[hidden], #ko-draw[hidden] { display: none; }
   #mapmenu .hd { font-size: 11px; color: var(--muted); padding: 0 4px 2px; display: flex; gap: 6px; align-items: center; }
   #mapmenu .hd b { color: var(--text); }
   #mapmenu .hd button { margin-left: auto; background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 14px; }
@@ -472,6 +472,7 @@ async function startViewer() {
       const v = new WebViewer();
       await v.start(grpcUrl, el, { hide_welcome_screen: true, width: "100%", height: "100%", theme: "dark" });
       viewer = v;
+      setTimeout(() => api("viewer_hello"), 2500);   // the bridge re-sends the map etc. (its history buffer is small)
       // a plain click on any 3D point opens the map menu there (or adds a keep-out corner while drawing)
       let lastClick = 0;
       v.on("selection_change", (ev) => {
@@ -489,6 +490,7 @@ async function startViewer() {
   toast("3D clicks need the embedded viewer (still downloading on the robot?) - using the plain viewer");
   const f = document.createElement("iframe");
   f.src = `http://${host}:${cfg.viewer_port}/?url=${encodeURIComponent(grpcUrl)}`;
+  setTimeout(() => api("viewer_hello"), 4000);
   el.appendChild(f);
 }
 startViewer();
