@@ -19,7 +19,9 @@ import json
 import math
 import os
 import queue
+import re
 import socket
+import subprocess
 import threading
 import time
 
@@ -151,6 +153,8 @@ class RerunBridge(Node):
         self.robot_parts = self._robot_parts()
         uri = rr.serve_grpc(grpc_port=grpc_port, server_memory_limit=mem, newest_first=True,
                             cors_allow_origin=["*"], default_blueprint=self._blueprint(self.robot_parts))
+        self.stall_s = float(p("viewer_stall_timeout", 20.0).value)
+        threading.Thread(target=self._stall_reaper, args=(grpc_port,), daemon=True, name="rerun_reaper").start()
         # after a hard restart the old viewer port lingers in TIME_WAIT for ~60 s and rerun's web server
         # then hangs instead of failing: wait until the port can really be bound
         for _ in range(120):
@@ -228,6 +232,59 @@ class RerunBridge(Node):
         self.add_on_set_parameters_callback(self._on_params)
         self._apply_layers(list(self.get_parameter("nvblox_layers").value))
         self.create_timer(0.2, self._layers_tick)
+
+    # ---- stalled viewers -----------------------------------------------------------------------
+    # The gRPC server feeds all viewers in lockstep: one that stops reading (a browser tab frozen in the
+    # background keeps its connection open but reads nothing) fills its send queue and every other viewer, new
+    # ones included, then gets no data at all - the page shows Rerun's empty "Sources" screen. A connection
+    # with data queued that the client has not acknowledged a byte of for stall_s is shut down here; rerun
+    # drops it and the others continue. (A page loading the history is slow but keeps acknowledging.)
+    STALL_MIN_QUEUE = 256 * 1024
+    STALL_MIN_PROGRESS = 64 * 1024
+
+    def _stall_reaper(self, port: int) -> None:
+        seen: dict[tuple, tuple[int, float]] = {}       # (fd, peer) -> (bytes_acked, time it last advanced)
+        cmd = ["ss", "-tinpH", "state", "established", f"( sport = :{port} )"]
+        while rclpy.ok():
+            time.sleep(2.0)
+            try:
+                out = subprocess.run(cmd, capture_output=True, text=True, timeout=5).stdout
+            except Exception:
+                continue
+            now, live = time.monotonic(), set()
+            for head, info in zip(*[iter(out.splitlines())] * 2):
+                cols = head.split()
+                fd = re.search(rf"pid={os.getpid()},fd=(\d+)", head)
+                acked = re.search(r"bytes_acked:(\d+)", info)
+                if len(cols) < 4 or not fd or not acked:
+                    continue
+                key, sendq, acked = (int(fd.group(1)), cols[3]), int(cols[1]), int(acked.group(1))
+                live.add(key)
+                prev = seen.get(key)
+                if prev is None or acked - prev[0] >= self.STALL_MIN_PROGRESS or sendq < self.STALL_MIN_QUEUE:
+                    seen[key] = (acked, now)
+                elif now - prev[1] > self.stall_s:
+                    self._drop_viewer(key[0], key[1], sendq)
+                    seen.pop(key, None)
+            for k in set(seen) - live:
+                seen.pop(k)
+
+    def _drop_viewer(self, fd: int, peer: str, sendq: int) -> None:
+        try:
+            s = socket.socket(fileno=os.dup(fd))      # a duplicate: rerun keeps (and later closes) its own fd
+        except OSError:
+            return
+        try:
+            if s.getpeername()[1] != int(peer.rsplit(":", 1)[1]):
+                return                                  # fd was reused meanwhile
+            # zero-window probing would keep the dead connection open for minutes: abort within 1 s
+            s.setsockopt(socket.IPPROTO_TCP, socket.TCP_USER_TIMEOUT, 1000)
+            s.shutdown(socket.SHUT_RDWR)
+            self.get_logger().warn(f"rerun viewer {peer} stopped reading ({sendq // 1024} KiB queued) - dropped it")
+        except OSError:
+            pass
+        finally:
+            s.close()
 
     # ---- logging through the worker thread ---------------------------------------------
     def _set_time(self, t: float) -> None:

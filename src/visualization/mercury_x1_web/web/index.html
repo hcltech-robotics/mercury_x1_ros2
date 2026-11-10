@@ -464,7 +464,7 @@ const api = async (action, body = {}) => {
 // ---------------- Rerun viewer ----------------
 const cfg = await (await fetch("/config")).json();
 const grpcUrl = `rerun+http://${host}:${cfg.grpc_port}/proxy`;
-let viewer = null, viewerStarting = false, hideTimer = null;
+let viewer = null, viewerStarting = false, hideTimer = null, viewerSince = 0;
 async function startViewer() {
   const el = $("#viewer");
   if (viewer || viewerStarting) return;
@@ -474,7 +474,7 @@ async function startViewer() {
       const { WebViewer } = await import("/vendor/rerun/index.js");
       const v = new WebViewer();
       await v.start(grpcUrl, el, { hide_welcome_screen: true, width: "100%", height: "100%", theme: "dark" });
-      viewer = v;
+      viewer = v; viewerSince = Date.now(); vh.t = 0; vh.max = null;
       setTimeout(() => api("viewer_hello"), 2500);   // the bridge re-sends the map etc. (its history buffer is small)
       // a plain click on any 3D point opens the map menu there (or adds a keep-out corner while drawing)
       let lastClick = 0;
@@ -497,21 +497,54 @@ async function startViewer() {
   el.appendChild(f);
 }
 startViewer();
+function stopViewer() {
+  if (!viewer) return;
+  try { viewer.stop(); } catch (e) { console.warn(e); }
+  viewer = null;
+  for (const c of [...$("#viewer").children]) if (c.id !== "hud") c.remove();
+}
 // The robot's Rerun gRPC server feeds all viewers in lockstep: a throttled background tab stops
 // reading and stalls the live stream for every other viewer. Disconnect while hidden, reconnect on return.
+// A tab hidden for long gets frozen by Chrome (no timers run), so the delayed disconnect may never happen:
+// "freeze" disconnects at once, and the health check below catches a viewer whose stream died anyway.
 document.addEventListener("visibilitychange", () => {
   clearTimeout(hideTimer);
   if (document.hidden) {
-    hideTimer = setTimeout(() => {
-      if (!viewer) return;
-      try { viewer.stop(); } catch (e) { console.warn(e); }
-      viewer = null;
-      for (const c of [...$("#viewer").children]) if (c.id !== "hud") c.remove();
-    }, 5000);
+    hideTimer = setTimeout(stopViewer, 5000);
   } else {
+    viewerCheck(true);
     startViewer();
   }
 });
+document.addEventListener("freeze", () => { clearTimeout(hideTimer); stopViewer(); });
+document.addEventListener("resume", () => { if (!document.hidden) { viewerCheck(true); startViewer(); } });
+window.addEventListener("pageshow", (e) => { if (e.persisted) { viewerCheck(true); startViewer(); } });
+// Health check while visible: the viewer must hold a recording (the empty "Sources" screen means the gRPC
+// stream closed) whose newest data keeps advancing (the bridge logs several times a second). Two bad checks
+// in a row rebuild the viewer (the bridge then re-sends the map); repeated failures back off up to 2 min.
+const vh = { bad: 0, t: 0, max: null, retry: 0, backoff: 10000 };
+function viewerCheck(now = false) {
+  if (document.hidden || !viewer || viewerStarting || Date.now() - viewerSince < 10000) return;
+  let ok = false;
+  try {
+    const rid = viewer.get_active_recording_id();
+    if (rid) {
+      const tl = viewer.get_active_timeline(rid);
+      const max = tl ? (viewer.get_time_range(rid, tl) || {}).max : null;
+      if (max == null || max !== vh.max) { vh.max = max; vh.t = Date.now(); }
+      ok = Date.now() - vh.t < 12000;
+    }
+  } catch (e) { console.warn("viewer check", e); }
+  vh.bad = ok ? 0 : vh.bad + 1;
+  if (ok) { vh.backoff = 10000; return; }
+  if ((now || vh.bad >= 2) && Date.now() >= vh.retry) {
+    console.warn("rerun viewer lost its stream - reconnecting");
+    vh.bad = 0; vh.retry = Date.now() + vh.backoff; vh.backoff = Math.min(vh.backoff * 2, 120000);
+    stopViewer(); startViewer();
+  }
+}
+setInterval(viewerCheck, 5000);
+window.rrViewer = () => viewer;   // console debugging
 
 // ---------------- status websocket ----------------
 // heartbeat: every status message (5/s) pulses the LIVE chip; it turns amber / red when updates stop
