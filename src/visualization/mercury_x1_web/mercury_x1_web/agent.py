@@ -314,7 +314,9 @@ class Agent:
     async def go_to(self, a: dict) -> dict:
         n = self.node
         if not self.app.sup.status()["nav"]["running"]:
-            return {"ok": False, "error": "navigation (Nav2) is not running"}
+            err = self.app.ensure_nav()           # the goal then waits for Nav2 (WebNode.pending_nav)
+            if err:
+                return {"ok": False, "error": err}
         p = n.robot_pose()
         if p is None or p["frame"] != "map":
             return {"ok": False, "error": "the robot is not localized on the map"}
@@ -343,6 +345,9 @@ class Agent:
         while n.nav["state"] == "navigating":
             await asyncio.sleep(0.5)
             q = n.robot_pose() or ref
+            if n.pending_nav is not None:         # Nav2 still starting: not stuck, and not on the clock
+                ref, ref_t, t = q, time.time(), time.time()
+                continue
             if math.hypot(q["x"] - ref["x"], q["y"] - ref["y"]) > 0.3 or abs(_wrap(q["yaw"] - ref["yaw"])) > math.radians(20):
                 ref, ref_t = q, time.time()
             if time.time() - ref_t > STUCK_S:

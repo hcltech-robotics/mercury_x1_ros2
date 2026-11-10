@@ -63,6 +63,12 @@ from std_srvs.srv import SetBool, Trigger
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
 MAPS_DIR = os.path.expanduser("~/maps")
+NAV_START_TIMEOUT_S = 300.0   # a deferred goal waits this long for Nav2 to come up (incl. relaunches)
+NAV_READY_S = 75.0            # a Nav2 launch whose navigator is not up by then is relaunched (a normal start: ~25 s)
+NAV_LAUNCH_TRIES = 3          # (2026-11-09: a lost load_node reply left the launch waiting forever after 1 server)
+NAV_CMD = ["ros2", "launch", "mercury_x1_bringup", "nav.launch.py"]
+STACK_FILE = os.path.expanduser("~/.config/mercury_x1/web_stack.json")   # SLAM / Nav2 to restore after a respawn
+STACK_RESTORE_S = 180.0       # ... only when written this recently (a respawn, not a boot: start.sh does that)
 VIEWER_VERSION = "0.39.0"   # must match rerun-sdk on the robot
 VIEWER_FILES = ("index.js", "re_viewer.js", "re_viewer_bg.wasm")
 MX1_WS = os.environ.get("MX1_WS", os.path.expanduser("~/mercury_x1_ros2"))
@@ -268,6 +274,10 @@ class WebNode(Node):
         self.create_subscription(String, "/remote/button", self._on_remote_button, 10)
         self.ac_wps = ActionClient(self, FollowWaypoints, "/follow_waypoints")
         self.ac_goal = ActionClient(self, NavigateToPose, "/navigate_to_pose")
+        # a goal sent while Nav2 is down waits here (App.ensure_nav starts Nav2) and goes out once it is ready
+        self.pending_nav: tuple | None = None      # (("goal", x, y, yaw) | ("wps", loop), since)
+        self.request_nav = None                    # set by App: callable(reason) -> error text or ""
+        self.create_timer(1.0, self._pending_tick)
         self.srv = {
             "left_power": self.create_client(SetBool, "/left_arm/power"),
             "right_power": self.create_client(SetBool, "/right_arm/power"),
@@ -453,10 +463,35 @@ class WebNode(Node):
         self.pub_init.publish(m)
         self.navstat.manual_pose()
 
+    def _defer(self, job: tuple, goal) -> None:
+        err = self.request_nav() if self.request_nav else "Nav2 is not running"
+        if err:
+            self.nav.update(state="error", goal=goal, current=None, message=err)
+            return
+        self.pending_nav = (job, time.monotonic())
+        self.nav.update(state="navigating", goal=goal, current=None, loop=job[0] == "wps" and job[1],
+                        message="starting Nav2 - the goal goes out when it is ready")
+
+    def _pending_tick(self) -> None:
+        if self.pending_nav is None:
+            return
+        job, since = self.pending_nav
+        client = self.ac_goal if job[0] == "goal" else self.ac_wps
+        if client.server_is_ready():
+            self.pending_nav = None
+            if job[0] == "goal":
+                self.go_to(*job[1:])
+            else:
+                self.run_waypoints(job[1])
+        elif time.monotonic() - since > NAV_START_TIMEOUT_S:
+            self.pending_nav = None
+            self.nav.update(state="error", message=f"Nav2 did not come up within {NAV_START_TIMEOUT_S:.0f} s "
+                                                   "(log: ~/.ros/mercury_x1_web/nav.log)")
+
     def go_to(self, x: float, y: float, yaw: float) -> None:
         self.cancel(stop_base=False)
         if not self.ac_goal.wait_for_server(timeout_sec=1.0):
-            self.nav.update(state="error", message="navigate_to_pose not available - start Nav2")
+            self._defer(("goal", x, y, yaw), {"x": x, "y": y, "yaw": yaw})
             return
         goal = NavigateToPose.Goal()
         goal.pose = pose_stamped(x, y, yaw, "map", self.get_clock().now().to_msg())
@@ -470,7 +505,7 @@ class WebNode(Node):
             self.nav.update(state="error", message="no waypoints")
             return
         if not self.ac_wps.wait_for_server(timeout_sec=1.0):
-            self.nav.update(state="error", message="follow_waypoints not available - start Nav2")
+            self._defer(("wps", loop), None)
             return
         self.cancel_requested = False
         self.nav.update(state="navigating", goal=None, current=0, loop=loop, message="")
@@ -519,6 +554,9 @@ class WebNode(Node):
 
     def cancel(self, stop_base: bool = True) -> None:
         self.cancel_requested = True
+        if self.pending_nav is not None:
+            self.pending_nav = None
+            self.nav["message"] = ""
         for h in (self.wp_handle, self.goal_handle):
             if h is not None:
                 h.cancel_goal_async()
@@ -687,6 +725,10 @@ class App:
             self.sup.start("moveit", ["ros2", "launch", "mercury_x1_moveit_config", "move_group.launch.py"], {})
         self.map_name = "default"
         self.restarting = False
+        self.nav_wanted = True       # Nav2 follows SLAM unless the page stopped it
+        self.shutting_down = False   # the heartbeat must not record the shutdown's own SLAM / Nav2 stop
+        self._nav_starting = False
+        node.request_nav = self.ensure_nav
         self.static_dir = os.path.join(get_package_share_directory("mercury_x1_web"), "web")
         self.viewer_ready = all(os.path.exists(os.path.join(VIEWER_CACHE, f)) for f in VIEWER_FILES)
         self.viz_layers = self.load_viz_layers()
@@ -974,6 +1016,84 @@ class App:
         held = {k: n.body_joints[k] for k in ("body", *HOME_HEAD) if k in n.body_joints}
         if held:                          # head / waist: stay where they are now
             self._body_cmd(held, HOME_SPEED)
+
+    # -- Nav2 follows SLAM ------------------------------------------------------------------------
+    def ensure_nav(self) -> str:
+        """start Nav2 if it is not running (thread-safe; returns why it cannot, else ""). Nav2's costmaps need
+        the map and map -> odom, so it starts once SLAM provides them."""
+        if not self.sup.running("slam"):
+            return "SLAM is not running - ▶ localize on a map first"
+        if self.sup.running("nav") or self._nav_starting:
+            return ""
+        self._nav_starting = True
+
+        def run() -> None:
+            try:
+                t0 = time.monotonic()
+                while time.monotonic() - t0 < NAV_START_TIMEOUT_S and self.sup.running("slam"):
+                    p = self.node.robot_pose()
+                    if self.node.map_msg is not None and p is not None and p["frame"] == "map":
+                        break
+                    time.sleep(1.0)
+                else:
+                    return
+                if not self.sup.running("nav"):
+                    self.node.get_logger().info("starting Nav2 (follows SLAM)")
+                    self._launch_nav()
+            finally:
+                self._nav_starting = False
+        threading.Thread(target=run, daemon=True, name="nav_start").start()
+        return ""
+
+    def _launch_nav(self) -> bool:
+        """(blocking) start Nav2 and wait for its navigator; relaunch when a start hangs"""
+        log = self.node.get_logger()
+        for attempt in range(1, NAV_LAUNCH_TRIES + 1):
+            self.sup.start("nav", NAV_CMD, {})
+            t0 = time.monotonic()
+            while time.monotonic() - t0 < NAV_READY_S:
+                if not self.sup.running("nav") or not self.nav_wanted_now():
+                    return False                  # stopped from the page meanwhile
+                if self.node.ac_goal.server_is_ready():
+                    log.info(f"Nav2 ready after {time.monotonic() - t0:.0f} s (launch {attempt})")
+                    return True
+                time.sleep(1.0)
+            log.warn(f"Nav2 navigator not up after {NAV_READY_S:.0f} s (launch {attempt}) - relaunching")
+        log.error(f"Nav2 did not come up in {NAV_LAUNCH_TRIES} launches (~/.ros/mercury_x1_web/nav.log)")
+        return False
+
+    def nav_wanted_now(self) -> bool:
+        return self.nav_wanted or self.node.pending_nav is not None
+
+    def save_stack(self) -> None:
+        if self.shutting_down:
+            return
+        st = self.sup.status()
+        data = {"t": time.time(), "slam": {k: st["slam"][k] for k in ("mode", "map") if k in st["slam"]}
+                if st["slam"]["running"] else None, "nav": st["nav"]["running"] or self._nav_starting}
+        try:
+            os.makedirs(os.path.dirname(STACK_FILE), exist_ok=True)
+            with open(STACK_FILE + ".tmp", "w") as f:
+                json.dump(data, f)
+            os.replace(STACK_FILE + ".tmp", STACK_FILE)
+        except OSError:
+            pass
+
+    async def stack_keeper(self) -> None:
+        """restore SLAM (and Nav2) after this server respawned, then keep a heartbeat of what runs"""
+        try:
+            with open(STACK_FILE) as f:
+                prev = json.load(f)
+        except (OSError, ValueError):
+            prev = {}
+        slam = prev.get("slam")
+        if slam and time.time() - prev.get("t", 0) < STACK_RESTORE_S and not self.sup.running("slam"):
+            self.node.get_logger().info(f"restoring SLAM {slam} (and Nav2: {prev.get('nav')}) after a restart")
+            self.nav_wanted = bool(prev.get("nav"))      # before SLAM: its start brings Nav2 when wanted
+            await self.api_internal("slam", {"mode": slam.get("mode", "localization"), "map": slam.get("map", "office")})
+        while True:
+            self.save_stack()
+            await asyncio.sleep(20.0)
 
     def navstack(self, procs: dict) -> dict:
         n = self.node
@@ -1271,6 +1391,17 @@ class App:
             pass
         return ws
 
+    async def api_internal(self, action: str, body: dict):
+        """an API action from inside the server (restore after a respawn): the same code path as the page"""
+        class _Req:
+            match_info = {"action": action}
+            can_read_body = True
+
+            @staticmethod
+            async def json():
+                return body
+        return await self.api(_Req)
+
     async def api(self, req):
         action = req.match_info["action"]
         if action == "pins":      # kiosk Debug tab (polled): header pin states; reading only, nothing is touched
@@ -1456,16 +1587,31 @@ class App:
                    f"fresh:={'true' if fresh else 'false'}"]
             await loop.run_in_executor(None, lambda: self.sup.start("slam", cmd, {"mode": mode, "map": name}))
             n.navstat.reset()
+            if self.nav_wanted:
+                self.ensure_nav()
+            self.save_stack()
         elif action == "slam_stop":
             n.post(n.cancel)
             await loop.run_in_executor(None, lambda: self.sup.stop("slam"))
             n.navstat.reset()
+            self.save_stack()
         elif action == "nav":
-            await loop.run_in_executor(None, lambda: self.sup.start(
-                "nav", ["ros2", "launch", "mercury_x1_bringup", "nav.launch.py"], {}))
+            self.nav_wanted = True
+            if not self._nav_starting:
+                self._nav_starting = True
+
+                def run() -> None:
+                    try:
+                        self._launch_nav()
+                    finally:
+                        self._nav_starting = False
+                threading.Thread(target=run, daemon=True, name="nav_start").start()
+            self.save_stack()
         elif action == "nav_stop":
+            self.nav_wanted = False      # stays off until started again (or a goal needs it)
             n.post(n.cancel)
             await loop.run_in_executor(None, lambda: self.sup.stop("nav"))
+            self.save_stack()
         elif action == "wake_word":       # {"keyword": pinyin/lexicon words (";" = several), "threshold": 500..2000}
             kw = str(body.get("keyword", "")).strip()
             thr = max(300, min(3000, int(body.get("threshold", 900))))
@@ -1553,9 +1699,12 @@ class App:
             loop = asyncio.get_running_loop()
             self.loop = loop                     # ROS-thread callbacks (wake word) schedule voice work here
             self.wake_verifier.start()           # keeps the last seconds of the beam for confirming wake words
+            self._keeper = asyncio.create_task(self.stack_keeper())   # SLAM / Nav2 back after a respawn; heartbeat
             for sig in (signal.SIGINT, signal.SIGTERM):
                 loop.add_signal_handler(sig, stop.set)
             await stop.wait()
+            self.shutting_down = True            # keep the heartbeat file as it was: a respawn restores from it
+            self._keeper.cancel()
             await self.voice.enable(False)
             for name in ("moveit", "nav", "slam"):     # rtabmap saves its database on SIGINT
                 await loop.run_in_executor(None, lambda n=name: self.sup.stop(n))

@@ -177,7 +177,8 @@ class NavStatus:
 
         # Nav2
         if not nav2_running:
-            row("nav2", "Nav2", "off", "off", "start it under \"Nav2 and map file\" below to drive to goals")
+            row("nav2", "Nav2", "off", "off", "starts by itself with SLAM or with the next goal "
+                "(or under \"Nav2 and map file\" below)")
         elif not nav2_ready:
             row("nav2", "Nav2", "warn", "starting (waiting for the navigator)")
         else:
