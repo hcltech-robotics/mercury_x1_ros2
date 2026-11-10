@@ -33,16 +33,16 @@ from mercury_x1_msgs.msg import ArmState, BaseState, JointCommand, VoiceBoardSta
 from mercury_x1_msgs.srv import SetWakeWord
 from nav2_msgs.action import FollowWaypoints, NavigateToPose
 from nav2_msgs.msg import CostmapFilterInfo
-from nav_msgs.msg import OccupancyGrid, Path
+from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from PIL import Image as PILImage
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import SetParameters
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from orbbec_camera_msgs.srv import GetDeviceInfo
-from rtabmap_msgs.msg import MapGraph
-from sensor_msgs.msg import BatteryState, JointState, PointCloud2, PointField
+from rtabmap_msgs.msg import Info as RtabInfo, MapGraph
+from sensor_msgs.msg import BatteryState, JointState, LaserScan, PointCloud2, PointField
 from tf2_msgs.msg import TFMessage
 
 from .agent import Agent
@@ -53,6 +53,7 @@ from . import keepout as keepoutlib
 from . import places as placelib
 from . import slam3d
 from .gpuprocs import GpuProcs
+from .navstatus import NavStatus
 from .sysstats import SysStats
 from .voice import LOCAL_SPEECH, VoiceChat, load_conf as load_voice_conf
 from .wake_verify import WakeVerifier
@@ -224,6 +225,12 @@ class WebNode(Node):
 
         self.create_subscription(OccupancyGrid, "/map", self._on_map, LATCHED)
         self.create_subscription(Path, "/plan", self._on_plan, 1)
+        # Navigate tab "Navigation stack" panel (navstatus.py): localization quality, sensor rates
+        self.navstat = NavStatus()
+        self.create_subscription(RtabInfo, "/info", self.navstat.on_info, 5)
+        self.create_subscription(PoseWithCovarianceStamped, "/localization_pose", self.navstat.on_localization_pose, 5)
+        self.create_subscription(Odometry, "/odom", self.navstat.on_odom, 20)
+        self.create_subscription(LaserScan, "/scan", self.navstat.on_scan, qos_profile_sensor_data)
         self.create_subscription(BatteryState, "/battery", self._on_battery, 10)
         self.create_subscription(BaseState, "/base/state", lambda m: setattr(self, "base", m), 10)
         for s in ("left", "right"):
@@ -444,6 +451,7 @@ class WebNode(Node):
         m.pose.covariance[0] = m.pose.covariance[7] = 0.25
         m.pose.covariance[35] = 0.07
         self.pub_init.publish(m)
+        self.navstat.manual_pose()
 
     def go_to(self, x: float, y: float, yaw: float) -> None:
         self.cancel(stop_base=False)
@@ -967,6 +975,11 @@ class App:
         if held:                          # head / waist: stay where they are now
             self._body_cmd(held, HOME_SPEED)
 
+    def navstack(self, procs: dict) -> dict:
+        n = self.node
+        return n.navstat.snapshot(procs["slam"], procs["nav"]["running"], n.ac_goal.server_is_ready(),
+                                  dict(n.nav), len(n.keepout))
+
     def head_status(self) -> dict:
         st = self.node.status()
         return {"battery": st["battery"], "battery_pct": st["battery_pct"], "charge": st["charge"],
@@ -1248,6 +1261,7 @@ class App:
                 st["nodes"] = self.node.node_names
                 st["versions"] = self.versions()
                 st["agent"] = self.agent.snapshot()
+                st["navstack"] = self.navstack(st["procs"])
                 if time.monotonic() - self._maps_t > 3.0:     # saved maps: cheap, but no need at 5 Hz
                     self._maps_cache, self._maps_t = self.map_list(), time.monotonic()
                 st["maps"] = self._maps_cache
@@ -1441,9 +1455,11 @@ class App:
             cmd = ["ros2", "launch", "mercury_x1_bringup", "slam.launch.py", f"mode:={mode}", f"map:={name}",
                    f"fresh:={'true' if fresh else 'false'}"]
             await loop.run_in_executor(None, lambda: self.sup.start("slam", cmd, {"mode": mode, "map": name}))
+            n.navstat.reset()
         elif action == "slam_stop":
             n.post(n.cancel)
             await loop.run_in_executor(None, lambda: self.sup.stop("slam"))
+            n.navstat.reset()
         elif action == "nav":
             await loop.run_in_executor(None, lambda: self.sup.start(
                 "nav", ["ros2", "launch", "mercury_x1_bringup", "nav.launch.py"], {}))

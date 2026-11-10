@@ -36,6 +36,12 @@
     background: var(--panel2); color: var(--text); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
   .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+  #navstack { display: grid; grid-template-columns: 10px 92px 1fr; gap: 5px 8px; align-items: baseline; font-size: 12px; }
+  #navstack .dot { align-self: center; }
+  #navstack .lbl { color: var(--muted); }
+  #navstack .bad { color: var(--bad); } #navstack .warn { color: var(--warn); }
+  #navstack .dot.bad, #navstack .dot.warn { color: inherit; }
+  #navstack .hint { grid-column: 3; color: var(--muted); font-size: 11px; margin-top: -3px; }
   .spacer { flex: 1; }
   .sys { display: grid; grid-template-columns: 52px 1fr 92px; gap: 5px 8px; align-items: center;
     font-variant-numeric: tabular-nums; margin-bottom: 10px; }
@@ -230,6 +236,10 @@
     <div class="tabs"><button class="active" data-tab="nav">Navigate</button><button data-tab="agent">Agent</button><button data-tab="robot">Robot</button><button data-tab="status">Status</button></div>
 
     <div data-pane="nav">
+      <section>
+        <h2>Navigation stack</h2>
+        <div id="navstack"><span class="muted" style="grid-column:1/-1">waiting for status…</span></div>
+      </section>
       <section>
         <h2>Maps</h2>
         <div id="slamline" class="row" style="font-size:12px"></div>
@@ -574,6 +584,16 @@ function setHTML(sel, h) { const e = $(sel); if (e._h !== h) { e.innerHTML = h; 
 function setDot(id, cls, text) { $(`#d-${id}`).className = `ic ${cls}`; $(`#t-${id}`).textContent = text; }
 
 let mapVersion = -1, lastClickT = null, toolChanged = 0;
+// "Navigation stack" panel: sensors → SLAM → localization → Nav2 → goal → keep-out (navstatus.py)
+function renderNavStack(ns) {
+  if (!ns) return;
+  const html = ns.rows.map((r) => {
+    const cls = r.state === "bad" || r.state === "warn" ? r.state : "";
+    return `<span class="dot ${r.state === "off" ? "" : r.state}"></span><span class="lbl">${escHtml(r.label)}</span>` +
+      `<span class="${cls}">${escHtml(r.text)}</span>` + (r.hint ? `<span class="hint">${escHtml(r.hint)}</span>` : "");
+  }).join("");
+  setHTML("#navstack", html);
+}
 function onStatus() {
   const s = ST;
   renderBattery(s);
@@ -583,8 +603,11 @@ function onStatus() {
   const headLocked = s.head_hold !== false && slam.running && slam.mode === "mapping";   // head held level while mapping
   for (const id of ["neck", "jaw"]) { $("#" + id).disabled = headLocked; $("#" + id).title = headLocked ? "held level while mapping" : ""; }
   renderWaist(s.body_joints);
-  setDot("slam", slam.running ? (slam.mode === "mapping" ? "warn" : "ok") : "",
-         slam.running ? `${slam.mode === "mapping" ? "Mapping" : "Localizing"} · ${slam.map}` : "SLAM off");
+  const loc = s.navstack ? s.navstack.localized : "";
+  const locTag = { no: " · NOT localized", manual: " · pose set by hand", uncertain: " · uncertain" }[loc] || "";
+  setDot("slam", slam.running ? (slam.mode === "mapping" ? "warn" : loc === "no" ? "bad" : locTag ? "warn" : "ok") : "",
+         slam.running ? `${slam.mode === "mapping" ? "Mapping" : "Localizing"} · ${slam.map}${locTag}` : "SLAM off");
+  renderNavStack(s.navstack);
   setDot("nav", nav.running ? (s.nav.state === "navigating" ? "warn" : ["error", "aborted"].includes(s.nav.state) ? "bad" : "ok") : "",
          nav.running ? `Nav2 ${s.nav.state}` : "Nav2 off");
   const arms = Object.values(s.arms || {});
