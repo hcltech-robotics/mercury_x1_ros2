@@ -391,8 +391,8 @@
     <div class="row">
       <button id="r-scan" class="primary">Scan</button>
       <button id="r-disconnect">Disconnect</button>
-      <button id="r-auto">Autoconnect</button>
     </div>
+    <div class="switch" id="sw-rauto"><span>Auto-reconnect to the last remote <span class="muted small" id="r-auto-note"></span></span><span class="track"></span></div>
     <div class="list" id="r-list"></div>
   </div>
 </div>
@@ -878,10 +878,8 @@ function renderVoiceBoard() {
 // ---- Unitree remote
 $("#r-scan").onclick = () => api("remote", { op: "scan" });
 $("#r-disconnect").onclick = () => api("remote", { op: "disconnect" });
-$("#r-auto").onclick = () => {
-  const r = S.remote || {}, on = !r.autoconnect;
-  api("remote", { op: "autoconnect", enabled: on, ...(on && r.saved ? { address: r.saved.address, name: r.saved.name } : {}) });
-};
+// reconnects to the last connected remote (the node saves it on every connect)
+const setRemoteAuto = bindSwitch($("#sw-rauto"), async (on) => { api("remote", { op: "autoconnect", enabled: on }); });
 function setHTML(sel, h) { const e = $(sel); if (e._h !== h) { e.innerHTML = h; e._h = h; } }
 // status-bar chip + settings tile: drive lock, battery icon, 1-5 signal bars (remote_ui.js)
 function renderRemoteInd(r) {
@@ -889,22 +887,24 @@ function renderRemoteInd(r) {
   $("#remote-chip").classList.toggle("off", !conn);
   setHTML("#remote-ind", conn ? (lk ? U.lockIcon(lk.open, lk.color, 22) : "") + U.battery(r.battery, 20) +
     `<span class="sub">${r.battery ?? "?"} %</span>` + U.signal(r.rssi, 20) : "");
-  $("#remote-txt").textContent = conn ? (lk ? lk.short : "") : !r ? "" : r.autoconnect ? "waiting" : "off";
+  $("#remote-txt").textContent = conn ? (lk ? lk.short : "") : !r ? "" : r.autoconnect && !r.paused ? "waiting" : "off";
   setHTML("#r-ind", !conn ? "" :
     (lk ? `<span class="rm-badge ${lk.cls}">${U.lockIcon(lk.open, lk.color, 22)}${lk.long}</span>` : `<span class="rm-badge muted">lock state unknown</span>`) +
     `<span class="v">${U.battery(r.battery, 22)}${r.battery ?? "?"} %</span><span class="v">${U.signal(r.rssi, 22)}${r.rssi ?? "?"} dBm</span>`);
 }
 function renderRemote() {
   const r = S.remote;
-  for (const id of ["#r-scan", "#r-disconnect", "#r-auto"]) $(id).disabled = !r;
+  for (const id of ["#r-scan", "#r-disconnect"]) $(id).disabled = !r;
+  $("#sw-rauto").classList.toggle("busy", !r);
   renderRemoteInd(r);
   if (!r) { $("#r-state").textContent = "remote node not running"; $("#r-list").innerHTML = ""; return; }
   const busy = r.state === "scanning" || r.state === "connecting";
   const conn = r.state === "connected" ? r.connected : null;
   $("#r-scan").disabled = busy;
-  $("#r-disconnect").disabled = !conn && !r.autoconnect;
-  $("#r-auto").classList.toggle("on", !!r.autoconnect);
-  $("#r-auto").textContent = r.autoconnect ? "Autoconnect ✓" : "Autoconnect";
+  $("#r-disconnect").disabled = !conn && !(r.autoconnect && !r.paused);
+  setRemoteAuto(!!r.autoconnect);
+  const last = r.saved && r.saved.address ? (r.saved.name || r.saved.address) : "any Unitree remote";
+  $("#r-auto-note").textContent = !r.autoconnect ? "" : r.paused ? "(paused after Disconnect)" : `(${last})`;
   $("#r-state").innerHTML = conn
     ? `<b>${esc(conn.name)}</b> <span class="muted small">· connected</span>`
     : `<span class="muted">${esc(r.state)}${r.message ? " · " + esc(r.message) : ""}</span>`;

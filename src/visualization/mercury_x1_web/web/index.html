@@ -360,7 +360,10 @@
         <div class="row">
           <button class="b primary" id="r-connect">Connect</button>
           <button class="b danger" id="r-disconnect">Disconnect</button>
-          <button class="b" id="r-auto" title="Keep looking for the selected / saved remote and reconnect whenever it drops or is switched on">Autoconnect</button>
+        </div>
+        <div class="row">
+          <label class="switch" id="sw-rauto" title="Keep looking for the last connected remote and reconnect whenever it drops, is switched back on, or the robot restarts. Disconnect pauses it until the next Connect."><input type="checkbox"><span class="track"></span>Auto-reconnect to the last remote</label>
+          <span class="muted" id="r-auto-note" style="font-size:11px"></span>
         </div>
         <div id="r-ind"></div>
         <div id="r-state" class="muted" style="min-height:18px"></div>
@@ -677,12 +680,13 @@ function renderBattery(s) {
 // ---------------- Unitree BLE remote ----------------
 function renderRemote() {
   const r = ST.remote, sel = $("#r-dev");
-  const btns = ["#r-scan", "#r-connect", "#r-disconnect", "#r-auto"];
+  const btns = ["#r-scan", "#r-connect", "#r-disconnect"];
   if (!r) {
     setDot("remote", "", "remote");
     setHTML("#rm-hdr", ""); setHTML("#r-ind", "");
     $("#r-state").textContent = "remote node not running (mercury_x1_teleop/unitree_remote)";
     btns.forEach((b) => ($(b).disabled = true));
+    $("#sw-rauto").classList.add("busy"); $("#r-auto-note").textContent = "";
     return;
   }
   const busy = r.state === "scanning" || r.state === "connecting";
@@ -704,10 +708,12 @@ function renderRemote() {
   }
   $("#r-scan").disabled = busy;
   $("#r-connect").disabled = busy || !sel.value || (conn && conn.address === sel.value);
-  $("#r-disconnect").disabled = !conn && !r.autoconnect;
-  $("#r-auto").disabled = false;
-  $("#r-auto").classList.toggle("on", !!r.autoconnect);
-  $("#r-auto").textContent = r.autoconnect ? "Autoconnect ✓" : "Autoconnect";
+  const waiting = r.autoconnect && !r.paused;
+  $("#r-disconnect").disabled = !conn && !waiting;
+  setRemoteAuto(!!r.autoconnect);
+  const last = r.saved && r.saved.address ? (r.saved.name || r.saved.address) : "any Unitree remote";
+  $("#r-auto-note").textContent = !r.autoconnect ? "" : r.paused ? `paused after Disconnect · Connect resumes`
+    : conn ? `· ${last}` : `· looking for ${last}`;
   let text;
   if (conn) {
     text = `connected · ${conn.name}`;
@@ -728,7 +734,7 @@ function renderRemote() {
       `<span class="rm-ind">${U.battery(r.battery, 14)}<span class="v">${r.battery ?? "?"} %</span></span>` +
       `<span class="rm-ind">${U.signal(r.rssi, 14)}<span class="v">${r.rssi ?? "?"} dBm</span></span>`);
   } else {
-    setDot("remote", busy ? "warn" : "", r.autoconnect ? (busy ? `remote ${r.state}` : "remote · waiting") : "remote off");
+    setDot("remote", busy ? "warn" : "", waiting ? (busy ? `remote ${r.state}` : "remote · waiting") : "remote off");
     setHTML("#rm-hdr", ""); setHTML("#r-ind", "");
   }
 }
@@ -739,10 +745,12 @@ const selectedRemote = () => {
 $("#r-scan").onclick = () => api("remote", { op: "scan" });
 $("#r-connect").onclick = () => { const d = selectedRemote(); if (d) api("remote", { op: "connect", ...d }); };
 $("#r-disconnect").onclick = () => api("remote", { op: "disconnect" });
-$("#r-auto").onclick = () => {
-  const on = !(ST.remote && ST.remote.autoconnect);
-  api("remote", { op: "autoconnect", enabled: on, ...(on ? selectedRemote() || {} : {}) });
-};
+// the remote to reconnect to is the last one connected (saved by the node); only with none saved yet does
+// switching on adopt the remote selected in the list
+const setRemoteAuto = bindSwitch("#sw-rauto", (on) => {
+  const saved = ST.remote && ST.remote.saved && ST.remote.saved.address;
+  api("remote", { op: "autoconnect", enabled: on, ...(on && !saved ? selectedRemote() || {} : {}) });
+}, 3000);
 
 function renderKV() {
   const s = ST, b = s.base || {};

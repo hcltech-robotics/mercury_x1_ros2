@@ -11,9 +11,11 @@ Interface (the web page drives it through mercury_x1_web):
                                         left stick drives (forward/back) and the right stick turns.
                                         B stops and locks. (drive_mode:=deadman -> hold L1 instead)
 
-Autoconnect keeps scanning for the saved remote (any "Unitree*" remote if none is saved yet) and
-reconnects when it drops. "Disconnect" also turns autoconnect off. The saved remote and the
-autoconnect flag persist in ~/.config/mercury_x1/unitree_remote.json.
+Autoconnect (the page's "Auto-reconnect" toggle) keeps scanning for the saved remote, which is always the
+last one connected (any "Unitree*" remote if none is saved yet), and reconnects when it drops, is switched
+back on, or the node starts. "Disconnect" pauses it until the next Connect / toggle / node restart, without
+changing the saved setting. The saved remote and the autoconnect flag persist in
+~/.config/mercury_x1/unitree_remote.json.
 """
 from __future__ import annotations
 
@@ -58,6 +60,7 @@ class UnitreeRemote(Node):
         saved = self._load()
         self.saved = {"address": saved.get("address"), "name": saved.get("name")}
         self.autoconnect = bool(saved.get("autoconnect", False))
+        self.paused = False          # autoconnect on hold after a manual Disconnect (not persisted)
 
         self.lock = threading.Lock()
         self.state = "idle"          # idle | scanning | connecting | connected
@@ -117,13 +120,14 @@ class UnitreeRemote(Node):
         if op == "scan":
             self._run(self._manual_scan())
         elif op == "connect" and cmd.get("address"):
+            self.paused = False
             self._run(self._connect(str(cmd["address"]).upper(), cmd.get("name")))
         elif op == "disconnect":
-            self.autoconnect = False          # otherwise it would reconnect right away
-            self._save()
+            self.paused = True                # otherwise autoconnect would reconnect right away
             self._run(self._disconnect())
         elif op == "autoconnect":           # optional address/name: the remote to look for
             self.autoconnect = bool(cmd.get("enabled", True))
+            self.paused = False
             if self.autoconnect and cmd.get("address"):
                 self.saved = {"address": str(cmd["address"]).upper(), "name": cmd.get("name")}
             self.next_try = 0.0
@@ -145,7 +149,7 @@ class UnitreeRemote(Node):
             rs, age = self.rs, time.monotonic() - self.last_rx
         live = rs is not None and self.state == "connected"
         st = {
-            "state": self.state, "message": self.message, "autoconnect": self.autoconnect,
+            "state": self.state, "message": self.message, "autoconnect": self.autoconnect, "paused": self.paused,
             "saved": self.saved, "connected": self.conn if self.state == "connected" else None,
             "devices": self.devices, "driving": self.driving, "drive_mode": self.drive_mode,
             "drive_enabled": self.drive_enabled if self.drive_mode == "toggle" else None,
@@ -215,7 +219,7 @@ class UnitreeRemote(Node):
             self._set("connected" if self.client is not None and prev == "connected" else "idle")
             self.busy = False
 
-    async def _connect(self, address: str, name: str | None = None) -> bool:
+    async def _connect(self, address: str, name: str | None = None, auto: bool = False) -> bool:
         if self.busy:
             return False
         if self.client is not None:
@@ -240,6 +244,10 @@ class UnitreeRemote(Node):
             except Exception:
                 await client.write_gatt_char(WRITE_UUID, HANDSHAKE, response=True)
             await client.start_notify(NOTIFY_UUID, self._on_notify)
+            if auto and (self.paused or not self.autoconnect):   # Disconnect / toggle off while connecting
+                await client.disconnect()
+                self._set("idle", "disconnected")
+                return False
             self.client = client
             self.conn = {"address": address, "name": name}
             self.saved = {"address": address, "name": name}
@@ -321,7 +329,7 @@ class UnitreeRemote(Node):
                 if self.client is not None and time.monotonic() - self.last_rx > self.lost:
                     self._set(message="no data from the remote - dropping the link")
                     await self._disconnect()
-                if (self.autoconnect and self.client is None and not self.busy
+                if (self.autoconnect and not self.paused and self.client is None and not self.busy
                         and time.monotonic() >= self.next_try):
                     await self._auto_attempt()
             except Exception as e:
@@ -344,7 +352,8 @@ class UnitreeRemote(Node):
             self._set("idle", f"waiting for {self.saved.get('name') or want or 'a Unitree remote'}")
             self.next_try = time.monotonic() + 2.0
             return
-        await self._connect(pick["address"], pick["name"])
+        if self.autoconnect and not self.paused:
+            await self._connect(pick["address"], pick["name"], auto=True)
 
     def shutdown(self) -> None:
         fut = self._run(self._disconnect())
