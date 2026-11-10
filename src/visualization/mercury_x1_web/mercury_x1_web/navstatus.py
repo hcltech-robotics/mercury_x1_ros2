@@ -22,6 +22,7 @@ INFO_STALE_S = 5.0          # RTAB-Map updates at ~1.5 Hz
 SLAM_STARTUP_S = 40.0       # loading a map database takes a while
 UNCERTAIN_AFTER_M = 4.0     # driven this far without a map match: the pose may have drifted
 NOT_LOCALIZED_COV = 1000.0  # RTAB-Map publishes 9999 before its first match
+ODOM_HOP_M = 0.10           # distance driven is counted in hops this long (ignores odometry jitter)
 
 
 class Rate:
@@ -79,12 +80,17 @@ class NavStatus:
 
     def on_odom(self, msg) -> None:
         self.odom.tick()
+        # distance in 10 cm hops from an anchor: lidar odometry jitters by millimetres per update even when the
+        # robot stands still, and summing every step made a parked robot "drive" metres
         p = msg.pose.pose.position
-        if self.odom_xy is not None:
-            d = math.hypot(p.x - self.odom_xy[0], p.y - self.odom_xy[1])
-            if d < 0.5:                       # odometry resets jump: ignore
+        if self.odom_xy is None:
+            self.odom_xy = (p.x, p.y)
+            return
+        d = math.hypot(p.x - self.odom_xy[0], p.y - self.odom_xy[1])
+        if d >= ODOM_HOP_M:
+            if d < 1.0:                       # odometry resets jump: ignore
                 self.dist_since_match += d
-        self.odom_xy = (p.x, p.y)
+            self.odom_xy = (p.x, p.y)
 
     def on_scan(self, _msg) -> None:
         self.scan.tick()

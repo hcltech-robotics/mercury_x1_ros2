@@ -58,6 +58,14 @@ def test_uncertain_after_driving_without_match():
     assert rows(ns)[0] == "yes"
 
 
+def test_jitter_while_parked_is_not_driving():
+    ns = NavStatus()
+    ns.on_info(info(loop=5))
+    for i in range(2000):                     # +-3 mm noise around one spot
+        ns.on_odom(odom(0.003 * ((i % 3) - 1), 0.003 * ((i % 2) * 2 - 1)))
+    assert ns.dist_since_match == 0.0
+
+
 def test_odometry_jump_ignored():
     ns = NavStatus()
     ns.on_info(info(loop=5))
